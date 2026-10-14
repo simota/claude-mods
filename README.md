@@ -20,6 +20,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
 | `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; off by default |
 | `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default |
+| `zukan` | Error book: catches the errors Bash commands hit across sessions and repos, records what got past each one, and when one comes back tells Claude and the person how it was fixed last time |
 
 ## Install
 
@@ -186,6 +187,24 @@ Each finding goes back once per session, marked as data that may be wrong for Cl
 | `enabled` | `false` | |
 
 Cost: the findings ride as extra input on the prompt they are attached to (each quote clipped to 300 characters, at most 12 findings).
+
+### zukan
+
+An error book, kept across sessions and repos. When a Bash command fails, the error line is caught and numbered:
+
+- `📕 新種のエラー発見！ No.042「…」` — a kind not seen before
+- `📙 No.017 再会（3回目・未解決）` — seen before, nothing known to get past it
+- `` 📗 既知 No.017（3回目）— 前回: sandbox 外で `git push origin main` `` — seen before with a fix: Claude also reads, beside the tool's result, where it was seen and what got past it (marked as a past record to check, not an instruction)
+
+A fix is learned when the same program and subcommand (`git push`, `pnpm install`) succeeds within the next 10 Bash calls of the session; whether it ran outside the sandbox is kept with it. Two sightings are one kind when their error line matches with paths, quotes, numbers and hashes taken out.
+
+Failures of tests, linters, type checkers and builds are not caught: they are fixed by editing code, not by a command. Credentials in a kept command are masked as sandbox-lens does.
+
+- `/zukan` opens the book, most recently seen first: kinds, solved, sightings
+- `/zukan note <No> <text>` writes how to get past it, shown and fed in place of the learned command; an empty text removes the note
+- `/zukan forget <No>` removes an entry
+
+The newest 300 kinds by last sighting are kept.
 
 ## Develop
 
