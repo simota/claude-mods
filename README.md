@@ -14,6 +14,10 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `tool-row` | Redraws finished tool-call rows in the terminal as one compact line with a Nerd Font icon, Gruvbox colors and a short stat |
 | `image-preview` | Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane |
 | `quick-actions` | Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue |
+| `self-audit` | After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt |
+| `context-diet` | Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved |
+| `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
+| `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers to send it as is or add one; off by default |
 
 ## Install
 

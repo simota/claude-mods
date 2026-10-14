@@ -1,0 +1,21 @@
+{
+  "name": "self-audit",
+  "version": "0.1.0",
+  "description": "After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "description": "Audit each main-loop reply with one tool-less fork of the conversation",
+      "default": true
+    },
+    "minChars": {
+      "type": "number",
+      "title": "Minimum reply length",
+      "description": "Replies shorter than this many characters are not audited",
+      "default": 200
+    }
+  }
+}

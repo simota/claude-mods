@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach",
   "owner": {
     "name": "simota"
   },
@@ -54,6 +54,26 @@
       "name": "quick-actions",
       "source": "./mods/quick-actions",
       "description": "Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue"
+    },
+    {
+      "name": "self-audit",
+      "source": "./mods/self-audit",
+      "description": "After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt"
+    },
+    {
+      "name": "context-diet",
+      "source": "./mods/context-diet",
+      "description": "Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved"
+    },
+    {
+      "name": "browser-cam",
+      "source": "./mods/browser-cam",
+      "description": "Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions"
+    },
+    {
+      "name": "prompt-coach",
+      "source": "./mods/prompt-coach",
+      "description": "Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers to send it as is or add one; off by default"
     }
   ]
 }
