@@ -51,11 +51,6 @@
       "description": "Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane"
     },
     {
-      "name": "quick-actions",
-      "source": "./mods/quick-actions",
-      "description": "Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue"
-    },
-    {
       "name": "self-audit",
       "source": "./mods/self-audit",
       "description": "After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt"

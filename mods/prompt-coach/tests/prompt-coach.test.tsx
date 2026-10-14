@@ -317,7 +317,7 @@ test('a guess goes into the box, and sending it is not held again', ON, async ($
   expect(calls.entered).toEqual([sent])
 })
 
-test('band buttons use letter hotkeys none of which quick-actions uses', ON, async ($, on) => {
+test('band buttons use letter hotkeys', ON, async ($, on) => {
   engine(on)
   await typed($, VAGUE)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })

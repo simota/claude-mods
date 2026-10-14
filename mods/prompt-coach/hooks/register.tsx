@@ -22,7 +22,7 @@ const followUps = atom({ plugin: 'prompt-coach', key: 'followUps' } as const, []
 
 export const DEFAULT_MODEL = 'claude-haiku-5-5'
 
-/** One per guess, in order: letters (a bare digit fires on an empty box), none taken by s/e/q or quick-actions. */
+/** One per guess, in order: letters (a bare digit fires on an empty box), none taken by s/e/q. */
 export const OPTION_HOTKEYS = ['a', 'b', 'd'] as const
 
 const DROP_REASON = 'prompt-coach: 依頼が曖昧なため送信を保留しました（入力欄の上の案内を参照）'
@@ -119,7 +119,7 @@ export const register: Register = (on, options) => {
         )}
         <Box flexDirection="row" gap={2}>
           {/* Letters only: a bare digit in an empty box presses a band Button, and the
-              box is empty right after the hold. None shared with quick-actions. */}
+              box is empty right after the hold. */}
           <Button key="send" hotkey="s" plain onPress={sendAsIs}>
             このまま送る
           </Button>

@@ -15,7 +15,6 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `context-meter` | Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost |
 | `tool-row` | Redraws finished tool-call rows in the terminal as one compact line with a Nerd Font icon, Gruvbox colors and a short stat |
 | `image-preview` | Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane |
-| `quick-actions` | Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue |
 | `self-audit` | After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt |
 | `context-diet` | Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved |
 | `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
@@ -115,19 +114,6 @@ Finished tool calls are drawn as one compact line with a Nerd Font icon: Edit/Wr
 | --- | --- | --- |
 | `inline` | `true` | Thumbnail under the tool row |
 | `maxRows` | `12` | Rows a thumbnail may take, 1 to 60 |
-
-### quick-actions
-
-After each turn, hotkey buttons above the prompt:
-
-- after edits (Edit/Write, or a Bash command shaped like a write: a redirect to a file, `sed -i`, `mv`, `cp`, `rm`, `git apply`/`checkout --`/`reset --hard`, a package install, …; no git command is run): `t: テスト実行`, `r: 差分レビュー` (`/code-review`), `m: コミット` (inserts into the prompt, keeping a draft; never commits by itself)
-- always: `c: 続けて`, `x: 閉じる`
-
-Hotkeys work once the band has focus (ctrl+x tab or a click). No digits are used, since a digit typed into an empty prompt would press a band button. The band goes away as soon as you start typing. A failed action shows a toast and keeps the band.
-
-| Option | Default | |
-| --- | --- | --- |
-| `actions` | defaults above | JSON array of `{key,label,prompt,mode:'submit'\|'fill',when:'edits'\|'always'}` replacing the defaults; `key` is one lowercase letter other than `x`, `s`, `e`, `q`; invalid JSON falls back with a toast |
 
 ### self-audit
 
