@@ -99,11 +99,11 @@ A band with a sparkline of context use per turn and `ctx 63% ▲4 · 126k · tur
 
 ### tool-row
 
-Finished tool calls are drawn as one compact line with a Nerd Font icon: Edit/Write ` path +A −D`, Read with line count, Bash (red on error), Agent, web and MCP calls. Results are still drawn below by Claude Code, and a row another mod decorated (an image-preview thumbnail) is left as it is. Terminal only.
+Finished tool calls are drawn as one compact line with a Nerd Font icon: Edit/Write ` path +A −D`, Read with line count, Bash (red on error), Agent, web and MCP calls. The result block under a compacted row is hidden, so a call is one line; an errored result stays. A row another mod decorated (an image-preview thumbnail) is left as it is, result included. Runs Claude Code folds into one count line (`Read 3 files, ran 2 shell commands`) stay folded. Terminal only.
 
 | Option | Default | |
 | --- | --- | --- |
-| `compact` | `true` | Off leaves every row as Claude Code draws it |
+| `compact` | `true` | Off leaves every row and result as Claude Code draws them |
 
 ### image-preview
 

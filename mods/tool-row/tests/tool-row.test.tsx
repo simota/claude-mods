@@ -179,3 +179,50 @@ test('compact off keeps the engine row on the terminal', { options: { compact: f
   engineRow(on)
   expect(await texts($, 'terminal', { tool: 'Edit', input: { file_path: '/repo/src/app.ts' }, output: EDIT_OUTPUT })).toEqual([])
 })
+
+const RESULT_TEXT = 'the engine result block'
+
+// The engine's result block beneath, as one Text.
+function engineResult(on: On) {
+  on('ui.render', { component: 'ToolResult' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{RESULT_TEXT}</Text>
+  })
+}
+
+async function result($: Engine, id: string, tool: string, isErrored = false) {
+  const ui = await $.ui.mount({
+    plugin: 'tool-row',
+    surface: 'terminal',
+    component: 'ToolResult',
+    requestId: id,
+    props: { tool_use_id: id, tool, output: {}, isErrored },
+  })
+  const found = (await ui.findAll({ type: 'Text' })).map(one => one.text)
+  await ui.unmount()
+  return found
+}
+
+test('the result under a compacted row is hidden, so the call is one line', async ($, on) => {
+  engineRow(on)
+  engineResult(on)
+  await texts($, 'terminal', { id: 'toolu_e', tool: 'Edit', input: { file_path: '/repo/src/app.ts' }, output: EDIT_OUTPUT })
+  expect(await result($, 'toolu_e', 'Edit')).toEqual([])
+})
+
+test('an errored result, and one under a row left as drawn, stay', async ($, on) => {
+  engineRow(on)
+  engineResult(on)
+  await texts($, 'terminal', { id: 'toolu_b', tool: 'Bash', input: { command: 'false' }, output: 'exit 1', isErrored: true })
+  expect(await result($, 'toolu_b', 'Bash', true)).toEqual([RESULT_TEXT])
+  await texts($, 'terminal', { id: 'toolu_t', tool: 'TodoWrite', input: { todos: [] }, output: {} })
+  expect(await result($, 'toolu_t', 'TodoWrite')).toEqual([RESULT_TEXT])
+  expect(await result($, 'toolu_never_drawn', 'Read')).toEqual([RESULT_TEXT])
+})
+
+test('compact off keeps the result', { options: { compact: false } }, async ($, on) => {
+  engineRow(on)
+  engineResult(on)
+  await texts($, 'terminal', { id: 'toolu_e', tool: 'Edit', input: { file_path: '/repo/src/app.ts' }, output: EDIT_OUTPUT })
+  expect(await result($, 'toolu_e', 'Edit')).toEqual([RESULT_TEXT])
+})

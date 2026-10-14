@@ -4,6 +4,8 @@ import { summarize } from './summary'
 
 export const register: Register = (on, options) => {
   const isCompact = options.compact !== false
+  // Calls whose row this plugin drew as one line: their result block is hidden with it.
+  const compacted = new Set<string>()
 
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
     if (!isCompact || e.surface !== 'terminal') return next(e)
@@ -18,6 +20,7 @@ export const register: Register = (on, options) => {
     const below = await next(e)
     if (below.type !== 'engine') return below
 
+    compacted.add(e.props.tool_use_id)
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="row" gap={1}>
@@ -26,5 +29,12 @@ export const register: Register = (on, options) => {
         {summary.stats.map(stat => <Text color={stat.color}>{stat.text}</Text>)}
       </Box>
     )
+  }).catch(($, e, next) => next(e))
+
+  // The one line stands for the call: its result goes unless it errored, which stays readable.
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    if (!isCompact || e.surface !== 'terminal' || e.props.isErrored || !compacted.has(e.props.tool_use_id)) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
   }).catch(($, e, next) => next(e))
 }

@@ -99,11 +99,11 @@ echo '{"enabled":"true"}' | claude plugin configure <mod>@simota-mods --values-s
 
 ### tool-row
 
-完了したツール呼び出しを、Nerd Font のアイコン付きの 1 行に描き直します。Edit/Write は ` path +A −D`、Read は行数付き、Bash はエラーなら赤で、Agent、Web、MCP の呼び出しにも対応します。結果はこれまでどおり Claude Code が下に描きます。他の mod が手を加えた行（image-preview のサムネイル付きの行）はそのまま残します。ターミナルのみです。
+完了したツール呼び出しを、Nerd Font のアイコン付きの 1 行に描き直します。Edit/Write は ` path +A −D`、Read は行数付き、Bash はエラーなら赤で、Agent、Web、MCP の呼び出しにも対応します。1 行にした呼び出しは下の結果ブロックを隠すので、1 呼び出しが 1 行になります（エラーの結果は残します）。他の mod が手を加えた行（image-preview のサムネイル付きの行）は結果も含めてそのまま残します。Claude Code が 1 行にまとめる連続呼び出し（`Read 3 files, ran 2 shell commands`）はまとめたままです。ターミナルのみです。
 
 | 設定 | 既定値 | |
 | --- | --- | --- |
-| `compact` | `true` | オフにすると、すべての行を Claude Code の元の表示のままにする |
+| `compact` | `true` | オフにすると、すべての行と結果を Claude Code の元の表示のままにする |
 
 ### image-preview
 
