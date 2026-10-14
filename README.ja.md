@@ -236,3 +236,7 @@ scripts/check-copies.sh
 ```
 
 mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts` は done-gate のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
+
+## ライセンス
+
+MIT（[LICENSE](LICENSE) を参照）。
