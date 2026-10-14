@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { errorLine, isCheck, keyOf, normalise, programOf, sight, step, toastOf } from '../hooks/book'
+import { errorLine, isCheck, keyOf, normalise, programOf, reconcile, sight, step, toastOf } from '../hooks/book'
 
 const SSH_PUSH = [
   'Received disconnect from UNKNOWN port 65535:1: This proxy requires authentication, and this client did not offer an authentication method, so the connection was refused.',
@@ -52,6 +52,14 @@ describe('book', () => {
     expect(isCheck('pnpm install')).toBe(false)
   })
 
+  test('judges a check as done-gate does (its shell reader is a copy of done-gate\'s)', () => {
+    for (const command of ['go vet ./...', 'pyright', 'shellcheck a.sh', 'golangci-lint run', 'cargo nextest run', 'cd app && make test']) {
+      expect(isCheck(command)).toBe(true)
+    }
+    // A failure that is not the check's: the pipe's last command or a fallback decides the status.
+    for (const command of ['npm test | tail', 'npm test || true', 'git push', 'curl x.io']) expect(isCheck(command)).toBe(false)
+  })
+
   test('picks the first error-shaped line', () => {
     expect(errorLine(SSH_PUSH)).toContain('This proxy requires authentication')
     expect(errorLine('Exit code 1\nsomething odd\n')).toBe('something odd')
@@ -74,6 +82,24 @@ describe('book', () => {
     expect(again.entry).toMatchObject({ count: 2, repos: ['a', 'b'], lastSeen: 2 })
     expect(toastOf(two.entry, true)).toContain('📕 新種のエラー発見！ No.002')
     expect(toastOf(again.entry, false)).toContain('📙 No.001 再会（2回目・未解決）')
+  })
+
+  test("another session's write is kept: this write's changes are laid on top of it", () => {
+    const base = sight([], { key: 'k1', program: 'git push', line: 'x', repo: 'a', at: 1 }).entries
+    const noted = base.map(one => ({ ...one, note: 'old' }))
+    // This session: a sighting of k1, the note cleared, and a new kind numbered 2.
+    const mine = sight(sight(noted, { key: 'k1', program: 'git push', line: 'x', repo: 'a', at: 2 }).entries, { key: 'k2', program: 'curl', line: 'y', repo: 'a', at: 2 })
+      .entries.map(one => (one.key === 'k1' ? (({ note: _, ...rest }) => rest)(one) : one))
+    // The other session, meanwhile: a sighting of k1 and its own new kind, also numbered 2.
+    const theirs = sight(sight(noted, { key: 'k1', program: 'git push', line: 'x', repo: 'b', at: 3 }).entries, { key: 'k3', program: 'npm ci', line: 'z', repo: 'b', at: 3 }).entries
+    const book = reconcile(noted, mine, theirs)
+    const k1 = book.find(one => one.key === 'k1')
+    expect(k1?.count).toBe(3)
+    expect(k1?.note).toBeUndefined()
+    expect(book.map(one => [one.key, one.no]).sort()).toEqual([['k1', 1], ['k2', 3], ['k3', 2]])
+
+    const forgotten = reconcile(noted, [], theirs)
+    expect(forgotten.map(one => one.key)).toEqual(['k3'])
   })
 
   test('a pending error settles on its program succeeding, and expires after ten calls', () => {

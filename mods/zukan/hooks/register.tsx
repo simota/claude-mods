@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ZukanEntry, ZukanPending } from '../types'
-import { bookLines, contextOf, errorLine, fromStore, isCheck, keyOf, programOf, sight, step, toastOf, withFix, withNote } from './book'
+import { bookLines, contextOf, errorLine, fromStore, isCheck, isOverwritten, keyOf, programOf, reconcile, sight, step, toastOf, withFix, withNote } from './book'
 import { exampleOf, maskedOf } from './mask'
 
 const PANE = 'zukan'
@@ -12,13 +12,21 @@ const entries = atom({ plugin: 'zukan', key: 'entries' } as const, [] as ZukanEn
 const pending = atom({ plugin: 'zukan', key: 'pending' } as const, {} as Record<string, ZukanPending>)
 
 // $.store has no versioned write: this module's read-modify-writes run one after another,
-// each reading the store afresh. Two sessions writing at once can still lose one sighting.
+// each reading the store afresh. Across sessions the write is read back, and when another
+// session wrote over it in between, this write's changes are laid on the other's book and
+// written once more, as todo-agent does. Left over: a write landing inside that second window.
 let queue: Promise<unknown> = Promise.resolve()
 
 function mutate($: EngineInterface, change: (list: ZukanEntry[]) => ZukanEntry[]): Promise<ZukanEntry[]> {
   const run = queue.then(async () => {
-    const list = change(fromStore(await $.store.get(STORE_KEY)))
+    const before = fromStore(await $.store.get(STORE_KEY))
+    let list = change(before)
     await $.store.set(STORE_KEY, list)
+    const stored = fromStore(await $.store.get(STORE_KEY))
+    if (isOverwritten(list, stored)) {
+      list = reconcile(before, list, stored)
+      await $.store.set(STORE_KEY, list)
+    }
     await update($, entries, () => list)
     return list
   })
@@ -68,7 +76,7 @@ export const register: Register = on => {
     const key = keyOf(program, line)
     let landed: { entry: ZukanEntry; isNew: boolean } | undefined
     const sighting = { key, program, line, repo: await repoName($), at: await $.clock.now() }
-    await mutate($, list => {
+    const book = await mutate($, list => {
       const added = sight(list, sighting)
       landed = added
       return added.entries
@@ -76,8 +84,10 @@ export const register: Register = on => {
     await update($, pending, all => ({ ...all, [program]: { key, failed: exampleOf(e.command), calls: 0 } }))
     if (landed === undefined) return ran
 
-    $.ui.toast(toastOf(landed.entry, landed.isNew))
-    const note = contextOf(landed.entry)
+    // As it stands once written: another session's write may have renumbered or added to it.
+    const entry = book.find(one => one.key === key) ?? landed.entry
+    $.ui.toast(toastOf(entry, landed.isNew))
+    const note = contextOf(entry)
     return note === undefined ? ran : { ...ran, context: [...(ran.context ?? []), note] }
   }).catch(($, e, next) => next(e))
 

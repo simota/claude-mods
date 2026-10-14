@@ -2,18 +2,12 @@
 // adding sightings and fixes to the entries, and the words shown and fed to the model.
 
 import type { ZukanEntry, ZukanFix, ZukanPending } from '../types'
+import { isVerification } from './shell'
 
 export const MAX_ENTRIES = 300
 export const MAX_LINE = 160
 /** A pending error is given up once this many Bash calls passed without the program succeeding. */
 export const PENDING_CALLS = 10
-
-// Programs and subcommands whose failures are the work itself (a red test, a type error), fixed
-// by editing code rather than by a command: they are not caught.
-const CHECK_WORDS = new Set([
-  'test', 'tests', 'jest', 'vitest', 'pytest', 'mocha', 'lint', 'eslint', 'clippy', 'tsc',
-  'typecheck', 'check', 'build', 'xcodebuild', 'swiftlint', 'ruff', 'mypy', 'fmt', 'prettier',
-])
 
 const ERROR_LINE =
   /\b(error|errors|fatal|panic|panicked|exception|denied|not permitted|refused|failed|failure|cannot|can't|unable|not found|no such|invalid|missing|timed out|timeout|unauthorized|forbidden)\b/i
@@ -39,11 +33,14 @@ export function programOf(command: string): string {
   return second !== undefined && /^[a-z][\w:-]*$/.test(second) ? `${name} ${second}` : name
 }
 
-/** Whether a failure of this command is a check failing, which the book leaves alone. */
+/**
+ * Whether a failure of this command is a check failing (a red test, a type error), fixed by
+ * editing code rather than by a command: the book leaves it alone. The judgement is
+ * done-gate's, read from `./shell.ts`, a copy of done-gate's own: mods share no code, and
+ * the two must agree on what a check is.
+ */
 export function isCheck(command: string): boolean {
-  return command
-    .split(/&&|\|\||;|\|/)
-    .some(part => words(part).slice(0, 4).some(word => CHECK_WORDS.has(word.replace(/^.*[/:]/, ''))))
+  return isVerification(command)
 }
 
 /** The line that best names the error: the first one shaped like an error, else the last line. */
@@ -189,6 +186,53 @@ export function bookLines(entries: readonly ZukanEntry[]): string[] {
     })
   return [head, ...rows]
 }
+
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+
+/**
+ * The book once another session wrote over this one's write (`stored`): what this write
+ * changed against what it read (`before` → `wrote`) laid on top of the other's book. An entry
+ * this write removed stays removed, a field it changed (a fix, a note set or cleared) is
+ * this write's, sightings add up, and a new kind whose number the other took gets the next.
+ */
+export function reconcile(before: readonly ZukanEntry[], wrote: readonly ZukanEntry[], stored: readonly ZukanEntry[]): ZukanEntry[] {
+  const was = new Map(before.map(one => [one.key, one]))
+  const now = new Map(wrote.map(one => [one.key, one]))
+  const removed = new Set(before.filter(one => !now.has(one.key)).map(one => one.key))
+  const result = stored.filter(one => !removed.has(one.key)).map(theirs => {
+    const mine = now.get(theirs.key)
+    const old = was.get(theirs.key)
+    if (mine === undefined) return theirs
+    if (old === undefined) {
+      // Both sessions met it first: one entry, the sightings of both.
+      return { ...theirs, count: theirs.count + mine.count, lastSeen: Math.max(theirs.lastSeen, mine.lastSeen), repos: [...new Set([...theirs.repos, ...mine.repos])].slice(-5) }
+    }
+    const merged: ZukanEntry = {
+      ...theirs,
+      count: theirs.count + (mine.count - old.count),
+      lastSeen: Math.max(theirs.lastSeen, mine.lastSeen),
+      repos: [...new Set([...theirs.repos, ...mine.repos])].slice(-5),
+    }
+    for (const field of ['fix', 'note'] as const) {
+      if (same(mine[field], old[field])) continue
+      if (mine[field] === undefined) delete merged[field]
+      else Object.assign(merged, { [field]: mine[field] })
+    }
+    return merged
+  })
+  const known = new Set(result.map(one => one.key))
+  let top = result.reduce((max, one) => Math.max(max, one.no), 0)
+  for (const mine of wrote) {
+    if (known.has(mine.key) || was.has(mine.key)) continue
+    const isTaken = result.some(one => one.no === mine.no)
+    result.push(isTaken ? { ...mine, no: (top += 1) } : mine)
+    top = Math.max(top, mine.no)
+  }
+  return capped(result)
+}
+
+/** True when the book read back is not the one just written: another session wrote in between. */
+export const isOverwritten = (wrote: readonly ZukanEntry[], stored: readonly ZukanEntry[]): boolean => !same(wrote, stored)
 
 export function fromStore(value: unknown): ZukanEntry[] {
   return Array.isArray(value)

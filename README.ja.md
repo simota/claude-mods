@@ -232,4 +232,7 @@ slash コマンド、12 文字未満または 1500 文字を超えるプロン�
 claude plugin validate mods/<mod>
 claude plugin test mods/<mod>
 claude --plugin-dir mods/<mod>
+scripts/check-copies.sh
 ```
+
+mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts` は done-gate のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。

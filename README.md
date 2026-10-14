@@ -232,4 +232,7 @@ It asks `gh` (`gh pr view`, and `gh api graphql` for review threads) at session 
 claude plugin validate mods/<mod>
 claude plugin test mods/<mod>
 claude --plugin-dir mods/<mod>
+scripts/check-copies.sh
 ```
+
+Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts` is done-gate's). `scripts/check-copies.sh` fails when a copy drifts.

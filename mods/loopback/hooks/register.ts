@@ -16,12 +16,18 @@ const auditViolations = { plugin: 'self-audit', key: 'violations' } as const
 const unverified = { plugin: 'done-gate', key: 'isFlagged' } as const
 const denials = { plugin: 'sandbox-lens', key: 'denials' } as const
 
-// $.store has no versioned write: this module's writes run one after another.
+// $.store has no versioned write: this module's writes run one after another. Across
+// sessions the total is read back, and when another session wrote over it in between, this
+// outcome is added to theirs and written once more, as todo-agent does.
 let queue: Promise<unknown> = Promise.resolve()
 
 function count($: EngineInterface, outcome: { fed: number; repeated: number }): Promise<void> {
   const run = queue.then(async () => {
-    await $.store.set(STORE_KEY, addOutcome(fromStore(await $.store.get(STORE_KEY)), outcome))
+    const wrote = addOutcome(fromStore(await $.store.get(STORE_KEY)), outcome)
+    await $.store.set(STORE_KEY, wrote)
+    const stored = fromStore(await $.store.get(STORE_KEY))
+    const isOverwritten = stored.fed !== wrote.fed || stored.repeated !== wrote.repeated || stored.checks !== wrote.checks
+    if (isOverwritten) await $.store.set(STORE_KEY, addOutcome(stored, outcome))
   })
   queue = run.catch(() => undefined)
   return run
@@ -58,20 +64,32 @@ export const register: Register = (on, options) => {
 
     const found = collect({ selfAudit, isUnverified: isFlagged.value === true, denials: held.value })
     const picked = fresh(found, await read($, fed))
-    await update($, fed, () => picked.fed)
-    if (picked.feed.length === 0) return next(e)
-
-    const audited = picked.feed.filter(f => f.source === 'self-audit')
-    if (audited.length > 0 && selfAudit.latest?.status === 'audited') {
-      const turnId = selfAudit.latest.turnId
-      const rules = audited.map(f => f.key.slice(`self-audit:${turnId}:`.length))
-      await update($, pending, () => ({ turnId, rules }))
+    if (picked.feed.length === 0) {
+      await update($, fed, () => picked.fed)
+      return next(e)
     }
-    const at = await $.clock.now()
-    await update($, last, () => ({ at, findings: picked.feed }))
-    $.ui.toast(summaryOf(picked.feed))
 
-    return next({ ...e, context: [...(e.context ?? []), contextOf(picked.feed)] })
+    // Counted as fed only once the prompt entered: a hook beneath that drops it (prompt-coach
+    // holding an ambiguous prompt) leaves the findings for the next one.
+    const ran = await next({ ...e, context: [...(e.context ?? []), contextOf(picked.feed)] })
+    if (ran.drop !== undefined) return ran
+
+    // The prompt has entered: nothing here may throw into the .catch below, which would send it again.
+    try {
+      await update($, fed, () => picked.fed)
+      const audited = picked.feed.filter(f => f.source === 'self-audit')
+      if (audited.length > 0 && selfAudit.latest?.status === 'audited') {
+        const turnId = selfAudit.latest.turnId
+        const rules = audited.map(f => f.key.slice(`self-audit:${turnId}:`.length))
+        await update($, pending, () => ({ turnId, rules }))
+      }
+      const at = await $.clock.now()
+      await update($, last, () => ({ at, findings: picked.feed }))
+      $.ui.toast(summaryOf(picked.feed))
+    } catch (err) {
+      $.ui.log(`loopback: ${String(err)}`, { to: 'debug' })
+    }
+    return ran
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'loopback' }, async $ => {

@@ -177,8 +177,12 @@ export const register: Register = (on, options) => {
     const waiting = await read($, feed)
     const s = await read($, snapshot)
     if (waiting.length === 0 || s === null) return next(e)
-    await update($, feed, () => [])
-    return next({ ...e, context: [...(e.context ?? []), contextOf(s, waiting)] })
+    // Taken off only once the prompt entered: a hook beneath that drops it (prompt-coach
+    // holding an ambiguous prompt) leaves the feed for the next one. What arrived meanwhile stays.
+    const ran = await next({ ...e, context: [...(e.context ?? []), contextOf(s, waiting)] })
+    // The prompt has entered: nothing here may throw into the .catch below, which would send it again.
+    if (ran.drop === undefined) await update($, feed, all => all.slice(waiting.length)).catch(() => undefined)
+    return ran
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'pr' }, async ($, e) => {

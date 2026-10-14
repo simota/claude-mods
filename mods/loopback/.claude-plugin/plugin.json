@@ -1,9 +1,16 @@
 {
   "name": "loopback",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default",
-  "author": { "name": "simota" },
+  "author": {
+    "name": "simota"
+  },
   "types": "./types/index.d.ts",
+  "dependencies": [
+    "self-audit",
+    "done-gate",
+    "sandbox-lens"
+  ],
   "userConfig": {
     "enabled": {
       "type": "boolean",

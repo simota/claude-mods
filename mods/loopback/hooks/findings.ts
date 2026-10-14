@@ -1,16 +1,22 @@
 // Turning what other mods hold in $.state into findings the model reads beside the next
 // prompt. Pure: the hooks module reads the state and hands it here.
 
+import type { PluginState } from 'claude-code'
+
 import type { LoopbackFinding, LoopbackOutcomes, LoopbackPending } from '../types'
 
-/** What loopback reads of the detectors, each as its owner's contract declares it. */
+/**
+ * What loopback reads of the detectors, typed by their owners' contracts (plugin.json lists
+ * them under `dependencies`, so the engine lays those contracts beside this mod): a renamed
+ * or reshaped value fails the type check here rather than silently feeding nothing.
+ */
 export type Sources = {
   selfAudit: {
-    latest: { status: string; turnId?: string } | undefined
-    violations: readonly { rule: string; quote: string; why: string }[] | undefined
+    latest: PluginState['self-audit']['latest'] | undefined
+    violations: readonly PluginState['self-audit']['violations'][number][] | undefined
   }
   isUnverified: boolean
-  denials: readonly { kind: string; target: string; count: number; example: string }[] | undefined
+  denials: readonly PluginState['sandbox-lens']['denials'][number][] | undefined
 }
 
 export const MAX_FIELD = 300

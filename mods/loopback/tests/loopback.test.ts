@@ -11,13 +11,13 @@ type Detectors = {
   denials?: { kind: string; target: string; count: number; lastSeen: number; example: string }[]
 }
 
-type Seen = { contexts: (readonly string[] | undefined)[]; toasts: string[] }
+type Seen = { contexts: (readonly string[] | undefined)[]; toasts: string[]; drops: number }
 
 // The world beneath the plugin: the detectors' state as `d` holds it now, and a bottom that
 // records what each prompt carried.
-function world(on: On, d: Detectors, entries: Record<string, unknown> = {}): Seen {
-  const seen: Seen = { contexts: [], toasts: [] }
-  mock.store(on, entries)
+function world(on: On, d: Detectors, entries: Record<string, unknown> | null = {}): Seen {
+  const seen: Seen = { contexts: [], toasts: [], drops: 0 }
+  if (entries !== null) mock.store(on, entries)
   mock.clock(on, { now: 1_000 })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -38,6 +38,11 @@ function world(on: On, d: Detectors, entries: Record<string, unknown> = {}): See
   })
   on('prompt.submit', ($, e) => {
     seen.contexts.push(e.context)
+    // A hook beneath holding the prompt (prompt-coach) while `drops` lasts.
+    if (seen.drops > 0) {
+      seen.drops -= 1
+      return { drop: 'held' }
+    }
     return { text: e.text, context: e.context }
   })
   return seen
@@ -58,11 +63,11 @@ describe('findings', () => {
     const found = collect({
       selfAudit: { latest: { status: 'audited', turnId: 't1' }, violations: [R1] },
       isUnverified: true,
-      denials: [{ kind: 'network', target: 'example.com:443', count: 2, example: 'curl https://example.com' }],
+      denials: [{ kind: 'network', target: 'example.com:443', count: 2, lastSeen: 1, example: 'curl https://example.com' }],
     })
     expect(found.map(f => f.key)).toEqual(['self-audit:t1:R1', 'done-gate:unverified', 'sandbox-lens:network:example.com:443'])
 
-    const skipped = collect({ selfAudit: { latest: { status: 'skipped', turnId: 't2' }, violations: [R1] }, isUnverified: false, denials: [] })
+    const skipped = collect({ selfAudit: { latest: { status: 'skipped', turnId: 't2', reason: 'short' }, violations: [R1] }, isUnverified: false, denials: [] })
     expect(skipped).toEqual([])
   })
 
@@ -87,7 +92,7 @@ describe('findings', () => {
   test('settles once a later reply is audited, counting the rules flagged again', () => {
     const pending = { turnId: 't1', rules: ['R1', 'R3'] }
     expect(settle(pending, { status: 'audited', turnId: 't1' }, [R1]).outcome).toBeNull()
-    expect(settle(pending, { status: 'skipped', turnId: 't2' }, []).outcome).toBeNull()
+    expect(settle(pending, { status: 'skipped', turnId: 't2', reason: 'short' }, []).outcome).toBeNull()
     expect(settle(pending, { status: 'audited', turnId: 't2' }, [R1])).toEqual({ outcome: { fed: 2, repeated: 1 }, pending: null })
   })
 })
@@ -118,6 +123,20 @@ describe('loopback', () => {
     expect(await report($)).toContain('[self-audit] R1')
   })
 
+  test('a prompt held beneath leaves the findings for the next one', { options: { enabled: true } }, async ($, on) => {
+    const seen = world(on, { latest: { status: 'audited', turnId: 't1' }, violations: [R1] })
+    await $.session.start(START)
+
+    seen.drops = 1
+    await type($)
+    await type($, 'clearer now')
+    expect(seen.contexts[0]?.[0]).toContain('[self-audit] R1')
+    expect(seen.contexts[1]?.[0]).toContain('[self-audit] R1')
+    expect(seen.toasts).toHaveLength(1)
+    await type($, 'and the lexer')
+    expect(seen.contexts[2]).toBeUndefined()
+  })
+
   test('never attaches to a prompt a plugin sent', { options: { enabled: true } }, async ($, on) => {
     const seen = world(on, { isFlagged: true })
     await $.session.start(START)
@@ -134,5 +153,27 @@ describe('loopback', () => {
     d.latest = { status: 'audited', turnId: 't2' }
     await type($, 'next')
     expect(await report($)).toContain('1/1')
+  })
+
+  test("another session's total written over this one's is added to, not lost", { options: { enabled: true } }, async ($, on) => {
+    const d: Detectors = { latest: { status: 'audited', turnId: 't1' }, violations: [R1] }
+    world(on, d, null)
+    // The store, with another session's total landing right after this session's first write.
+    const store = new Map<string, unknown>()
+    let isRaced = false
+    on('store.get', ($, e) => ({ value: store.get(e.key) }) as never)
+    on('store.set', ($, e) => {
+      store.set(e.key, e.value)
+      if (e.key === 'outcomes' && !isRaced) {
+        isRaced = true
+        store.set('outcomes', { fed: 5, repeated: 2, checks: 3 })
+      }
+      return { value: undefined } as never
+    })
+    await $.session.start(START)
+    await type($)
+    d.latest = { status: 'audited', turnId: 't2' }
+    await type($, 'next')
+    expect(await report($)).toContain('3/6')
   })
 })
