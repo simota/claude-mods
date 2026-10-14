@@ -1,0 +1,7 @@
+{
+  "name": "done-gate",
+  "version": "0.1.0",
+  "description": "Flags unverified edits, stops repeated failing commands, and blocks git --no-verify",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts"
+}

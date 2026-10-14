@@ -1,0 +1,20 @@
+{
+  "name": "battle-report",
+  "version": "0.1.0",
+  "description": "RPG-style battle report after each turn: tokens, edits, lines changed and tool errors, as a toast, a notification and a sound",
+  "author": { "name": "simota" },
+  "userConfig": {
+    "sound": {
+      "type": "boolean",
+      "title": "Sound",
+      "description": "Play Glass (clean turn) or Basso (tool errors) with afplay on macOS",
+      "default": true
+    },
+    "notify": {
+      "type": "boolean",
+      "title": "Notification",
+      "description": "Send the report as a native notification as well as a toast",
+      "default": true
+    }
+  }
+}

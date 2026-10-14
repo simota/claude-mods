@@ -1,5 +1,39 @@
 {
   "name": "simota-mods",
-  "owner": { "name": "simota" },
-  "plugins": []
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list",
+  "owner": {
+    "name": "simota"
+  },
+  "plugins": [
+    {
+      "name": "agent-pane",
+      "source": "./mods/agent-pane",
+      "description": "Live pane of the session's subagents: running ones with elapsed time, finished ones with result and duration"
+    },
+    {
+      "name": "done-gate",
+      "source": "./mods/done-gate",
+      "description": "Flags unverified edits, stops repeated failing commands, and blocks git --no-verify"
+    },
+    {
+      "name": "sandbox-lens",
+      "source": "./mods/sandbox-lens",
+      "description": "Tallies sandbox denials seen in Bash output and reports them with /sandbox-report"
+    },
+    {
+      "name": "battle-report",
+      "source": "./mods/battle-report",
+      "description": "RPG-style battle report after each turn: tokens, edits, lines changed and tool errors, as a toast, a notification and a sound"
+    },
+    {
+      "name": "skill-hint",
+      "source": "./mods/skill-hint",
+      "description": "Suggests up to three matching skills above the prompt from what was typed; never invokes them."
+    },
+    {
+      "name": "todo-agent",
+      "source": "./mods/todo-agent",
+      "description": "Collects #TODO(agent) follow-ups from Claude's replies into a per-project list with a /todos pane."
+    }
+  ]
 }
