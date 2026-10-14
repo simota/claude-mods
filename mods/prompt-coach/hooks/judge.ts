@@ -39,9 +39,23 @@ export function carriesMore(text: string, attachments: readonly unknown[] | unde
 /** The text 補足して送る puts back: the held words with a done-condition line to fill in. */
 export const FOLLOW_UP = '\n完了条件: '
 
-/** Whether a text is one this coach handed back to be completed, which is never held again. */
+/**
+ * Whether a text is one this coach handed back to be completed, which is never held again:
+ * the exact text handed back, or anything that still opens with the held words once the
+ * whitespace around both is set aside (an empty 完了条件 the box trimmed, a line added after).
+ */
 export function isFollowUp(text: string, bases: readonly string[]): boolean {
-  return bases.some(base => text.startsWith(base + FOLLOW_UP))
+  const typed = text.trim()
+  return bases.some(base => text === base + FOLLOW_UP || (base.trim() !== '' && typed.startsWith(base.trim())))
+}
+
+/**
+ * Whether the held words should go back into the box after another prompt was sent: not
+ * when what was sent is the held text itself, or opens with it (recalled from history).
+ */
+export function shouldRestore(sent: string, held: string): boolean {
+  const heldText = held.trim()
+  return heldText !== '' && !sent.trim().startsWith(heldText)
 }
 
 /** The verdict in a reply, or undefined when the reply is not a clear yes or no. */

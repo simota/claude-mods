@@ -3,6 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { DEFAULT_ACTIONS, parseActions, slashCommand } from '../hooks/actions'
+import { editsFiles } from '../hooks/edits'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -25,27 +26,21 @@ type Calls = {
   modes: (string | undefined)[]
   ran: string[]
   toasts: string[]
-  // What `git status` reports; a test changes it to stand for Bash editing files.
-  tree: string
+  // Every process the plugin started: it must start none (no git, whose filters run unsandboxed).
+  processes: string[][]
   failCommand: boolean
 }
 
 // Stands for the engine beneath the plugin, recording what the buttons asked for.
 const engine = (on: On): Calls => {
-  const calls: Calls = { submitted: [], filled: [], modes: [], ran: [], toasts: [], tree: '', failCommand: false }
+  const calls: Calls = { submitted: [], filled: [], modes: [], ran: [], toasts: [], processes: [], failCommand: false }
   on('tool.call', () => ({ result: 'ok', text: 'ok' }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
-  on('session.cwd', () => ({ value: '/repo' }))
-  on('process.run', ($, e) => ({
-    value: {
-      exitCode: 0,
-      stdout: e.argv.includes('status') ? calls.tree : '',
-      stderr: '',
-      isStdoutTruncated: false,
-      isStderrTruncated: false,
-    },
-  }))
+  on('process.run', ($, e) => {
+    calls.processes.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('prompt.submit', ($, e) => {
     calls.submitted.push(e.text)
     return { text: e.text }
@@ -72,13 +67,13 @@ const engine = (on: On): Calls => {
 }
 
 let turn = 0
-const runTurn = async ($: Engine, withEdit: boolean, during?: () => void) => {
+const runTurn = async ($: Engine, withEdit: boolean, bash: string[] = []) => {
   const turnId = `t${++turn}`
   await $.turn.start({ text: 'go', turnId })
   if (withEdit) {
     await $.tool.call({ tool: 'Edit', file_path: '/tmp/a.ts', old_string: 'a', new_string: 'b' })
   }
-  during?.()
+  for (const command of bash) await $.tool.call({ tool: 'Bash', command })
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId, reason: 'answer' })
 }
 
@@ -145,13 +140,78 @@ test('a turn with edits shows every button, one without only continue', async ($
   }
 })
 
-test('files changed through Bash count as edits', async ($, on) => {
-  const calls = engine(on)
-  calls.tree = ''
-  await runTurn($, false, () => {
-    calls.tree = ' M src/a.ts\n'
+describe('editsFiles', () => {
+  test('commands that write files', () => {
+    for (const command of [
+      "sed -i 's/a/b/' src/a.ts",
+      "sed -i '' -e 's/a/b/' src/a.ts",
+      'sed --in-place s/a/b/ x',
+      "perl -pi -e 's/a/b/' x",
+      'echo hi > notes.md',
+      'echo hi >> notes.md',
+      'printf x>out.txt',
+      'cat a | tee b.txt',
+      'mv a b',
+      'cp a b',
+      'rm -f build/x',
+      'mkdir -p src/new',
+      'touch x',
+      'patch -p1 < fix.diff',
+      'git apply fix.diff',
+      'git am 0001.patch',
+      'git checkout -- src/a.ts',
+      'git restore src/a.ts',
+      'git stash pop',
+      'git merge feature',
+      'git rebase main',
+      'git cherry-pick abc123',
+      'git revert HEAD',
+      'git reset --hard HEAD~1',
+      'git -C repo apply x.diff',
+      'npm install lodash',
+      'pnpm add -D vitest',
+      'yarn remove left-pad',
+      'yarn',
+      'cd app && sed -i s/a/b/ x',
+      'bash -c "echo x > y"',
+      'echo $(touch x)',
+      'sudo -u bob rm x',
+    ]) {
+      expect([command, editsFiles(command)]).toEqual([command, true])
+    }
   })
+
+  test('commands that only read, or write nowhere in the tree', () => {
+    for (const command of [
+      'ls -la',
+      'cat a.ts',
+      'grep -rn foo src',
+      'sed -n 1,20p a.ts',
+      'git status',
+      'git diff',
+      'git log -n 3',
+      'git checkout main',
+      'npm test',
+      'npm run build > /dev/null',
+      'cmd 2>&1',
+      'cmd 2>/dev/null',
+      'echo "a > b"',
+      'yarn test',
+      'tee',
+      'cat x | tee /dev/null',
+    ]) {
+      expect([command, editsFiles(command)]).toEqual([command, false])
+    }
+  })
+})
+
+test('files changed through Bash count as edits, read from the command, with no process started', async ($, on) => {
+  const calls = engine(on)
+  await runTurn($, false, ["sed -i 's/a/b/' src/a.ts"])
   expect(await labels($, 'terminal')).toEqual(['action-t', 'action-r', 'action-m', 'action-c', 'dismiss'])
+  await runTurn($, false, ['git status', 'cat src/a.ts'])
+  expect(await labels($, 'terminal')).toEqual(['action-c', 'dismiss'])
+  expect(calls.processes).toEqual([])
 })
 
 test('presses submit, run the slash command, or fill the prompt without wiping a draft', async ($, on) => {

@@ -77,10 +77,14 @@ export const register: Register = (on, options) => {
   })
 
   // The skill listing reaches the model as this attachment; only its entries are filtered.
-  // Every listing is recorded, cut or not, so the report never shows an earlier listing's cut.
+  // Every main-loop listing is recorded, cut or not, so the report never shows an earlier cut.
+  // A subagent's listing is filtered the same way but not recorded: the report, and the
+  // dropped skills a prompt may name, are the main conversation's.
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
-    const asSent = (stats: Omit<ContextDietStats, 'beforeChars' | 'afterChars'>, text: string) =>
-      update($, last, () => ({ ...stats, beforeChars: e.text.length, afterChars: text.length }))
+    const asSent = async (stats: Omit<ContextDietStats, 'beforeChars' | 'afterChars'>, text: string) => {
+      if (e.agentId !== undefined) return
+      await update($, last, () => ({ ...stats, beforeChars: e.text.length, afterChars: text.length }))
+    }
 
     if (!(await isActive($, configured))) {
       await asSent({ isActive: false, isUncertain: false, kinds: [], kept: [], dropped: [] }, e.text)
@@ -88,12 +92,7 @@ export const register: Register = (on, options) => {
     }
 
     const rules: Rules = { kinds: await projectKinds($), keep, drop }
-    // The session's commands tell a skill's entry from a line of a description shaped like one.
-    const known = await $.command
-      .list()
-      .then(commands => new Set(commands.map(command => command.name)))
-      .catch(() => undefined)
-    const filtered = filterListing(e.text, rules, known)
+    const filtered = filterListing(e.text, rules)
     await asSent(
       { isActive: true, isUncertain: filtered.isUncertain, kinds: [...rules.kinds], kept: filtered.kept, dropped: filtered.dropped },
       filtered.text,

@@ -16,13 +16,16 @@ export const colorFor = (percent: number) => (percent >= 80 ? RED : percent >= 5
 
 export const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`
 
-// The unit is chosen after rounding, so 999,999 reads 1M rather than 1000k.
-export const compact = (n: number) =>
-  Math.round(n / 1_000) >= 1_000
-    ? `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
-    : n >= 1_000
-      ? `${Math.round(n / 1_000)}k`
-      : String(n)
+// The unit is chosen after rounding, so 999,999 reads 1M rather than 1000k. Millions round in
+// whole tenths: 1,950,000 / 100,000 is exactly 19.5 and rounds up, where 1.95.toFixed(1) is "1.9".
+export const compact = (n: number) => {
+  if (Math.round(n / 1_000) >= 1_000) {
+    const tenths = Math.round(n / 100_000)
+    const rest = tenths % 10
+    return `${Math.floor(tenths / 10)}${rest === 0 ? '' : `.${rest}`}M`
+  }
+  return n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n)
+}
 
 export const barFor = (percent: number) => {
   const clamped = Math.min(100, Math.max(0, percent))

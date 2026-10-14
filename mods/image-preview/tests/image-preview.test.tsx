@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { FsStat, On, ProcessRunResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { absolutize, cellBox, findImagePaths, pngDimensions } from '../hooks/images'
+import { absolutize, cellBox, findImageCandidates, pngDimensions } from '../hooks/images'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const CWD = '/work/app'
@@ -22,11 +22,14 @@ function ok(stdout: string): ProcessRunResult {
 type World = {
   hasSips: boolean
   env?: Record<string, string>
+  /** The session's working directory, read when asked: a test may move it. */
+  place?: { cwd: string }
   /** Folders that exist; a `link` one is a symbolic link elsewhere. */
   dirs?: Record<string, 'dir' | 'link'>
 }
 
 const DEFAULT_DIRS = { '/tmpdir': 'dir', '/tmpdir/claude-image-preview': 'dir' } as const
+const CACHE = '/tmpdir/claude-image-preview/sess-1'
 
 // What the engine answers beneath the plugin: the files, the shell and sips, the cwd, the env, the toasts.
 function beneath(on: On, files: Record<string, File>, world: World) {
@@ -35,7 +38,9 @@ function beneath(on: On, files: Record<string, File>, world: World) {
   const reads: string[] = []
   const env = world.env ?? { HOME: '/home/me', TMPDIR: '/tmpdir/' }
   const dirs: Record<string, 'dir' | 'link'> = world.dirs ?? { ...DEFAULT_DIRS }
-  on('session.cwd', () => ({ value: CWD }))
+  const place = world.place ?? { cwd: CWD }
+  on('session.cwd', () => ({ value: place.cwd }))
+  on('session.id', () => ({ value: 'sess-1' }))
   on('env.get', ($, e) => ({ value: env[e.name] }))
   on('fs.stat', ($, e) => {
     const dir = dirs[e.path]
@@ -61,6 +66,7 @@ function beneath(on: On, files: Record<string, File>, world: World) {
       dirs[dir] ??= 'dir'
       return { value: ok('') }
     }
+    if (e.argv[0] === 'rm') delete dirs[e.argv.at(-1) ?? '']
     if (!world.hasSips && e.argv[0] === 'sips') return { value: { ...ok(''), exitCode: 127 } }
     if (e.argv[0] === 'sips' && e.argv[1] === '-g') return { value: ok('  pixelWidth: 300\n  pixelHeight: 100\n') }
     return { value: ok('') }
@@ -69,6 +75,14 @@ function beneath(on: On, files: Record<string, File>, world: World) {
     toasts.push(e.text)
     return { value: undefined }
   })
+  on('fs.list', ($, e) => {
+    const prefix = `${e.path}/`
+    const names = Object.keys(dirs).filter(path => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'))
+    return { value: names.map(path => ({ name: path.slice(prefix.length), kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })) }
+  })
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   // The engine's own row, drawn when the plugin passes.
   on('ui.render', { component: 'ToolUse' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -98,28 +112,34 @@ async function drawn($: Engine, surface: (typeof SURFACES)[number], at: ReturnTy
   return { ui, images, texts }
 }
 
-describe('findImagePaths', () => {
+describe('findImageCandidates', () => {
   test('finds image paths in commands and output, not URLs', () => {
     const text = 'python gen.py --out out/cat.png\nsee https://e.com/i.png and ./img/dog.webp'
-    expect(findImagePaths(text)).toEqual(['out/cat.png', './img/dog.webp'])
+    expect(findImageCandidates(text)).toEqual([['out/cat.png'], ['./img/dog.webp']])
   })
 
-  test('an unquoted path with a space comes back whole, not as its tail', () => {
-    expect(findImagePaths('Saved: /tmp/a b/x.jpg')).toEqual(['/tmp/a b/x.jpg'])
+  test('a path split at a space offers the joined reading first and the tail after it', () => {
+    expect(findImageCandidates('Saved: /tmp/a b/x.jpg')).toEqual([['/tmp/a b/x.jpg', 'b/x.jpg']])
+    // Two arguments read the same way; which one exists on disk decides (see the Bash test below).
+    expect(findImageCandidates('convert /tmp/a /tmp/b.png')).toEqual([['/tmp/a /tmp/b.png', '/tmp/b.png']])
+  })
+
+  test('a list of paths is never joined across its commas', () => {
+    expect(findImageCandidates('wrote ./a.png, ./b.png')).toEqual([['./a.png'], ['./b.png']])
   })
 
   test('a quoted path keeps its spaces', () => {
-    expect(findImagePaths(`open "/Users/me/My Pics/a.png" and 'out/b c.webp'`)).toEqual(['/Users/me/My Pics/a.png', 'out/b c.webp'])
+    expect(findImageCandidates(`open "/Users/me/My Pics/a.png" and 'out/b c.webp'`)).toEqual([['/Users/me/My Pics/a.png'], ['out/b c.webp']])
   })
 
   test('a path that ends a sentence keeps its name', () => {
-    expect(findImagePaths('Saved to out/cat.png.')).toEqual(['out/cat.png'])
-    expect(findImagePaths('保存しました: out/犬.png。')).toEqual(['out/犬.png'])
-    expect(findImagePaths('(see out/cat.png), done')).toEqual(['out/cat.png'])
+    expect(findImageCandidates('Saved to out/cat.png.')).toEqual([['out/cat.png']])
+    expect(findImageCandidates('保存しました: out/犬.png。')).toEqual([['out/犬.png']])
+    expect(findImageCandidates('(see out/cat.png), done')).toEqual([['out/cat.png']])
   })
 
   test('two paths side by side stay two', () => {
-    expect(findImagePaths('cp /a/b.png out/c.png')).toEqual(['/a/b.png', 'out/c.png'])
+    expect(findImageCandidates('cp /a/b.png out/c.png')).toEqual([['/a/b.png'], ['out/c.png']])
   })
 })
 
@@ -198,22 +218,19 @@ test('a Bash run shows only images it produced, converting a JPEG into the priva
 
   expect(toasts).toEqual(['画像プレビュー: new.jpg'])
   // The cache folder is made private before anything is written into it.
+  const MKDIR = 'umask 077 && mkdir -p -m 700 -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && chmod 700 -- "$1"'
   const made = runs.findIndex(argv => argv[0] === '/bin/sh' && argv[2]?.includes('mkdir'))
-  expect(runs[made]).toEqual([
-    '/bin/sh',
-    '-c',
-    'umask 077 && mkdir -p -m 700 -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && chmod 700 -- "$1"',
-    'sh',
-    '/tmpdir/claude-image-preview',
-  ])
+  // The plugin's folder, then the session's own inside it, both made private.
+  expect(runs[made]).toEqual(['/bin/sh', '-c', MKDIR, 'sh', '/tmpdir/claude-image-preview'])
+  expect(runs[made + 1]).toEqual(['/bin/sh', '-c', MKDIR, 'sh', CACHE])
   const converted = runs.findIndex(argv => argv[0] === 'sips' && argv[1] === '-s')
   expect(made).toBeLessThan(converted)
   const convert = runs[converted]
   expect(convert?.slice(0, 6)).toEqual(['sips', '-s', 'format', 'png', '-Z', '1024'])
   expect(convert?.[6]).toBe('/work/app/gen/new.jpg')
-  expect(convert?.[8]).toMatch(/^\/tmpdir\/claude-image-preview\/[0-9a-f]{16}\.png$/)
-  // The cache keeps its newest 50 after each conversion.
-  expect(runs.at(-1)?.slice(3)).toEqual(['sh', '/tmpdir/claude-image-preview', '51'])
+  expect(convert?.[8]).toMatch(/^\/tmpdir\/claude-image-preview\/sess-1\/[0-9a-f]{16}\.png$/)
+  // Under 50 converted copies nothing is removed.
+  expect(runs.some(argv => argv[0] === 'rm')).toBe(false)
 
   const { images, texts } = await drawn($, 'terminal', toolRow('b1', 'Bash'))
   expect(images).toHaveLength(1)
@@ -250,7 +267,7 @@ test('without TMPDIR the cache lives under ~/.cache, never in a shared /tmp', as
   await clock.settle()
 
   const convert = runs.find(argv => argv[0] === 'sips' && argv[1] === '-s')
-  expect(convert?.[8]).toMatch(/^\/home\/me\/\.cache\/claude-image-preview\/[0-9a-f]{16}\.png$/)
+  expect(convert?.[8]).toMatch(/^\/home\/me\/\.cache\/claude-image-preview\/sess-1\/[0-9a-f]{16}\.png$/)
   expect(runs.some(argv => argv.some(arg => arg.startsWith('/tmp/')))).toBe(false)
 })
 
@@ -331,4 +348,96 @@ test('inline off keeps tool rows as the engine draws them', { options: { inline:
   const { texts, images } = await drawn($, 'terminal', toolRow('r3', 'Read'))
   expect(texts).toEqual(['engine row Read'])
   expect(images).toHaveLength(0)
+})
+
+test('of two arguments read as one spaced path, the one that exists is shown', async ($, on) => {
+  const clock = mock.clock(on, { now: 100_000 })
+  // `/tmp/a` is a folder, `/tmp/b.png` the file the command made; `/tmp/a /tmp/b.png` is nothing.
+  const files = { '/tmp/b.png': { size: 10, mtimeMs: 100_500, head: pngHead(10, 10) } }
+  const { toasts } = beneath(on, files, { hasSips: false })
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }) as never)
+
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'c1', command: 'convert /tmp/a /tmp/b.png', description: 'convert' })
+  await clock.settle()
+
+  expect(toasts).toEqual(['画像プレビュー: b.png'])
+  const { images } = await drawn($, 'terminal', toolRow('c1', 'Bash'))
+  expect(images[0]?.props.source).toMatchObject({ file: '/tmp/b.png' })
+})
+
+test('a relative path is read against the directory of the call, not the one when the timer runs', async ($, on) => {
+  const clock = mock.clock(on, { now: 100_000 })
+  const files = { '/work/sub/out/x.png': { size: 10, mtimeMs: 100_500, head: pngHead(10, 10) } }
+  const place = { cwd: '/work/sub' }
+  const { toasts } = beneath(on, files, { hasSips: false, place })
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'wrote out/x.png', stderr: '', interrupted: false } }) as never)
+
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'd1', command: 'gen', description: 'gen' })
+  // By the time the timer runs, the session is back in another directory.
+  place.cwd = '/work/app'
+  await clock.settle()
+
+  expect(toasts).toEqual(['画像プレビュー: x.png'])
+})
+
+test('past 50 converted copies the oldest is removed and its row shows a caption, not an empty box', async ($, on) => {
+  const clock = mock.clock(on)
+  const files: Record<string, File> = {}
+  for (let i = 0; i < 51; i++) files[`/work/app/p${i}.jpg`] = { size: 10, mtimeMs: 5 }
+  const { runs } = beneath(on, files, { hasSips: true })
+  on('tool.call', { tool: 'Read' }, () => ({ result: {} }) as never)
+
+  for (let i = 0; i < 51; i++) await $.tool.call({ tool: 'Read', tool_use_id: `r${i}`, file_path: `p${i}.jpg` })
+  await clock.settle()
+
+  const firstOut = runs.find(argv => argv[0] === 'sips' && argv[1] === '-s' && argv[6] === '/work/app/p0.jpg')?.[8]
+  expect(runs.filter(argv => argv[0] === 'rm').map(argv => argv.at(-1))).toEqual([firstOut])
+  const first = await drawn($, 'terminal', toolRow('r0', 'Read'))
+  expect(first.images).toHaveLength(0)
+  expect(first.texts.some(text => text.includes('p0.jpg') && text.includes('キャッシュから削除済み'))).toBe(true)
+  // The newest still draws.
+  const last = await drawn($, 'terminal', toolRow('r50', 'Read'))
+  expect(last.images).toHaveLength(1)
+})
+
+test('a copy used again counts as new: the oldest unused one goes, and both rows that drew the reused copy keep it', async ($, on) => {
+  const clock = mock.clock(on)
+  const files: Record<string, File> = {}
+  for (let i = 0; i < 51; i++) files[`/work/app/q${i}.jpg`] = { size: 10, mtimeMs: 5 }
+  const { runs } = beneath(on, files, { hasSips: true })
+  on('tool.call', { tool: 'Read' }, () => ({ result: {} }) as never)
+
+  // q0, then q1–q49, then q0 again (the same version: the same copy), then q50: 51 distinct copies in all.
+  await $.tool.call({ tool: 'Read', tool_use_id: 'first', file_path: 'q0.jpg' })
+  for (let i = 1; i < 50; i++) await $.tool.call({ tool: 'Read', tool_use_id: `r${i}`, file_path: `q${i}.jpg` })
+  await $.tool.call({ tool: 'Read', tool_use_id: 'again', file_path: 'q0.jpg' })
+  await $.tool.call({ tool: 'Read', tool_use_id: 'r50', file_path: 'q50.jpg' })
+  await clock.settle()
+
+  const outOf = (name: string) => runs.find(argv => argv[0] === 'sips' && argv[1] === '-s' && argv[6] === `/work/app/${name}`)?.[8]
+  // q0's copy was used again after q1's, so q1's is the oldest and goes.
+  expect(runs.filter(argv => argv[0] === 'rm').map(argv => argv.at(-1))).toEqual([outOf('q1.jpg')])
+  for (const id of ['first', 'again']) {
+    const { images } = await drawn($, 'terminal', toolRow(id, 'Read'))
+    expect(images[0]?.props.source).toMatchObject({ file: outOf('q0.jpg') })
+  }
+  const { texts } = await drawn($, 'terminal', toolRow('r1', 'Read'))
+  expect(texts.some(text => text.includes('キャッシュから削除済み'))).toBe(true)
+})
+
+test('session.end removes the session cache; session.start sweeps a day-old one a killed session left', async ($, on) => {
+  const DAY = 24 * 60 * 60 * 1000
+  const clock = mock.clock(on, { now: 2 * DAY })
+  const { runs } = beneath(on, {}, {
+    hasSips: false,
+    dirs: { '/tmpdir': 'dir', '/tmpdir/claude-image-preview': 'dir', [CACHE]: 'dir', '/tmpdir/claude-image-preview/old': 'dir' },
+  })
+
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  // Every folder here has mtime 0, two days back: the other session's goes, the current one stays.
+  expect(runs.filter(argv => argv[0] === 'rm').map(argv => argv.at(-1))).toEqual(['/tmpdir/claude-image-preview/old'])
+
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: { id: 'sess-1' } })
+  expect(runs.filter(argv => argv[0] === 'rm').map(argv => argv.at(-1))).toEqual(['/tmpdir/claude-image-preview/old', CACHE])
 })

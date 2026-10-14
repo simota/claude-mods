@@ -1,6 +1,6 @@
 {
   "name": "battle-report",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "RPG-style battle report after each turn: tokens, edits, lines changed and tool errors, as a toast, a notification and a sound",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

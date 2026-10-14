@@ -13,6 +13,7 @@ import {
   parseVerdict,
   promptFor,
   remember,
+  shouldRestore,
 } from './judge'
 
 const held = atom({ plugin: 'prompt-coach', key: 'held' } as const, null as PromptCoachHeld | null)
@@ -44,11 +45,14 @@ export const register: Register = (on, options) => {
 
     // A new prompt while one is held: send the new one, and put the held words back in
     // the box rather than drop them (the drop had emptied the box).
+    // What was sent may be the held text itself, recalled from history: then nothing goes back.
     const before = await release($)
     if (before !== undefined) {
       const ran = await next(e)
-      const filled = await $.prompt.fill({ text: before, mode: 'insert' })
-      if (!filled.isFilled) await $.ui.toast(`保留していた依頼: ${before}`)
+      if (shouldRestore(e.text, before)) {
+        const filled = await $.prompt.fill({ text: before, mode: 'insert' })
+        if (!filled.isFilled) await $.ui.toast(`保留していた依頼: ${before}`)
+      }
       return ran
     }
 

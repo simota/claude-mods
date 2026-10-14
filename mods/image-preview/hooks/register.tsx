@@ -1,14 +1,14 @@
 import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, RenderInput, RenderSurface, Register } from 'claude-code'
 
-import type { ImageItem } from '../types'
+import type { ConvertedFile, ImageItem } from '../types'
 import {
   IMAGE_EXT,
   absolutize,
   baseName,
   caption,
   cellBox,
-  findImagePaths,
+  findImageCandidates,
   isPng,
   pngDimensions,
   sipsDimensions,
@@ -23,17 +23,26 @@ const MAX_BYTES = 32 * 1024 * 1024
 // A Bash run "produces" an image modified since it started (with clock slack).
 const SLACK_MS = 2000
 const CONVERT_MAX_PX = 1024
-// Converted copies kept in the cache folder; older ones are removed.
+// Converted copies kept in the session's cache; older ones are removed, never one the pane shows.
 const CACHE_KEEP = 50
 const CACHE_NAME = 'claude-image-preview'
+// A session's cache left behind (the process was killed before session.end) goes after a day.
+const STALE_MS = 24 * 60 * 60 * 1000
 // The pane's own rows that are not the picture: the step buttons, the caption, the path.
 const PANE_CHROME_ROWS = 3
+const PRUNED = 'キャッシュから削除済み'
 
 const images = atom({ plugin: 'image-preview', key: 'images' } as const, [])
 const cursor = atom({ plugin: 'image-preview', key: 'cursor' } as const, 0)
 const byTool = atom({ plugin: 'image-preview', key: 'byTool' } as const, [])
+const converted = atom({ plugin: 'image-preview', key: 'converted' } as const, [] as ConvertedFile[])
 
-let cacheDir: string | undefined
+// Where a call's paths are read from: taken in the hook itself, since a timer that outlives
+// the hook reads the session's directory, not that of the call (a subagent's worktree).
+type CallPlace = { cwd: string; home: string | undefined; sessionId: string }
+
+// Session caches made and checked by this load of the module, by session id.
+const cacheDirs = new Map<string, string>()
 // Work after a tool call runs one at a time, in the order the calls finished.
 let queue: Promise<void> = Promise.resolve()
 
@@ -41,39 +50,109 @@ async function sips($: EngineInterface, argv: string[]) {
   return $.process.run(['sips', ...argv], { timeoutMs: 15_000 }).catch(() => undefined)
 }
 
-/**
- * A folder only this user can reach: under TMPDIR, else ~/.cache. Made 0700, then
- * checked to be a real directory of ours (not a link, owned by us) where its parent
- * resolves, so nothing planted beforehand can take a write.
- */
-async function privateDir($: EngineInterface, name: string): Promise<string | undefined> {
+// A session id as a folder name: the same id always gives the same name, so a reload finds it again.
+const folderName = (sessionId: string) => sessionId.replace(/[^\w-]/g, '_')
+
+// TMPDIR when set, else ~/.cache: never a shared /tmp.
+async function rootDir($: EngineInterface): Promise<string | undefined> {
   const tmp = (await $.env.get('TMPDIR'))?.replace(/\/+$/, '')
   const home = (await $.env.get('HOME'))?.replace(/\/+$/, '')
-  const parent = tmp !== undefined && tmp !== '' ? tmp : home !== undefined && home !== '' ? `${home}/.cache` : undefined
-  if (parent === undefined) return undefined
-  const dir = `${parent}/${name}`
-  const made = await $.process
-    .run(['/bin/sh', '-c', 'umask 077 && mkdir -p -m 700 -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && chmod 700 -- "$1"', 'sh', dir])
-    .catch(() => undefined)
-  if (made?.exitCode !== 0) return undefined
+  return tmp !== undefined && tmp !== '' ? tmp : home !== undefined && home !== '' ? `${home}/.cache` : undefined
+}
+
+// `<parent>/<name>` when it is already a real directory (not a link) right where the parent resolves.
+async function checkedChild($: EngineInterface, parent: string, name: string): Promise<string | undefined> {
   const [where, above] = await Promise.all([
-    $.fs.stat(dir, { resolve: true }).catch(() => undefined),
+    $.fs.stat(`${parent}/${name}`, { resolve: true }).catch(() => undefined),
     $.fs.stat(parent, { resolve: true }).catch(() => undefined),
   ])
   if (where?.kind !== 'dir' || where.isLink || above?.realPath === undefined) return undefined
   return where.realPath === `${above.realPath}/${name}` ? where.realPath : undefined
 }
 
-async function cacheFolder($: EngineInterface): Promise<string | undefined> {
-  cacheDir ??= await privateDir($, CACHE_NAME)
-  return cacheDir
+/**
+ * `<parent>/<name>` as a folder only this user can reach: made 0700, then checked to be
+ * a real directory of ours (not a link, owned by us) right where the parent resolves,
+ * so nothing planted beforehand can take a write.
+ */
+async function privateChild($: EngineInterface, parent: string, name: string): Promise<string | undefined> {
+  const made = await $.process
+    .run(['/bin/sh', '-c', 'umask 077 && mkdir -p -m 700 -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && chmod 700 -- "$1"', 'sh', `${parent}/${name}`])
+    .catch(() => undefined)
+  if (made?.exitCode !== 0) return undefined
+  return checkedChild($, parent, name)
 }
 
-// Newest first by mtime; the names are this plugin's own hex digests.
-async function pruneCache($: EngineInterface, dir: string): Promise<void> {
-  await $.process
-    .run(['/bin/sh', '-c', 'cd -- "$1" && ls -t | tail -n +"$2" | while IFS= read -r f; do rm -f -- "$f"; done', 'sh', dir, String(CACHE_KEEP + 1)])
-    .catch(() => undefined)
+// One cache per session: a session's prune never touches what another session's rows draw.
+async function cacheFolder($: EngineInterface, sessionId: string): Promise<string | undefined> {
+  const known = cacheDirs.get(sessionId)
+  if (known !== undefined) return known
+  const parent = await rootDir($)
+  if (parent === undefined) return undefined
+  const base = await privateChild($, parent, CACHE_NAME)
+  if (base === undefined) return undefined
+  const dir = await privateChild($, base, folderName(sessionId))
+  if (dir !== undefined) cacheDirs.set(sessionId, dir)
+  return dir
+}
+
+// The plugin's base folder as it already stands; nothing is made.
+async function existingBase($: EngineInterface): Promise<string | undefined> {
+  const parent = await rootDir($)
+  return parent === undefined ? undefined : checkedChild($, parent, CACHE_NAME)
+}
+
+async function removeSessionCache($: EngineInterface, sessionId: string): Promise<void> {
+  cacheDirs.delete(sessionId)
+  const base = await existingBase($)
+  if (base === undefined) return
+  const dir = await checkedChild($, base, folderName(sessionId))
+  if (dir !== undefined) await $.process.run(['rm', '-rf', '--', dir]).catch(() => undefined)
+}
+
+// Caches of sessions that never reached session.end (a killed process), once a day old.
+async function sweepStale($: EngineInterface, currentId: string): Promise<void> {
+  const base = await existingBase($)
+  if (base === undefined) return
+  const entries = await $.fs.list(base).catch(() => [])
+  const cutoff = (await $.clock.now()) - STALE_MS
+  for (const entry of entries) {
+    if (entry.kind !== 'dir' || entry.name === folderName(currentId)) continue
+    const stat = await $.fs.stat(`${base}/${entry.name}`, { resolve: true }).catch(() => undefined)
+    if (stat === undefined || stat.mtimeMs >= cutoff) continue
+    const dir = await checkedChild($, base, entry.name)
+    if (dir !== undefined) await $.process.run(['rm', '-rf', '--', dir]).catch(() => undefined)
+  }
+}
+
+/**
+ * Notes a converted copy and, past CACHE_KEEP, removes the oldest copies the pane does not
+ * show. Each row that drew a removed copy is told, so it shows a caption, not an empty box.
+ */
+async function trackConverted($: EngineInterface, png: string, toolUseId: string): Promise<void> {
+  const list = await update($, converted, all => {
+    const known = all.find(one => one.png === png)
+    const ids = [...new Set([...(known?.toolUseIds ?? []), toolUseId])]
+    return [...all.filter(one => one.png !== png), { png, toolUseIds: ids }]
+  })
+  if (list.length <= CACHE_KEEP) return
+  const shown = new Set((await read($, images)).flatMap(item => (item.png === undefined ? [] : [item.png])))
+  const dropped = list.filter(one => one.png !== png && !shown.has(one.png)).slice(0, list.length - CACHE_KEEP)
+  if (dropped.length === 0) return
+  const gone = new Set(dropped.map(one => one.png))
+  await update($, converted, all => all.filter(one => !gone.has(one.png)))
+  for (const one of dropped) {
+    await $.process.run(['rm', '-f', '--', one.png]).catch(() => undefined)
+    for (const id of one.toolUseIds) {
+      await update($, memberOf(byTool, { requestId: id }), items =>
+        items.map(item => {
+          if (item.png !== one.png) return item
+          const { png: _removed, ...rest } = item
+          return { ...rest, skipped: PRUNED }
+        }),
+      )
+    }
+  }
 }
 
 // A PNG's size is in its first 24 bytes: read those alone, never the whole file.
@@ -97,13 +176,13 @@ async function hashOf(text: string): Promise<string> {
 }
 
 // Only PNG reaches the terminal's Image: anything else is converted with macOS sips.
-async function convertToPng($: EngineInterface, path: string, mtimeMs: number): Promise<string | undefined> {
-  const dir = await cacheFolder($)
+async function convertToPng($: EngineInterface, path: string, mtimeMs: number, place: CallPlace, toolUseId: string): Promise<string | undefined> {
+  const dir = await cacheFolder($, place.sessionId)
   if (dir === undefined) return undefined
   const out = `${dir}/${await hashOf(`${path}:${mtimeMs}`)}.png`
   const ran = await sips($, ['-s', 'format', 'png', '-Z', String(CONVERT_MAX_PX), path, '--out', out])
   if (ran?.exitCode !== 0) return undefined
-  await pruneCache($, dir)
+  await trackConverted($, out, toolUseId)
   return out
 }
 
@@ -112,6 +191,7 @@ async function describe(
   path: string,
   toolUseId: string,
   since: number | undefined,
+  place: CallPlace,
 ): Promise<ImageItem | undefined> {
   const stat = await $.fs.stat(path).catch(() => undefined)
   if (stat === undefined || stat.kind !== 'file') return undefined
@@ -130,7 +210,7 @@ async function describe(
   if (stat.size > MAX_BYTES) return { ...item, skipped: '大きすぎるため省略' }
 
   const dims = await dimensions($, path)
-  const png = isPng(path) ? path : await convertToPng($, path, mtimeMs)
+  const png = isPng(path) ? path : await convertToPng($, path, mtimeMs, place, toolUseId)
   return {
     ...item,
     ...dims,
@@ -152,21 +232,27 @@ async function remember($: EngineInterface, found: ImageItem[], toolUseId: strin
 
 async function collect(
   $: EngineInterface,
-  paths: string[],
+  groups: string[][],
   toolUseId: string,
   since: number | undefined,
+  place: CallPlace,
 ): Promise<void> {
-  const cwd = await $.session.cwd()
-  const home = await $.env.get('HOME')
-  const absolute = [...new Set(paths.map(path => absolutize(path, cwd, home)))]
   // A Bash run that only names an image it did not make (`file a.png` after a Write)
   // does not show that version again.
   const shown = since === undefined ? new Set<string>() : new Set((await read($, images)).map(item => item.id))
   const found: ImageItem[] = []
-  for (const path of absolute) {
-    if (path === undefined || !IMAGE_EXT.test(path)) continue
-    const item = await describe($, path, toolUseId, since)
-    if (item !== undefined && !shown.has(item.id)) found.push(item)
+  const seen = new Set<string>()
+  for (const group of groups) {
+    // The longest reading that exists is the path: `/tmp/a /tmp/b.png` is no file, `/tmp/b.png` is.
+    for (const candidate of group) {
+      const path = absolutize(candidate, place.cwd, place.home)
+      if (path === undefined || !IMAGE_EXT.test(path) || seen.has(path)) continue
+      const item = await describe($, path, toolUseId, since, place)
+      if (item === undefined) continue
+      seen.add(path)
+      if (!shown.has(item.id)) found.push(item)
+      break
+    }
     if (found.length >= PER_CALL) break
   }
   await remember($, found, toolUseId)
@@ -178,6 +264,11 @@ function later($: EngineInterface, work: () => Promise<void>): void {
     queue = queue.then(work).catch(err => $.ui.log(`image-preview: ${String(err)}`, { to: 'debug' }))
     return queue
   })
+}
+
+async function placeOf($: EngineInterface): Promise<CallPlace> {
+  const [cwd, home, sessionId] = await Promise.all([$.session.cwd(), $.env.get('HOME'), $.session.id()])
+  return { cwd, home, sessionId }
 }
 
 function thumbnail(e: RenderInput, $: EngineInterface, item: ImageItem, maxColumns: number, maxRows: number) {
@@ -214,6 +305,13 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'images', description: 'このセッションの画像をプレビューペインに表示する' })
+    await sweepStale($, await $.session.id())
+    return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    // The session's converted copies go with it; the folder is found from the id and checked first.
+    await removeSessionCache($, e.sessionId)
     return next(e)
   })
 
@@ -226,7 +324,8 @@ export const register: Register = (on, options) => {
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError !== true && IMAGE_EXT.test(e.file_path)) {
       const { file_path: path, tool_use_id: id } = e
-      later($, () => collect($, [path], id, undefined))
+      const place = await placeOf($)
+      later($, () => collect($, [[path]], id, undefined, place))
     }
     return ran
   }).catch(($, e, next) => next(e)) // an observer: a failure here never changes the call
@@ -236,10 +335,11 @@ export const register: Register = (on, options) => {
     const ran = await next(e)
     if (ran.deny !== undefined) return ran
     const output = ran.text ?? (ran.isError === true ? '' : `${ran.result.stdout}\n${ran.result.stderr}`)
-    const paths = findImagePaths(`${e.command}\n${output}`)
-    if (paths.length > 0) {
+    const groups = findImageCandidates(`${e.command}\n${output}`)
+    if (groups.length > 0) {
       const id = e.tool_use_id
-      later($, () => collect($, paths, id, startedAt))
+      const place = await placeOf($)
+      later($, () => collect($, groups, id, startedAt, place))
     }
     return ran
   }).catch(($, e, next) => next(e))

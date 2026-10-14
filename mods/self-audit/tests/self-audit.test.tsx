@@ -114,6 +114,10 @@ describe('parseViolations', () => {
     expect(sanitize('あ'.repeat(10), 5)).toBe('ああああ…')
   })
 
+  test('removes the bidi marks too, not only overrides and isolates', () => {
+    expect(sanitize('a‎b‏c؜d', 10)).toBe('abcd')
+  })
+
   test('names rules by label', () => {
     expect(ruleName('R1')).toBe('未検証の完了報告')
     expect(ruleName('r5')).toBe('スコープの水増し')
@@ -127,6 +131,17 @@ describe('display width', () => {
     expect(displayWidth('漢字ab')).toBe(6)
     expect(displayWidth('ｱＡ')).toBe(3) // halfwidth katakana 1, fullwidth A 2
     expect(displayWidth('é')).toBe(1)
+  })
+
+  test('counts the emoji a terminal draws wide as two cells', () => {
+    for (const emoji of ['✅', '❌', '⭐', '🚀', '🫠', '⚡', '⛔', '✨', '❓', '⌛', '⏰', '⬛']) {
+      expect([emoji, displayWidth(emoji)]).toEqual([emoji, 2])
+    }
+    // Text-presentation symbols stay one cell.
+    for (const symbol of ['⚠', '✔', '☆', '→']) {
+      expect([symbol, displayWidth(symbol)]).toEqual([symbol, 1])
+    }
+    expect(displayWidth('✅ ok')).toBe(5)
   })
 
   test('clips to cells, the ellipsis taking one', () => {
@@ -269,6 +284,27 @@ test('the next prompt hides the band, and an audit it outran is dropped', async 
   ui = await $.ui.mount({ plugin: 'self-audit', surface: 'terminal', ...BAND })
   expect(await ui.find({ text: /⚠ self-audit/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('a slash command or a hidden prompt keeps the last result: /self-audit can show it', async ($, on) => {
+  const clock = mock.clock(on)
+  engine(on)
+  await endTurn($)
+  await clock.settle()
+  await $.prompt.submit({
+    text: '/self-audit',
+    origin: { kind: 'composer' },
+    wait: false,
+    command: { name: 'self-audit', args: '' },
+  })
+  await $.prompt.submit({ text: 'hidden', origin: { kind: 'composer' }, wait: false, isMeta: true })
+
+  const band = await $.ui.mount({ plugin: 'self-audit', surface: 'terminal', ...BAND })
+  expect(await band.find({ text: /⚠ self-audit/ })).toBeDefined()
+  await band.unmount()
+  const pane = await $.ui.mount({ plugin: 'self-audit', surface: 'terminal', ...PANE })
+  expect(await pane.find({ text: 'まだ監査した返答はありません。' })).toBeUndefined()
+  await pane.unmount()
 })
 
 test('a garbled or clean audit shows nothing', async ($, on) => {

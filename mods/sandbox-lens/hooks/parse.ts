@@ -8,18 +8,23 @@ const EXAMPLE_CHARS = 80
 const BLOCK = /<sandbox_violations>([\s\S]*?)<\/sandbox_violations>/g
 const VIOLATION = /^\s*deny\s+(network-outbound|file-write[\w*-]*|file-read[\w*-]*)\s+(.+?)\s*$/
 
-// stderr lines in the shapes commands print a refused path in.
-const EPERM_LINES = [
-  // ls: cannot open directory '/x/My Files': Operation not permitted
-  /^[\w./+-]+: (?:cannot|can't|could not|unable to|failed to) [^'"‘“]*?(['"‘“].+['"’”]): Operation not permitted\s*$/i,
-  // touch: /x/My Files/a.txt: Operation not permitted
-  /^[\w./+-]+: (.+?): Operation not permitted\s*$/,
-  // zsh: operation not permitted: /x/a.txt
-  /^(?:zsh|bash|sh|fish): operation not permitted: (.+?)\s*$/i,
-]
-const EPERM_SHAPED = /Operation not permitted\s*$/im
+// The tail a refusal line may carry after "permitted": Rust's `(os error 1)`.
+const TAIL = String.raw`(?:\s*\(os error 1\))?\s*$`
 
-// Commands that print a file's content: an "Operation not permitted" there is the file's text, not a refusal.
+// The shapes a program prints a refused path in, each `[program, path]`.
+const EPERM_LINES: RegExp[] = [
+  // ls: cannot open directory '/x/My Files': Operation not permitted
+  new RegExp(String.raw`^([\w./+-]+): (?:cannot|can't|could not|unable to|failed to) [^'"‘“]*?(['"‘“].+['"’”]): Operation not permitted${TAIL}`, 'i'),
+  // touch: /x/My Files/a.txt: Operation not permitted   ·   rg: /x: Operation not permitted (os error 1)
+  new RegExp(String.raw`^([\w./+-]+): (.+?): Operation not permitted${TAIL}`),
+  // zsh: operation not permitted: /x/a.txt
+  /^(zsh|bash|sh|fish): operation not permitted: (.+?)\s*$/i,
+  // PermissionError: [Errno 1] Operation not permitted: '/x/y'
+  /^(?:\w+\.)*(PermissionError|OSError): \[Errno 1\] Operation not permitted: (['"].+['"])\s*$/,
+]
+const EPERM_SHAPED = new RegExp(String.raw`Operation not permitted(?:${TAIL}|: )`, 'im')
+
+// Commands that print a file's content: a line there is the file's text unless it is the program's own message.
 const READERS = new Set(['cat', 'less', 'more', 'head', 'tail', 'grep', 'rg', 'ag', 'sed', 'awk', 'bat', 'jq', 'view', 'nl'])
 
 function kindOf(operation: string): SandboxLensKind {
@@ -29,61 +34,128 @@ function kindOf(operation: string): SandboxLensKind {
 
 const unquote = (text: string) => text.trim().replace(/^['"‘“]|['"’”]$/g, '')
 
+const baseName = (path: string) => path.split('/').pop() ?? ''
+
 function firstWord(command: string): string {
-  return (command.trim().split(/\s+/)[0] ?? '').split('/').pop() ?? ''
+  return baseName(command.trim().split(/\s+/)[0] ?? '')
 }
 
-/** Denials named in one command's output, each (kind, target) once. */
-export function parseDenials(output: string, command = ''): Hit[] {
+/** A path made absolute against cwd, `.` and `..` folded. */
+export function absolute(path: string, cwd: string): string {
+  if (path.startsWith('/') || path.startsWith('~')) return path
+  const out: string[] = []
+  for (const part of `${cwd}/${path}`.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') out.pop()
+    else out.push(part)
+  }
+  return `/${out.join('/')}`
+}
+
+/**
+ * The harness's own violations block: the one that ends the output. A block anywhere
+ * earlier was printed by the command (a file shown, a page fetched) and proves nothing.
+ */
+function trailingBlock(output: string): string | undefined {
+  const text = output.trimEnd()
+  let last: RegExpMatchArray | undefined
+  for (const match of text.matchAll(BLOCK)) last = match
+  if (last === undefined || (last.index ?? 0) + last[0].length !== text.length) return undefined
+  return last[1] ?? ''
+}
+
+/** Denials named in one command's output, each (kind, target) once; relative paths resolved against cwd. */
+export function parseDenials(output: string, command = '', cwd = ''): Hit[] {
   const seen = new Map<string, Hit>()
   const add = (hit: Hit) => seen.set(`${hit.kind} ${hit.target}`, hit)
 
-  // The harness's own block is the record: a file's text cannot forge it from outside one.
-  for (const [, block = ''] of output.matchAll(BLOCK)) {
-    for (const line of block.split(/\r?\n/)) {
-      const match = VIOLATION.exec(line)
-      if (!match) continue
-      const [, operation = '', rest = ''] = match
-      const kind = kindOf(operation)
-      // A network denial is `host:port (why)`; a path runs to the end of the line, spaces and all.
-      const target = kind === 'network' ? (rest.split(/\s+/)[0] ?? rest) : unquote(rest.replace(/\s+\([^()]*\)$/, ''))
-      if (target !== '') add({ kind, target })
-    }
+  for (const line of (trailingBlock(output) ?? '').split(/\r?\n/)) {
+    const match = VIOLATION.exec(line)
+    if (!match) continue
+    const [, operation = '', rest = ''] = match
+    const kind = kindOf(operation)
+    // A network denial is `host:port (why)`; a path runs to the end of the line, spaces and all.
+    const target = kind === 'network' ? (rest.split(/\s+/)[0] ?? rest) : unquote(rest.replace(/\s+\([^()]*\)$/, ''))
+    if (target !== '') add({ kind, target })
   }
   // The block already names the refusal the command's own stderr reports again.
-  if (seen.size > 0 || READERS.has(firstWord(command))) return [...seen.values()]
+  if (seen.size > 0) return [...seen.values()]
 
+  const program = firstWord(command)
+  const isReader = READERS.has(program)
   for (const line of output.split(/\r?\n/)) {
     for (const shape of EPERM_LINES) {
-      const path = shape.exec(line)?.[1]
-      if (path === undefined) continue
+      const match = shape.exec(line)
+      if (!match) continue
+      const [, who = '', path = ''] = match
+      // What a reader prints is the file's text; only a line in its own name is its refusal.
+      if (isReader && baseName(who) !== program) break
       const target = unquote(path)
-      if (/^[/~.]/.test(target)) {
-        add({ kind: 'eperm', target })
-        break
+      if (target !== '' && !target.startsWith('(')) {
+        add({ kind: 'eperm', target: cwd === '' ? target : absolute(target, cwd) })
       }
+      break
     }
   }
-  if (seen.size === 0 && EPERM_SHAPED.test(output)) {
+  if (seen.size === 0 && !isReader && EPERM_SHAPED.test(output)) {
     add({ kind: 'eperm', target: '(path unknown)' })
   }
 
   return [...seen.values()]
 }
 
+// Name segments that mark a value as a credential (`ANTHROPIC_API_KEY`, `x-access-token`, `db_pass`).
+const SECRET_WORDS = new Set([
+  'key', 'apikey', 'token', 'secret', 'password', 'passwd', 'pass', 'pwd',
+  'auth', 'cookie', 'session', 'credential', 'credentials',
+])
+const isSecretName = (name: string) => name.toLowerCase().split(/[_-]/).some(part => SECRET_WORDS.has(part))
+
+// A value: quoted whole, or up to whitespace or a shell separator.
+const VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s&;|'"]+)`
+
+type Replacer = (substring: string, ...groups: string[]) => string
+type Mask = [RegExp, string | Replacer]
+
 // Credentials a command line may carry, each kept to its name.
-const SECRETS: [RegExp, string][] = [
-  [/(authorization:\s*)(?:(bearer|basic|token)\s+)?[^\s'"]+/gi, '$1$2 ***'],
-  [/\b(bearer)\s+[\w.~+/=-]+/gi, '$1 ***'],
-  [/(\b[a-z][\w+.-]*:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, '$1$2:***@'],
-  [/(\s(?:-u|--user)\s+)([^\s:'"]+):([^\s'"]+)/g, '$1$2:***'],
-  [/(--(?:password|passwd|token|api-key|secret)[= ])(\S+)/gi, '$1***'],
-  [/\b([\w-]*(?:token|password|passwd|secret|api[_-]?key|access[_-]?key)[\w-]*)(=|:\s*)([^\s&'"]+)/gi, '$1$2***'],
+const SECRETS: Mask[] = [
+  // URL userinfo: user:password@ keeps the user, a token alone@ goes whole; host and path stay.
+  [/(\b[a-z][\w+.-]*:\/\/)([^/\s:@'"]+):([^/\s@'"]+)@/gi, '$1$2:***@'],
+  [/(\b[a-z][\w+.-]*:\/\/)([^/\s:@'"*]+)@/gi, '$1***@'],
+  // Headers: Authorization keeps its scheme, Cookie loses every pair.
+  [/(authorization:\s*)(?:(bearer|basic|token)\s+)?[^\s'"]+/gi, (_, head = '', scheme = '') => `${head}${scheme ? `${scheme} ` : ''}***`],
+  [/(\bcookie:\s*)[^\s'";]+(?:;\s*[^\s'";]+)*;?/gi, '$1***'],
+  [/\b(bearer)\s+(?!\*\*\*)[\w.~+/=-]+/gi, '$1 ***'],
+  // -u user:pass, -uuser:pass, --user=user:pass, -u "user:pass"
+  [/(\s(?:-u|--user)(?:=|\s+)?)(["']?)([^\s:'"]+):([^\s'"]+)/g, '$1$2$3:***'],
+  // --password x, --token=x, --client-secret "x"
+  [
+    new RegExp(String.raw`(--(?:client-secret|api-?key|secret|token|auth-token|access-token|password|passwd)(?:=|\s+))${VALUE}`, 'gi'),
+    '$1***',
+  ],
+  // NAME=value where the name reads as a credential, quoted values too (env assignments, query strings).
+  [
+    new RegExp(String.raw`\b([A-Za-z][\w-]*)=(${VALUE})`, 'g'),
+    (whole, name = '') => (isSecretName(name) ? `${name}=***` : whole),
+  ],
+  // Bare tokens with a known shape.
+  [/\b(sk-(?:ant-)?)[\w-]{16,}/g, '$1***'],
+  [/\b(gh[pousr]_)[A-Za-z0-9]{10,}/g, '$1***'],
+  [/\b(github_pat_)\w{10,}/g, '$1***'],
+  [/\b(xox[abprs]-)[\w-]{8,}/g, '$1***'],
+  [/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA***'],
 ]
+
+// Programs whose -p takes a password: attached (mysql -pX) or as the next word (sshpass -p X, docker login -p X).
+const ATTACHED_P = /\b(?:mysql|mariadb|mysqldump|mysqladmin)\b/
+const SPACED_P = /\bsshpass\b|\b(?:docker|podman|nerdctl|helm)\b(?:\s+\S+)*?\s+login\b/
 
 /** The command as an example: credentials masked, cut to a line. */
 export function exampleOf(command: string): string {
-  const masked = SECRETS.reduce((text, [pattern, mask]) => text.replace(pattern, mask), command).replace(/ {2,}/g, ' ')
+  let masked = SECRETS.reduce((text, [pattern, mask]) => text.replace(pattern, mask as Replacer), command)
+  if (ATTACHED_P.test(masked)) masked = masked.replace(/(\s-p)(?!\s)\S+/g, '$1***')
+  if (SPACED_P.test(masked)) masked = masked.replace(/(\s-p\s+)\S+/g, '$1***')
+  masked = masked.replace(/ {2,}/g, ' ')
   return masked.length > EXAMPLE_CHARS ? `${masked.slice(0, EXAMPLE_CHARS)}…` : masked
 }
 
@@ -108,8 +180,38 @@ export function merge(
     }
   }
 
-  const kept = [...next].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, LIMIT)
-  return ranked(kept)
+  return capped(next)
+}
+
+function capped(list: SandboxLensDenial[]): SandboxLensDenial[] {
+  return ranked([...list].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, LIMIT))
+}
+
+/**
+ * Two tallies as one: each (kind, target) once, the larger count and the later sighting
+ * (with that sighting's example). Used when another session wrote the store in between.
+ */
+export function union(a: readonly SandboxLensDenial[], b: readonly SandboxLensDenial[]): SandboxLensDenial[] {
+  const byKey = new Map<string, SandboxLensDenial>()
+  for (const one of [...a, ...b]) {
+    const key = `${one.kind} ${one.target}`
+    const had = byKey.get(key)
+    if (had === undefined) {
+      byKey.set(key, { ...one })
+      continue
+    }
+    const later = one.lastSeen > had.lastSeen ? one : had
+    byKey.set(key, { ...later, count: Math.max(had.count, one.count), lastSeen: Math.max(had.lastSeen, one.lastSeen) })
+  }
+  return capped([...byKey.values()])
+}
+
+/** True when `stored` lacks an entry of `wrote`, or holds it with a smaller count: another session wrote over it. */
+export function isOverwritten(wrote: readonly SandboxLensDenial[], stored: readonly SandboxLensDenial[]): boolean {
+  return wrote.some(one => {
+    const found = stored.find(other => other.kind === one.kind && other.target === one.target)
+    return found === undefined || found.count < one.count
+  })
 }
 
 /** True when a hit names a (kind, target) the list does not hold yet. */

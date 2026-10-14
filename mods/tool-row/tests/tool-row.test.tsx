@@ -1,8 +1,8 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { GRUVBOX, ICONS, summarize } from '../hooks/summary'
+import { GRUVBOX, ICONS, graphemesFallback, summarize } from '../hooks/summary'
 
 const DECORATED = 'a plugin beneath decorated this row'
 
@@ -101,6 +101,20 @@ describe('summarize', () => {
     expect(summary?.label).toBe(`echo ${'😀'.repeat(54)}…`)
   })
 
+  test('a ZWJ emoji or a flag counts as one character and is never cut inside', () => {
+    // 👩‍💻 is three code points (woman, ZWJ, laptop) and 🇯🇵 two regional indicators: one character each.
+    const coder = summarize({ tool: 'Bash', input: { command: `echo ${'👩‍💻'.repeat(70)}` }, output: {}, isErrored: false })
+    expect(coder?.label).toBe(`echo ${'👩‍💻'.repeat(54)}…`)
+    const flags = summarize({ tool: 'Bash', input: { command: `echo ${'🇯🇵'.repeat(70)}` }, output: {}, isErrored: false })
+    expect(flags?.label).toBe(`echo ${'🇯🇵'.repeat(54)}…`)
+  })
+
+  test('without Intl.Segmenter the fallback keeps the same characters whole', () => {
+    // e + U+0301 (combining acute), 1 + U+FE0F + U+20E3 (keycap), two flags in a row.
+    expect(graphemesFallback('a👩‍💻🇯🇵🇺🇸1️⃣é')).toEqual(['a', '👩‍💻', '🇯🇵', '🇺🇸', '1️⃣', 'é'])
+    expect(graphemesFallback('👍🏽!')).toEqual(['👍🏽', '!'])
+  })
+
   test('Grep, Glob, Agent, WebFetch, WebSearch and MCP tools', () => {
     expect(summarize({ tool: 'Grep', input: { pattern: 'TODO' }, output: {}, isErrored: false })?.label).toBe('TODO')
     expect(summarize({ tool: 'Glob', input: { pattern: '**/*.ts' }, output: {}, isErrored: false })?.icon).toBe(ICONS.search)
@@ -123,8 +137,16 @@ test('the terminal draws a finished Edit as one compact line', async ($, on) => 
   expect(found).toEqual([ICONS.edit, '/repo/src/app.ts', '+2', '−1'])
 })
 
-test('a finished Bash call shows its command alone, no duration', async ($, on) => {
+test('a finished Bash call shows its command alone, no duration, even after the call ran through the plugin', async ($, on) => {
+  // A clock that answers, so a plugin timing the call could: 1.5 s pass while the call runs.
+  const clock = mock.clock(on, { now: 10_000 })
   engineRow(on)
+  on('tool.call', { tool: 'Bash' }, async () => {
+    await clock.advance(1_500)
+    return { result: { stdout: 'ok', stderr: '', interrupted: false } } as never
+  })
+  // The call runs first, as in a session: a plugin that timed it would now draw "· 0.0s" beside it.
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_1', command: 'bun test', description: 'test' })
   const found = await texts($, 'terminal', { tool: 'Bash', input: { command: 'bun test' }, output: { stdout: 'ok' } })
   expect(found).toEqual([ICONS.bash, 'bun test'])
 })

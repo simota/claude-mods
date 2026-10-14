@@ -1,31 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { actionsFor, hasTreeChanged, parseActions, slashCommand } from './actions'
+import { actionsFor, parseActions, slashCommand } from './actions'
 import type { Action } from './actions'
+import { editsFiles } from './edits'
 
 const isShown = atom({ plugin: 'quick-actions', key: 'isShown' } as const, false)
 const hasEdits = atom({ plugin: 'quick-actions', key: 'hasEdits' } as const, false)
+// Whether the prompt box holds a draft: the row steps aside while the person types.
+const isTyping = atom({ plugin: 'quick-actions', key: 'isTyping' } as const, false)
 
 const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'] as const
-
-// Repo hooks and the fsmonitor stay off, and no index lock is taken: a read, nothing more.
-const GIT = ['git', '-c', 'core.fsmonitor=false', '--no-optional-locks'] as const
-const GIT_TIMEOUT_MS = 5000
-
-/** What git says of the working tree, or undefined outside a repository. */
-const treeState = async ($: EngineInterface): Promise<string | undefined> => {
-  try {
-    const cwd = await $.session.cwd()
-    const [status, diff] = await Promise.all([
-      $.process.run([...GIT, 'status', '--porcelain'], { cwd, timeoutMs: GIT_TIMEOUT_MS }),
-      $.process.run([...GIT, 'diff', '--numstat', 'HEAD'], { cwd, timeoutMs: GIT_TIMEOUT_MS }),
-    ])
-    return status.exitCode === 0 ? `${status.stdout}\0${diff.stdout}` : undefined
-  } catch {
-    return undefined // git missing or too slow: Bash edits go uncounted this turn, nothing else
-  }
-}
 
 const hide = ($: EngineInterface) => update($, isShown, () => false)
 
@@ -54,8 +39,6 @@ const runAction = async ($: EngineInterface, action: Action) => {
 
 export const register: Register = (on, options) => {
   const { actions, error } = parseActions(options.actions)
-  // The tree as the main loop's turn started, keyed by turn.
-  const treeAtStart = new Map<string, Promise<string | undefined>>()
 
   on('session.start', ($, e, next) => {
     if (error !== undefined) {
@@ -68,7 +51,6 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined) {
       await hide($)
       await update($, hasEdits, () => false)
-      treeAtStart.set(e.turnId, treeState($))
     }
     return next(e)
   })
@@ -81,35 +63,40 @@ export const register: Register = (on, options) => {
     return ran
   })
 
+  // A file changed through Bash is an edit too, read from the command's shape: no git is run.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (ran.deny === undefined && ran.isError !== true && editsFiles(e.command)) {
+      await update($, hasEdits, () => true)
+    }
+    return ran
+  }).catch(($, e, next) => next(e))
+
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined) {
-      const before = treeAtStart.get(e.turnId)
-      treeAtStart.delete(e.turnId)
-      if (!e.isAborted) {
-        if (!(await read($, hasEdits)) && hasTreeChanged(await before, await treeState($))) {
-          await update($, hasEdits, () => true)
-        }
-        await update($, isShown, () => true)
-      }
+    if (e.agentId === undefined && !e.isAborted) {
+      await update($, isShown, () => true)
     }
     return next(e)
   })
 
-  // Typing a new prompt retires the row before anything is sent, whatever plugin above
-  // answers the submission (one that holds it back never reaches this plugin's hook).
+  // A draft in the box sets the row aside, and clearing the box brings it back, whatever
+  // plugin above answers the submission. Written only when the draft starts or ends.
   on('prompt.edit', async ($, e, next) => {
     const box = await next(e)
-    if (box.text.trim() !== '' && (await read($, isShown))) await hide($)
+    const hasDraft = box.text.trim() !== ''
+    if (hasDraft !== (await read($, isTyping))) await update($, isTyping, () => hasDraft)
     return box
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
     await hide($)
+    // Sending empties the box without an edit the hook above would see.
+    await update($, isTyping, () => false)
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || e.props.isWorking || !(await read($, isShown))) {
+    if (e.props.hasSurvey || e.props.isWorking || !(await read($, isShown)) || (await read($, isTyping))) {
       return next(e)
     }
 

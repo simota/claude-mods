@@ -7,9 +7,49 @@ export function shortName(tool: string): string {
   return tool.replace(BROWSER_TOOL, '')
 }
 
-// Cut by code points, so an emoji's surrogate pair is never split in two.
-function clip(text: string, max: number): string {
-  const flat = Array.from(text.replace(/\s+/g, ' ').trim())
+// Marks that belong to the character before them: combining marks, variation
+// selectors, the keycap mark, skin tones and tag characters.
+const isExtend = (cp: number) =>
+  (cp >= 0x0300 && cp <= 0x036f) ||
+  (cp >= 0x1ab0 && cp <= 0x1aff) ||
+  (cp >= 0x20d0 && cp <= 0x20ff) ||
+  (cp >= 0xfe00 && cp <= 0xfe0f) ||
+  (cp >= 0xfe20 && cp <= 0xfe2f) ||
+  (cp >= 0x1f3fb && cp <= 0x1f3ff) ||
+  (cp >= 0xe0020 && cp <= 0xe007f) ||
+  (cp >= 0xe0100 && cp <= 0xe01ef)
+const isRegional = (cp: number) => cp >= 0x1f1e6 && cp <= 0x1f1ff
+const ZWJ = 0x200d
+
+/**
+ * User-perceived characters where the runtime has no Intl.Segmenter: a ZWJ sequence
+ * (👩‍💻), a flag (two regional indicators), a keycap or a base with its marks stays whole.
+ */
+export function graphemesFallback(text: string): string[] {
+  const out: string[] = []
+  let isAfterJoiner = false
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0
+    const prev = out.at(-1)
+    const prevCp = prev?.codePointAt(0) ?? 0
+    const isFlagHalf = isRegional(cp) && prev !== undefined && Array.from(prev).length === 1 && isRegional(prevCp)
+    if (prev !== undefined && (isAfterJoiner || cp === ZWJ || isExtend(cp) || isFlagHalf)) out[out.length - 1] = prev + ch
+    else out.push(ch)
+    isAfterJoiner = cp === ZWJ
+  }
+  return out
+}
+
+export function graphemes(text: string): string[] {
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), part => part.segment)
+  }
+  return graphemesFallback(text)
+}
+
+// Cut between whole characters, so an emoji (a ZWJ sequence or a flag too) is never split.
+export function clip(text: string, max: number): string {
+  const flat = graphemes(text.replace(/\s+/g, ' ').trim())
   return flat.length > max ? `${flat.slice(0, max - 1).join('')}…` : flat.join('')
 }
 
@@ -54,24 +94,86 @@ export function screenshotOf(result: unknown): { data: string; mime: string } | 
   return found
 }
 
-// The tools whose own answer describes the tab: navigating, and the tab listings. Every other
-// result (read_page, get_page_text, find, javascript) carries page content the page controls.
-const TAB_TOOLS = /^(?:navigate|tabs_context(?:_mcp)?|tabs_create(?:_mcp)?)$/
-// The header a tab tool writes sits at the top of its answer.
-const HEADER_LINES = 6
+// The tools whose own answer describes the tab they act on. Every other result
+// (read_page, get_page_text, find, javascript) carries page content the page controls.
+const SINGLE_TAB_TOOLS = /^(?:navigate|tabs_create(?:_mcp)?)$/
+const TAB_LIST_TOOLS = /^tabs_context(?:_mcp)?$/
+// A single-tab answer's header: its first lines, and only exact `URL:` / `Title:` lines.
+const HEADER_LINES = 3
+const URL_LINE = /^URL: (https?:\/\/\S+)$/
+const TITLE_LINE = /^Title: (.+)$/
+// How a text listing marks the tab being driven (a `*` bullet is a plain list item, not a mark).
+const ACTIVE_MARK = /^\s*[→▶]\s|\((?:active|current|selected)\)|\b(?:active|current|selected)\s*[:=]\s*true\b/i
+const ACTIVE_KEYS = ['active', 'current', 'selected', 'isActive'] as const
+const ITEM_START = /^\s*(?:[-*→▶]|\d+[.)])\s/
+
+type Page = { url?: string; title?: string }
+
+const httpUrl = (value: unknown) => (typeof value === 'string' && /^https?:\/\/\S+$/i.test(value) ? value : undefined)
+
+function headerOf(lines: string[]): Page {
+  const page: Page = {}
+  for (const line of lines) {
+    const url = URL_LINE.exec(line)?.[1]
+    const title = TITLE_LINE.exec(line)?.[1]?.trim()
+    if (url !== undefined && page.url === undefined) page.url = url
+    if (title !== undefined && title !== '' && page.title === undefined) page.title = title
+  }
+  return page
+}
+
+function activeInJson(text: string): Page | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  const tabs: unknown = Array.isArray(parsed) ? parsed : typeof parsed === 'object' && parsed !== null ? (parsed as { tabs?: unknown }).tabs : undefined
+  if (!Array.isArray(tabs)) return {}
+  for (const tab of tabs) {
+    if (typeof tab !== 'object' || tab === null) continue
+    const fields = tab as Record<string, unknown>
+    if (!ACTIVE_KEYS.some(key => fields[key] === true)) continue
+    const url = httpUrl(fields.url)
+    const title = typeof fields.title === 'string' && fields.title.trim() !== '' ? fields.title.trim() : undefined
+    return { ...(url !== undefined ? { url } : {}), ...(title !== undefined ? { title } : {}) }
+  }
+  return {}
+}
+
+// The tab a listing marks as active, or nothing: an unmarked listing names no tab in particular.
+function activeTabOf(text: string): Page {
+  const fromJson = activeInJson(text)
+  if (fromJson !== undefined) return fromJson
+  const lines = text.split('\n')
+  const at = lines.findIndex(line => ACTIVE_MARK.test(line))
+  if (at < 0) return {}
+  // The marked line and the lines under it, up to a blank line or the next listed tab.
+  const block = [lines[at] ?? '']
+  for (const line of lines.slice(at + 1, at + 4)) {
+    if (line.trim() === '' || ITEM_START.test(line)) break
+    block.push(line)
+  }
+  const bare = block.map(line =>
+    line
+      .replace(/^\s*(?:[-*→▶]|\d+[.)])?\s*/, '')
+      .replace(/\s*\((?:active|current|selected)\)\s*$/i, ''),
+  )
+  return headerOf(bare)
+}
 
 /**
- * The page a call leads to: the url the call itself was given, then a `URL:` /
- * `Title:` line at the head of a tab tool's own answer. Never page text: a page's
- * words could otherwise name any address.
+ * The page a call leads to: the url the call itself was given, then an exact `URL:` /
+ * `Title:` line in the first lines of a single-tab tool's own answer, or the tab a
+ * listing marks as active. Never page text: a page's words could otherwise name any address.
  */
-export function pageFrom(tool: string, input: Record<string, unknown>, text: string): { url?: string; title?: string } {
-  const given = typeof input.url === 'string' && /^https?:\/\//i.test(input.url) ? input.url : undefined
-  if (!TAB_TOOLS.test(tool)) return given !== undefined && tool === 'navigate' ? { url: given } : {}
-  const head = text.split('\n').slice(0, HEADER_LINES).join('\n')
-  const url = /^\s*(?:Tab\s+)?URL\s*[:：]\s*(https?:\/\/\S+)/im.exec(head)?.[1] ?? given
-  const title = /^\s*(?:Tab\s+)?Title\s*[:：]\s*(.+)$/im.exec(head)?.[1]?.trim()
-  return { ...(url !== undefined ? { url } : {}), ...(title ? { title } : {}) }
+export function pageFrom(tool: string, input: Record<string, unknown>, text: string): Page {
+  if (TAB_LIST_TOOLS.test(tool)) return activeTabOf(text)
+  if (!SINGLE_TAB_TOOLS.test(tool)) return {}
+  const header = headerOf(text.split('\n').slice(0, HEADER_LINES))
+  const url = header.url ?? (tool === 'navigate' ? httpUrl(input.url) : undefined)
+  return { ...(url !== undefined ? { url } : {}), ...(header.title !== undefined ? { title: header.title } : {}) }
 }
 
 /** The page as it stands after a call: a new address drops the old address's title. */

@@ -78,7 +78,3 @@ export const slashCommand = (prompt: string) => {
   const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(prompt.trim())
   return match === null ? undefined : { command: match[1] ?? '', args: match[2] ?? '' }
 }
-
-/** Whether what git reports changed between two snapshots: a file changed by Bash counts as an edit. */
-export const hasTreeChanged = (before: string | undefined, after: string | undefined) =>
-  before !== undefined && after !== undefined && before !== after

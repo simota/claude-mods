@@ -5,6 +5,7 @@ declare module 'claude-code' {
     'quick-actions': {
       isShown: QuickActionsFlag
       hasEdits: QuickActionsFlag
+      isTyping: QuickActionsFlag
     }
   }
 }

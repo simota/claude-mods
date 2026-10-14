@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { TodoItem } from '../types'
-import { addTodos, extractTodos, formatAll, fromStore, markDone, openFor } from './todos'
+import { addTodos, extractTodos, formatAll, fromStore, isOverwritten, markDone, openFor, unionItems } from './todos'
 
 const PANE = 'todo-agent'
 const STORE_KEY = 'items'
@@ -26,12 +26,20 @@ async function refresh($: EngineInterface, items: readonly TodoItem[]): Promise<
 
 // $.store has no versioned write: every read-modify-write of this module runs one after
 // another, each reading the store afresh, so a reply and a 完了 press never undo each other.
+// Across sessions the write is read back, and when another session wrote over it in between
+// the two lists are merged and written once more. Left over: a write from another session
+// landing inside that second window.
 let queue: Promise<unknown> = Promise.resolve()
 
 function mutate($: EngineInterface, change: (items: TodoItem[]) => TodoItem[]): Promise<TodoItem[]> {
   const run = queue.then(async () => {
-    const items = change(await loadItems($))
+    let items = change(await loadItems($))
     await $.store.set(STORE_KEY, items)
+    const stored = await loadItems($)
+    if (isOverwritten(items, stored)) {
+      items = unionItems(stored, items)
+      await $.store.set(STORE_KEY, items)
+    }
     await refresh($, items)
     return items
   })

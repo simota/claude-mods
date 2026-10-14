@@ -71,6 +71,11 @@ test('helpers format, color and encode', () => {
   expect(compact(999_999)).toBe('1M')
   expect(compact(999_500)).toBe('1M')
   expect(compact(999_499)).toBe('999k')
+  // Half a tenth rounds up: 1.95M is 2M (toFixed read the float 1.95 as 1.9499… and gave 1.9M).
+  expect(compact(1_950_000)).toBe('2M')
+  expect(compact(1_250_000)).toBe('1.3M')
+  expect(compact(1_049_999)).toBe('1M')
+  expect(compact(12_340_000)).toBe('12.3M')
   expect(colorFor(10)).toBe(GREEN)
   expect(colorFor(50)).toBe(YELLOW)
   expect(colorFor(80)).toBe(RED)

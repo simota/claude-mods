@@ -45,7 +45,7 @@ Options are set with `/plugin configure <mod>@simota-mods` in a session, or from
 echo '{"enabled":"true"}' | claude plugin configure <mod>@simota-mods --values-stdin
 ```
 
-Option changes apply after a restart. Bands above the prompt stack: each mod draws its row above what the others draw.
+A change made with `/plugin configure` reloads the mod; one made from a shell applies after a restart. Bands above the prompt stack: each mod draws its row above what the others draw.
 
 ### agent-pane
 
@@ -57,20 +57,20 @@ Option changes apply after a restart. Bands above the prompt stack: each mod dra
 
 Works on its own, no command:
 
-- A turn that edited files without a passing test, lint, typecheck or build afterwards leaves a band: 未検証の変更があります. A later check that succeeds, or 閉じる, clears it; a failing check keeps it. Only the program a command runs counts (`ls build` is not a check).
+- A turn that edited files without a passing test, lint, typecheck or build afterwards leaves a band: 未検証の変更があります. It stays until a check succeeds or 閉じる is pressed. Only the program a command runs counts (`ls build`, `npm ci` are not checks), and only when its exit status is the command's: the check is last, or only `&&` follows it (`npm test | tail` does not count).
 - The second identical failure of the same Bash command tells Claude to stop retrying and diagnose the root cause (again after the command has succeeded in between).
-- Any git command with `--no-verify` (or a prefix of it such as `--no-veri`), and `git commit -n` / `-nm`, is denied. The text of a message (`-m "…"`) or a heredoc never triggers it.
+- Any git command with `--no-verify` (or a prefix of it from `--no-ver`), and `git commit -n` / `-nm`, is denied, also inside subshells, `$(…)`, backticks, `bash -c "…"`, `eval` and wrappers such as `sudo`/`timeout`. The value of an option (`-m "…"`), a comment or a heredoc never triggers it. It is a best-effort guard: git aliases (`git ci -n`) and hooks turned off through config (`core.hooksPath`, `HUSKY=0`) are not detected.
 
 ### sandbox-lens
 
 - `/sandbox-report` lists the sandbox denials seen in Bash output, for this session and all time: denied hosts and paths, counts, last seen, an example command, and which setting would allow each.
 - `/sandbox-report reset` clears the record.
 - Hints only: it never changes sandbox settings. A loopback or private address keeps its port in the hint (`127.0.0.1:3000`), since an entry without a port opens every port.
-- Only the `<sandbox_violations>` block (and real stderr EPERM lines) is read; credentials in the example command are masked. When full (200), the least recently seen entry gives way.
+- Only a `<sandbox_violations>` block that ends the output, and `Operation not permitted` lines a program printed about itself, are read; a block inside a shown file or page is ignored. Credentials in the example command (tokens, passwords, `Authorization`/`Cookie` headers, URL userinfo, keys in env assignments) are masked. Each section shows the top 10; when the record is full (200), the least recently seen entry gives way.
 
 ### battle-report
 
-After each turn: a toast, a native notification and a sound with that turn's tokens (including cache reads and writes), edits, lines changed during this turn (new files included) and tool errors. A turn that ends in an API error or refusal is reported as failed. Calls refused by a hook or permission rule are not counted as errors.
+After each turn: a toast, a native notification and a sound with that turn's tokens (including cache reads and writes), edits, lines changed by its Edit/Write calls (changes made through Bash are not counted; no git command is run) and tool errors. A turn that ends in an API error or refusal is reported as failed with Basso; an interrupted turn is not reported. Calls refused by a hook, a permission rule or the person are not counted as errors.
 
 | Option | Default | |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ After each turn: a toast, a native notification and a sound with that turn's tok
 
 ### skill-hint
 
-Typing a prompt shows up to three matching skills above the prompt (`💡 skill候補: /coding-debug …`), only ones that exist in the session. Nothing is invoked; 閉じる or the next prompt (a slash command included) clears it. A prompt that already names a skill (`/name`, or a hyphenated skill name such as `coding-debug`) gets no hint. Plugin skills (`plugin:name`) are suggested by their full name.
+After a prompt is sent, up to three skills matching it show above the prompt (`💡 skill候補: /coding-debug …`), only ones that exist in the session. Nothing is invoked; 閉じる or the next prompt (a slash command included) clears it. A prompt that already names a skill (`/name` anywhere, or a hyphenated skill name such as `coding-debug`) gets no hint; built-in commands such as `/clear` and path segments such as `src/review/` do not count as naming one. Plugin skills (`plugin:name`) are suggested by their full name.
 
 ### todo-agent
 
@@ -120,7 +120,7 @@ Finished tool calls are drawn as one compact line with a Nerd Font icon: Edit/Wr
 
 After each turn, hotkey buttons above the prompt:
 
-- after edits (Edit/Write, or any working-tree change git sees): `t: テスト実行`, `r: 差分レビュー` (`/code-review`), `m: コミット` (inserts into the prompt, keeping a draft; never commits by itself)
+- after edits (Edit/Write, or a Bash command shaped like a write: a redirect to a file, `sed -i`, `mv`, `cp`, `rm`, `git apply`/`checkout --`/`reset --hard`, a package install, …; no git command is run): `t: テスト実行`, `r: 差分レビュー` (`/code-review`), `m: コミット` (inserts into the prompt, keeping a draft; never commits by itself)
 - always: `c: 続けて`, `x: 閉じる`
 
 Hotkeys work once the band has focus (ctrl+x tab or a click). No digits are used, since a digit typed into an empty prompt would press a band button. The band goes away as soon as you start typing. A failed action shows a toast and keeps the band.
@@ -142,7 +142,7 @@ Cost: one extra request per turn on the session's model, plus the reply text (up
 
 ### context-diet
 
-Off by default. When on, the skill listing is trimmed to what the project kind needs (Swift, Android, Rust, web, Python, Go, detected from the repo root and one level below). Coding, quality, planning and research skills are always kept; red-team, persona and operation skills are dropped; image and design skills are dropped for Rust, Python and Go. A dropped skill named in a prompt is still described for that prompt.
+Off by default. When on, the skill listing is trimmed to what the project kind needs (Swift, Android, Rust, web, Python, Go, detected from the repo root and one level below). Coding, quality, planning and research skills are always kept; red-team, `dynamic-*`, persona and operation skills are dropped; image, design, `ux-scan` and `brand-scan` are dropped for Rust, Python and Go. Only the main loop's listing is reported. A dropped skill named in a prompt is still described for that prompt.
 
 - `/context-diet` shows the project kind, what was kept and dropped in the latest listing, and the tokens saved (estimate). A listing it cannot read reliably goes out unchanged.
 - `/context-diet on|off|reset` overrides the option for this session. Switching rebuilds the listing, so the prompt cache misses once.
@@ -157,7 +157,7 @@ Off by default. When on, the skill listing is trimmed to what the project kind n
 
 - While Claude drives a browser (Claude in Chrome, Claude Browser, or a remote device's browser), a pane shows the latest screenshot, the page title and URL, and the last 8 actions with ✓/✗. The URL comes only from the navigate call or the tab tools' own header, never from page text.
 - `/cam` toggles the pane; in a fullscreen terminal it opens by itself once per session, on the first browser call. Screenshots are decoded only while the pane is open, and written to a private per-session folder that is removed at session end.
-- The desktop app shows the caption and actions only.
+- The desktop app shows the title and URL, a caption and the actions, without the picture.
 
 | Option | Default | |
 | --- | --- | --- |
@@ -173,7 +173,7 @@ Off by default. When on, a typed prompt that looks ambiguous (no done-condition 
 
 Typing another prompt instead sends that one and puts the held text back into the prompt.
 
-Slash commands, short prompts, prompts with pasted images or `@` mentions, and prompts typed while a turn runs are not judged. A timeout or error sends the prompt unchanged; the same text is never held twice. Sending can wait up to `timeoutMs`.
+Slash commands, prompts under 12 or over 1500 characters, prompts with any attachment or an `@` mention, prompts sent by a plugin, and prompts typed while a turn runs are not judged. A timeout or error sends the prompt unchanged; the same text is not held twice (within the last 50 judged). Sending can wait up to `timeoutMs`.
 
 | Option | Default | |
 | --- | --- | --- |

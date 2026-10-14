@@ -121,11 +121,34 @@ describe('profile', () => {
     expect(uncertain.text).toBe(capital)
     expect(uncertain.dropped).toEqual([])
 
-    // A lowercase one passes the shape; the session's own commands tell it apart.
+    // A lowercase one has a skill's shape, so it is read as an entry of its own.
     const lower = ['- persona-define: Design a reviewer.', '- note: continuation bullet', '- coding-debug: Diagnosing.'].join('\n')
-    const known = new Set(['persona-define', 'coding-debug'])
-    expect(filterListing(lower, { kinds: ['rust'], keep: [], drop: [] }, known).text).toBe(lower)
     expect(parseListing(lower).entries.map(entry => entry.name)).toEqual(['persona-define', 'note', 'coding-debug'])
+  })
+
+  test('a listed skill the session cannot run is still an entry: the cut goes ahead', () => {
+    // claude-api, say, is the model's alone and in no command list; the profile keeps it,
+    // and persona-define beside it is dropped as usual.
+    const text = ['- claude-api: Reference for the Claude API.', '- persona-define: Design a reviewer.', '- coding-debug: Diagnosing.'].join('\n')
+    const cut = filterListing(text, { kinds: ['go'], keep: [], drop: [] })
+    expect(cut.isUncertain).toBe(false)
+    expect(cut.kept).toEqual(['claude-api', 'coding-debug'])
+    expect(cut.dropped.map(entry => entry.name)).toEqual(['persona-define'])
+    expect(cut.text).toBe('- claude-api: Reference for the Claude API.\n- coding-debug: Diagnosing.')
+  })
+
+  test('a dropped last entry takes its indented paragraphs with it; unindented text after a blank is the tail', () => {
+    const text = '- coding-debug: x\n- persona-define: Design.\n\n  more persona text\n'
+    const cut = filterListing(text, { kinds: ['go'], keep: [], drop: [] })
+    // Lines: '- coding-debug: x' | '- persona-define: Design.' | '' | '  more persona text' | ''
+    // persona-define owns its line, the blank and the indented paragraph; the final '' is the tail.
+    expect(cut.text).toBe('- coding-debug: x\n')
+    expect(cut.dropped[0]?.text).toBe('- persona-define: Design.\n\n  more persona text')
+
+    const withTail = '- persona-define: Design.\n\n  more persona text\n\nUse them well.'
+    const listing = parseListing(withTail)
+    expect(listing.entries[0]?.lines).toEqual(['- persona-define: Design.', '', '  more persona text'])
+    expect(listing.tail).toEqual(['', 'Use them well.'])
   })
 
   test('leaves text with no entries as it came', () => {
@@ -138,6 +161,15 @@ describe('profile', () => {
     expect(mentioned('use /persona-define here', dropped)).toHaveLength(1)
     expect(mentioned('persona-define で作って', dropped)).toHaveLength(1)
     expect(mentioned('persona-defined later', dropped)).toHaveLength(0)
+  })
+
+  test("a plugin's dropped skill is found by its full name or as /short, never by the bare short word", () => {
+    const dropped = [{ name: 'anthropic-skills:pdf', text: '- anthropic-skills:pdf: x' }]
+    expect(mentioned('/pdf でまとめて', dropped)).toHaveLength(1)
+    expect(mentioned('これを/pdfで', dropped)).toHaveLength(1)
+    expect(mentioned('anthropic-skills:pdf を使って', dropped)).toHaveLength(1)
+    expect(mentioned('pdf を読んで', dropped)).toHaveLength(0)
+    expect(mentioned('/pdfx を使って', dropped)).toHaveLength(0)
   })
 })
 
@@ -215,6 +247,25 @@ describe('context-diet in a session', () => {
     const report = (await $.command.run({ ...RUN, args: '' })).text ?? ''
     expect(report).toContain('残した skill: 2 件 / 省いた skill: 0 件')
     expect(report).toContain('省いた: なし')
+  })
+
+  test("a subagent's listing is filtered but does not replace the main report", { options: { enabled: true } }, async ($, on) => {
+    world(on, ['Cargo.toml'])
+    await $.session.start(START)
+    await listingOf($)
+
+    const sub = await $.prompt.attachment({
+      type: 'skill_listing',
+      text: '- coding-debug: Diagnosing.\n- persona-define: Design a reviewer.',
+      origin: { kind: 'engine' },
+      agentId: 'agent-1',
+    })
+    expect(sub.text).toBe('- coding-debug: Diagnosing.')
+
+    // The main listing (9 entries; for rust 4 kept, 5 dropped) is still the one reported.
+    const report = (await $.command.run({ ...RUN, args: '' })).text ?? ''
+    expect(report).toContain('残した skill: 4 件 / 省いた skill: 5 件')
+    expect(report).toContain('省いた: design-ux, image-prompt, operation-incident, persona-define, dynamic-scan')
   })
 
   test('an uncertain listing is sent whole and reported as such', { options: { enabled: true } }, async ($, on) => {

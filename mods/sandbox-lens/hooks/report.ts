@@ -22,12 +22,23 @@ export function hostOf(target: string): string {
 /** Loopback and private addresses: their allowedDomains entry opens every port unless it names one. */
 export function isLocalHost(host: string): boolean {
   const name = host.toLowerCase()
-  if (name === 'localhost' || name.endsWith('.localhost') || name === '::1' || name === '0.0.0.0') return true
+  if (name === 'localhost' || name.endsWith('.localhost') || name.endsWith('.local')) return true
+  if (name === '::1' || name === '::' || name === '0.0.0.0') return true
+  // An IPv4 address written as IPv6 (`::ffff:127.0.0.1`) is as local as the address it carries.
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(name)
+  if (mapped) return isLocalHost(mapped[1] ?? '')
   if (name.includes(':')) return /^(fe[89ab][0-9a-f]:|f[cd][0-9a-f]{2}:)/.test(name) // link-local, unique-local
   const octets = name.split('.').map(Number)
   if (octets.length !== 4 || octets.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false
   const [a = -1, b = -1] = octets
-  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254)
+  return (
+    a === 127 ||
+    a === 10 ||
+    (a === 192 && b === 168) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127) // shared address space (CGNAT, Tailscale)
+  )
 }
 
 /** The allowedDomains entry to suggest: a local address keeps its port, so the hint never opens every port. */

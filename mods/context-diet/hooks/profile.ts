@@ -77,22 +77,25 @@ const ENTRY = /^- (\S+?):(?:\s|$)/
 // What a skill's name looks like: lowercase words joined by - _ . and scoped by : or /.
 const SKILL_NAME = /^[a-z0-9][a-z0-9_.-]*(?:[:/][a-z0-9][a-z0-9_.-]*)*$/
 
+const isBlank = (line: string) => line.trim() === ''
+const isIndented = (line: string) => /^\s/.test(line)
+
 /**
- * Splits a listing into its lead-in, one entry per `- name: description` line (with every
- * line up to the next entry: wrapped description lines, blank lines between entries), and
- * whatever follows a blank line after the last entry. An entry's name must look like a skill's
- * and, when `known` is given, be one of the session's commands; a line shaped like an entry that
- * fails that (`- Note: …` inside a description) makes the parse uncertain. Nothing is reworded:
- * joining the parts gives the text back.
+ * Splits a listing into its lead-in, one entry per `- name: description` line whose name has a
+ * skill's shape (with every line up to the next entry: wrapped description lines, indented
+ * paragraphs, blank lines between entries), and the text after the last entry that a blank line
+ * sets apart and that is not indented. A column-0 line shaped like an entry whose name is not a
+ * skill's (`- Note: …` inside a description) makes the parse uncertain. Whether the session can
+ * run a name is not asked: a listed skill missing from the command list is an entry like any
+ * other. Nothing is reworded: joining the parts gives the text back.
  */
-export function parseListing(text: string, known?: ReadonlySet<string>): Listing {
+export function parseListing(text: string): Listing {
   const lines = text.split('\n')
   const nameOf = (line: string) => ENTRY.exec(line)?.[1]
-  const isEntry = (name: string) => SKILL_NAME.test(name) && (known === undefined || known.size === 0 || known.has(name))
 
   const starts = lines.flatMap((line, i) => {
     const name = nameOf(line)
-    return name !== undefined && isEntry(name) ? [i] : []
+    return name !== undefined && SKILL_NAME.test(name) ? [i] : []
   })
   const first = starts[0]
   if (first === undefined) return { head: lines, entries: [], tail: [], isCertain: true }
@@ -102,9 +105,14 @@ export function parseListing(text: string, known?: ReadonlySet<string>): Listing
     return { name: nameOf(lines[start] ?? '') ?? '', lines: lines.slice(start, end) }
   })
 
-  // The last entry runs to the first blank line after it; from there on is what follows the list.
+  // The last entry keeps its indented paragraphs, blank lines between them included. The tail
+  // starts at the first blank line after which the next text is not indented, or nothing follows.
   const lastEntry = entries.at(-1)!
-  const blank = lastEntry.lines.findIndex((line, i) => i > 0 && line.trim() === '')
+  const blank = lastEntry.lines.findIndex((line, i) => {
+    if (i === 0 || !isBlank(line)) return false
+    const after = lastEntry.lines.slice(i + 1).find(next => !isBlank(next))
+    return after === undefined || !isIndented(after)
+  })
   const tail = blank === -1 ? [] : lastEntry.lines.splice(blank)
 
   const head = lines.slice(0, first)
@@ -120,8 +128,8 @@ export type Filtered = { text: string; kept: string[]; dropped: ContextDietEntry
  * The listing with the dropped entries left out. A listing with no entries, or one whose
  * shape is uncertain, comes back as given: the full listing is the safe answer.
  */
-export function filterListing(text: string, rules: Rules, known?: ReadonlySet<string>): Filtered {
-  const listing = parseListing(text, known)
+export function filterListing(text: string, rules: Rules): Filtered {
+  const listing = parseListing(text)
   if (listing.entries.length === 0) return { text, kept: [], dropped: [], isUncertain: false }
   if (!listing.isCertain) return { text, kept: listing.entries.map(entry => entry.name), dropped: [], isUncertain: true }
 
@@ -139,9 +147,16 @@ export function filterListing(text: string, rules: Rules, known?: ReadonlySet<st
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/** The dropped skills a prompt names, as `/name` or as a word of its own. */
+/**
+ * The dropped skills a prompt names: as `/name` or as a word of its own, and a plugin's skill
+ * (`plugin:short`) also as `/short`, the way it is typed. A bare short word is not a mention.
+ */
 export function mentioned(prompt: string, dropped: readonly ContextDietEntry[]): ContextDietEntry[] {
-  return dropped.filter(entry => new RegExp(`(^|[^\\w-])/?${escape(entry.name)}(?![\\w-])`).test(prompt))
+  const said = (pattern: string) => new RegExp(`(^|[^\\w-])${pattern}(?![\\w-])`).test(prompt)
+  return dropped.filter(entry => {
+    const short = entry.name.includes(':') ? entry.name.slice(entry.name.lastIndexOf(':') + 1) : undefined
+    return said(`/?${escape(entry.name)}`) || (short !== undefined && short !== '' && said(`/${escape(short)}`))
+  })
 }
 
 /** The tokens a cut of `chars` characters saves, by the usual four characters a token. */

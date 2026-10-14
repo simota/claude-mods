@@ -3,13 +3,23 @@ import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { TodoItem } from '../types'
-import { addTodos, extractTodos, MAX_ITEMS, MAX_STORE_CHARS, MAX_TEXT, STORED_TEXT_NOTE } from '../hooks/todos'
+import {
+  addTodos,
+  extractTodos,
+  isOverwritten,
+  MAX_ITEMS,
+  MAX_STORE_CHARS,
+  MAX_TEXT,
+  STORED_TEXT_NOTE,
+  unclosedSpan,
+  unionItems,
+} from '../hooks/todos'
 
 const PROJECT = '/repo/app'
 const SURFACES = ['terminal', 'desktop'] as const
 
-function world(on: On, entries: Record<string, unknown> = {}): void {
-  mock.store(on, entries)
+function world(on: On, entries: Record<string, unknown> = {}, { store = true } = {}): void {
+  if (store) mock.store(on, entries)
   mock.clock(on, { now: 1_000 })
   on('session.repo', () => ({ value: { root: PROJECT, remote: null, internal: false, name: null } }))
   on('session.cwd', () => ({ value: `${PROJECT}/src` }))
@@ -79,6 +89,47 @@ describe('extractTodos', () => {
     expect(action.endsWith('…')).toBe(true)
   })
 
+  test('a cut that would split a code span drops the span instead', () => {
+    // 290 x, a space, then a 52-character span: the cut at 299 lands inside it.
+    const [action = ''] = extractTodos(`#TODO(agent): ${'x'.repeat(290)} \`${'y'.repeat(50)}\``)
+    expect(action).toBe(`${'x'.repeat(290)}…`)
+  })
+
+  test('a double-backtick span holding a single backtick is kept whole', () => {
+    expect(extractTodos('#TODO(agent): use ``code with ` tick``')).toEqual(['use ``code with ` tick``'])
+    expect(unclosedSpan('use ``code with ` tick``')).toBe(-1)
+    expect(unclosedSpan('drop the flag`')).toBe(13)
+  })
+
+  test('skips marker lines inside fenced code blocks', () => {
+    const text = [
+      '#TODO(agent): before the fence',
+      '```markdown',
+      '#TODO(agent): an example in a fence',
+      '```',
+      '~~~~',
+      '#TODO(agent): in a tilde fence',
+      '```',
+      '#TODO(agent): still inside, a backtick line does not close tildes',
+      '~~~~',
+      '#TODO(agent): after the fences',
+    ].join('\n')
+    expect(extractTodos(text)).toEqual(['before the fence', 'after the fences'])
+  })
+
+  test('union keeps both lists, done winning, and spots a list written over', () => {
+    const mine = [item('a', true, 1), item('b', false, 2)]
+    const theirs = [item('a', false, 1), item('c', false, 3)]
+    const both = unionItems(theirs, mine)
+    expect(both.map(one => [one.id, one.isDone])).toEqual([
+      ['a', true],
+      ['c', false],
+      ['b', false],
+    ])
+    expect(isOverwritten(mine, theirs)).toBe(true)
+    expect(isOverwritten(mine, both)).toBe(false)
+  })
+
   test('a done item does not block the same TODO coming back', () => {
     const done = { ...item('old', true, 1), text: 'bump deps' }
     const again = { ...item('new', false, 2), text: 'bump deps' }
@@ -132,6 +183,24 @@ describe('todo-agent', () => {
     const lines = ((await todos($, 'all')).text ?? '').split('\n')
     expect(lines).toContain(`${PROJECT} (4)`)
     for (const text of ['one', 'two', 'three', 'first']) expect(lines).toContain(`  - ${text}`)
+  })
+
+  test("another session's write in between is merged, not lost", async ($, on) => {
+    world(on, {}, { store: false })
+    // Right after this module's first write, another session lands its own list over it.
+    const theirs = [{ ...item('theirs', false, 5), text: 'from the other session' }]
+    let value: unknown = theirs
+    let writes = 0
+    on('store.get', () => ({ value }))
+    on('store.set', ($, e) => {
+      writes += 1
+      value = writes === 1 ? theirs : e.value
+      return { value: undefined }
+    })
+    await $.session.append(reply('u1', '#TODO(agent): mine'))
+
+    expect(writes).toBe(2)
+    expect((value as TodoItem[]).map(one => one.text).sort()).toEqual(['from the other session', 'mine'])
   })
 
   test('leaves the row as it came', async ($, on) => {

@@ -9,6 +9,8 @@ export type BrowserCamFrame = {
   toolUseId: string
   /** The order the call finished in: a frame never replaces a later one. */
   seq: number
+  /** The session whose call took it: another session never shows it. */
+  sessionId: string
   /** Absent when the screenshot could not be made drawable; `note` says why. */
   source?: BrowserCamSource
   width?: number
@@ -41,6 +43,10 @@ declare module 'claude-code' {
       page: BrowserCamPage
       /** The pane has opened by itself once this session: never again, reload or not. */
       hasAutoOpened: boolean
+      /** The last call order handed out: a reload keeps counting from here, so newest-wins holds. */
+      seq: number
+      /** Sessions that have ended (newest last): work queued for one of them writes nothing. */
+      endedSessions: string[]
     }
   }
 }

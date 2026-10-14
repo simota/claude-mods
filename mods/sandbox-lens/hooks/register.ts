@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import { fromStore, hasNew, merge, parseDenials } from './parse'
+import { fromStore, hasNew, isOverwritten, merge, parseDenials, union } from './parse'
 import type { Hit } from './parse'
 import { formatReport } from './report'
 
@@ -10,7 +10,7 @@ const STATUS_MS = 8000
 
 const denials = atom({ plugin: 'sandbox-lens', key: 'denials' } as const, [])
 
-// $.store has no versioned write: this module's writes run one after another, each
+// $.store has no versioned write. Within this module, writes run one after another, each
 // reading the store afresh, so two Bash calls at once both land and a reset is not undone.
 let queue: Promise<unknown> = Promise.resolve()
 
@@ -20,9 +20,18 @@ function serially<T>(work: () => Promise<T>): Promise<T> {
   return run
 }
 
+/**
+ * Writes the merged tally, then reads it back: when another session wrote over it in
+ * between, the two are merged and written once more. Left over: a write from another
+ * session landing inside that second window, and two sessions counting the same denial
+ * at once, which reads as one sighting rather than two.
+ */
 function record($: EngineInterface, hits: readonly Hit[], command: string, now: number): Promise<void> {
   return serially(async () => {
-    await $.store.set(STORE_KEY, merge(fromStore(await $.store.get(STORE_KEY)), hits, command, now))
+    const wrote = merge(fromStore(await $.store.get(STORE_KEY)), hits, command, now)
+    await $.store.set(STORE_KEY, wrote)
+    const stored = fromStore(await $.store.get(STORE_KEY))
+    if (isOverwritten(wrote, stored)) await $.store.set(STORE_KEY, union(stored, wrote))
   })
 }
 
@@ -48,7 +57,7 @@ export const register: Register = on => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.text === undefined) return ran
 
-    const hits = parseDenials(ran.text, e.command)
+    const hits = parseDenials(ran.text, e.command, await $.session.cwd())
     if (hits.length === 0) return ran
 
     const now = await $.clock.now()

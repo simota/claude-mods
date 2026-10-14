@@ -7,22 +7,117 @@ export const MAX_STORE_CHARS = 1_000_000
 
 // The marker opens its line, after at most a quote and a list bullet: a mention inside
 // a sentence, a table cell or inline code (`#TODO(agent): …`) is talk about the format, not a TODO.
-const MARKER = /^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|\d+[.)])[ \t]+)?#TODO\(agent\):[ \t]*(.+?)[ \t]*$/gm
+const MARKER = /^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|\d+[.)])[ \t]+)?#TODO\(agent\):[ \t]*(.+?)[ \t]*$/
+const FENCE = /^[ \t]*(`{3,}|~{3,})/
 const PLACEHOLDERS = new Set(['<action>', '…', '...'])
 
-const backticks = (text: string) => text.split('`').length - 1
+/**
+ * Where the first code span with no closing run of the same length opens, or -1:
+ * `` ``a ` b`` `` is one closed span; a lone trailing backtick opens one that never closes.
+ */
+export function unclosedSpan(text: string): number {
+  const runAt = (at: number) => {
+    let end = at
+    while (text[end] === '`') end += 1
+    return end
+  }
+  let i = 0
+  while (i < text.length) {
+    if (text[i] !== '`') {
+      i += 1
+      continue
+    }
+    const end = runAt(i)
+    let k = end
+    let closed = -1
+    while (k < text.length) {
+      if (text[k] !== '`') {
+        k += 1
+        continue
+      }
+      const close = runAt(k)
+      if (close - k === end - i) {
+        closed = close
+        break
+      }
+      k = close
+    }
+    if (closed === -1) return i
+    i = closed
+  }
+  return -1
+}
+
+/** Cut to MAX_TEXT; a code span the cut would split is dropped whole rather than left open. */
+function capped(action: string): string {
+  if (action.length <= MAX_TEXT) return action
+  let cut = action.slice(0, MAX_TEXT - 1)
+  const open = unclosedSpan(cut)
+  if (open !== -1) cut = cut.slice(0, open).trimEnd()
+  return `${cut}…`
+}
+
+/** The marker lines of a reply, outside fenced code blocks (``` or ~~~): an example is not a TODO. */
+function markerLines(text: string): string[] {
+  const lines: string[] = []
+  let fence: string | undefined
+  for (const line of text.split(/\r?\n/)) {
+    const mark = FENCE.exec(line)?.[1]
+    if (fence !== undefined) {
+      if (mark !== undefined && mark[0] === fence[0] && mark.length >= fence.length && line.trim() === mark) {
+        fence = undefined
+      }
+      continue
+    }
+    if (mark !== undefined) {
+      fence = mark
+      continue
+    }
+    lines.push(line)
+  }
+  return lines
+}
 
 export function extractTodos(text: string): string[] {
   const found: string[] = []
-  for (const match of text.matchAll(MARKER)) {
+  for (const line of markerLines(text)) {
+    const match = MARKER.exec(line)
+    if (!match) continue
     let action = (match[1] ?? '').trim()
-    // A closing backtick left over from inline code around the whole line; a balanced pair is the action's own.
-    while (action.endsWith('`') && backticks(action) % 2 === 1) action = action.slice(0, -1).trimEnd()
+    // A backtick run left over from inline code around the whole line opens a span that never
+    // closes; a span the action closes itself (`foo`, ``a ` b``) is its own and stays.
+    while (action.endsWith('`')) {
+      let start = action.length
+      while (start > 0 && action[start - 1] === '`') start -= 1
+      if (unclosedSpan(action) !== start) break
+      action = action.slice(0, start).trimEnd()
+    }
     const bare = action.replace(/^`+|`+$/g, '').trim()
     if (bare === '' || PLACEHOLDERS.has(bare)) continue
-    found.push(action.length > MAX_TEXT ? `${action.slice(0, MAX_TEXT - 1)}…` : action)
+    found.push(capped(action))
   }
   return found
+}
+
+/**
+ * Two stored lists as one: each id once, done when either says so. Used when another
+ * session wrote the store between this module's read and write.
+ */
+export function unionItems(a: readonly TodoItem[], b: readonly TodoItem[]): TodoItem[] {
+  const byId = new Map<string, TodoItem>()
+  for (const item of [...a, ...b]) {
+    const had = byId.get(item.id)
+    byId.set(item.id, had === undefined ? { ...item } : { ...had, isDone: had.isDone || item.isDone })
+  }
+  return trim([...byId.values()])
+}
+
+/** True when `stored` lacks an item of `wrote`, or has undone one `wrote` marked done. */
+export function isOverwritten(wrote: readonly TodoItem[], stored: readonly TodoItem[]): boolean {
+  return wrote.some(item => {
+    const found = stored.find(other => other.id === item.id)
+    return found === undefined || (item.isDone && !found.isDone)
+  })
 }
 
 /** Adds items not already open in their project; a done one may come back as new. */

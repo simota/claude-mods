@@ -83,6 +83,53 @@ describe('suggest', () => {
     expect(suggest('バグを直して', new Set(['myplug:coding-debug']))).toEqual(['myplug:coding-debug'])
     expect(suggest('バグを直して', new Set(['myplug:coding-debug', 'coding-debug']))).toEqual(['coding-debug'])
   })
+
+  test('/name counts after any non-word character, not only a space', () => {
+    expect(suggest('これを/coding-debugでバグ調査', ALL)).toEqual([])
+    expect(suggest('「/coding-debug」でバグ', ALL)).toEqual([])
+    expect(suggest('`/coding-debug` でバグ', ALL)).toEqual([])
+    expect(suggest('(/coding-debug) バグ', ALL)).toEqual([])
+    expect(suggest('use /coding-debug. the bug is odd', ALL)).toEqual([])
+  })
+
+  test("Claude Code's own commands and path segments name no skill", () => {
+    const withBuiltins = [
+      ...[...ALL].map(name => ({ name, source: 'user' })),
+      { name: 'clear', source: 'builtin' },
+      { name: 'init', source: 'builtin' },
+    ]
+    expect(suggest('/clear したらバグが再発', withBuiltins)).toEqual(['coding-debug'])
+    expect(suggest('/init のエラーを直して', withBuiltins)).toEqual(['coding-debug'])
+    // Known as Claude Code's own by name even where the source is not given.
+    expect(suggest('/review の後にバグが出た', new Set([...ALL, 'review']))).toEqual(['coding-debug'])
+    // A path that starts like a command is a file: neither a named skill nor a review request.
+    expect(suggest('パス /review/foo.ts のバグ', new Set([...ALL, 'review']))).toEqual(['coding-debug'])
+    expect(suggest('src/review/foo.ts のバグ', ALL)).toEqual(['coding-debug'])
+  })
+
+  test('debug, performance and review keywords need the intent', () => {
+    expect(suggest('気分が落ちる', ALL)).toEqual([])
+    expect(suggest('I failed to understand the spec', ALL)).toEqual([])
+    expect(suggest('use the fail fast pattern', ALL)).toEqual([])
+    expect(suggest('アプリが落ちる', ALL)).toEqual(['coding-debug'])
+    expect(suggest('failing tests on main', ALL)).toEqual(['coding-debug', 'coding-test'])
+    expect(suggest('it fails to compile', ALL)).toEqual(['coding-debug'])
+    expect(suggest('open the debugger', ALL)).toEqual(['coding-debug'])
+    expect(suggest('不具合を見て', ALL)).toEqual(['coding-debug'])
+
+    expect(suggest('the test is slow', ALL)).toEqual(['coding-test'])
+    expect(suggest('the page is slow', ALL)).toEqual(['performance-scan'])
+    expect(suggest('slow queries on the dashboard', ALL)).toEqual(['performance-scan'])
+    expect(suggest('画面が重い', ALL)).toEqual(['performance-scan'])
+
+    expect(suggest('reviewing the auth change', ALL)).toEqual(['coding-review', 'quality-review'])
+  })
+
+  test("a plugin's skill named as /short counts as named", () => {
+    const withPlugin = new Set([...ALL, 'anthropic-skills:pdf'])
+    expect(suggest('/pdf のバグ', withPlugin)).toEqual([])
+    expect(suggest('pdf のバグ', withPlugin)).toEqual(['coding-debug'])
+  })
 })
 
 function bottoms(on: On, names: readonly string[]) {

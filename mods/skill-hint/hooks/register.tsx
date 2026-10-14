@@ -14,7 +14,8 @@ export const register: Register = on => {
       return next(e)
     }
 
-    const available = (await $.command.list()).map(command => command.name)
+    // Each command keeps its source, so a built-in's name never reads as a chosen skill.
+    const available = (await $.command.list()).map(command => ({ name: command.name, source: command.source }))
     await update($, hints, () => suggest(e.text, available))
 
     return next(e)

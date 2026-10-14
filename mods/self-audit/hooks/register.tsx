@@ -85,7 +85,9 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    await forget($)
+    // A slash command (`/self-audit` itself) or a hidden prompt is no new request: the
+    // result of the last reply still stands. A command that asks the model clears it at turn.start.
+    if (e.command === undefined && !e.isMeta) await forget($)
     return next(e)
   }).catch(($, e, next) => next(e)) // Hiding a band is never worth holding a prompt back.
 

@@ -90,6 +90,30 @@ async function tick($: EngineInterface): Promise<void> {
   }
 }
 
+/**
+ * Pairs runs whose call was lost with the roster's still-working agents of the same description
+ * and type: the newest run first, each agent at most once, never one another run already follows.
+ * The roster lists in spawn order, so the last unclaimed match is the newest agent.
+ */
+async function adoptFromRoster(
+  $: EngineInterface,
+  list: readonly AgentRun[],
+  orphans: readonly AgentRun[],
+): Promise<Map<string, string>> {
+  const agents = await $.agent.list().catch(() => [])
+  const claimed = new Set(list.flatMap(run => (run.agentId !== undefined ? [run.agentId] : [])))
+  const matched = new Map<string, string>()
+  for (const run of [...orphans].sort((a, b) => b.startedAt - a.startedAt)) {
+    const agent = [...agents]
+      .reverse()
+      .find(one => !claimed.has(one.id) && !ENDED.has(one.status) && one.description === run.description && one.type === run.type)
+    if (agent === undefined) continue
+    claimed.add(agent.id)
+    matched.set(run.id, agent.id)
+  }
+  return matched
+}
+
 function ensureTicker($: EngineInterface): void {
   if (ticker !== undefined) return
   ticker = $.clock.every(TICK_MS, () => void tick($))
@@ -103,16 +127,23 @@ export const register: Register = on => {
       description: 'サブエージェントの実行状況をペインに表示する',
     })
 
-    // After a reload: a foreground run's waiting call is gone, so its end cannot be learnt;
-    // a background run is followed again from the roster.
+    // After a reload a foreground run's waiting call is gone. One the roster still lists as
+    // working (same description and type) is followed from the roster like a background run;
+    // only one it no longer lists has an end that cannot be learnt.
     const at = await $.clock.now()
     const list = await read($, runs)
-    if (list.some(run => run.status === 'running' && run.agentId === undefined)) {
+    const orphans = list.filter(run => run.status === 'running' && run.agentId === undefined)
+    if (orphans.length > 0) {
+      const matched = await adoptFromRoster($, list, orphans)
       await update($, runs, all =>
-        all.map(run => (run.status === 'running' && run.agentId === undefined ? { ...run, status: 'unknown', endedAt: at } : run)),
+        all.map(run => {
+          if (run.status !== 'running' || run.agentId !== undefined) return run
+          const agentId = matched.get(run.id)
+          return agentId !== undefined ? { ...run, agentId, misses: 0 } : { ...run, status: 'unknown', endedAt: at }
+        }),
       )
     }
-    if (list.some(run => run.status === 'running' && run.agentId !== undefined)) ensureTicker($)
+    if ((await read($, runs)).some(run => run.status === 'running' && run.agentId !== undefined)) ensureTicker($)
     await refreshStatus($)
 
     return next(e)
@@ -150,12 +181,17 @@ export const register: Register = on => {
     } else {
       // A background launch (the model's, or a plugin's spawn record) ends later and is followed;
       // a teammate or a remote launch is not followed, so it is drawn as launched, never as done.
-      const record = ran.result
-      const agentId = !('status' in record) || record.status === 'async_launched' ? record.agentId : undefined
-      const status = 'status' in record ? record.status : undefined
+      // Another plugin may answer the call with something other than the tool's record.
+      const record: unknown = ran.result
+      const isRecord = typeof record === 'object' && record !== null
+      const status = isRecord && 'status' in record ? (record as { status?: unknown }).status : undefined
+      const named = isRecord && 'agentId' in record ? (record as { agentId?: unknown }).agentId : undefined
+      const agentId =
+        isRecord && (status === undefined || status === 'async_launched') && typeof named === 'string' ? named : undefined
       if (agentId !== undefined) {
         await update($, runs, list => list.map(one => (one.id === run.id ? { ...one, agentId } : one)))
-      } else if (status === 'completed') {
+      } else if (status === 'completed' || !isRecord) {
+        // A plain answer from another plugin is the call's whole result: it is done.
         await update($, runs, list => finish(list, run.id, 'completed', endedAt))
       } else {
         await update($, runs, list => finish(list, run.id, 'detached', endedAt))

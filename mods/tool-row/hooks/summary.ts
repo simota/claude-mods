@@ -80,10 +80,50 @@ function diffStats(counts: { added: number; removed: number }): Stat[] {
   ]
 }
 
-// Cut by code points, so an emoji's surrogate pair is never split in two.
+// Marks that belong to the character before them: combining marks, variation
+// selectors, the keycap mark, skin tones and tag characters.
+const isExtend = (cp: number) =>
+  (cp >= 0x0300 && cp <= 0x036f) ||
+  (cp >= 0x1ab0 && cp <= 0x1aff) ||
+  (cp >= 0x20d0 && cp <= 0x20ff) ||
+  (cp >= 0xfe00 && cp <= 0xfe0f) ||
+  (cp >= 0xfe20 && cp <= 0xfe2f) ||
+  (cp >= 0x1f3fb && cp <= 0x1f3ff) ||
+  (cp >= 0xe0020 && cp <= 0xe007f) ||
+  (cp >= 0xe0100 && cp <= 0xe01ef)
+const isRegional = (cp: number) => cp >= 0x1f1e6 && cp <= 0x1f1ff
+const ZWJ = 0x200d
+
+/**
+ * User-perceived characters where the runtime has no Intl.Segmenter: a ZWJ sequence
+ * (👩‍💻), a flag (two regional indicators), a keycap or a base with its marks stays whole.
+ */
+export function graphemesFallback(text: string): string[] {
+  const out: string[] = []
+  let isAfterJoiner = false
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0
+    const prev = out.at(-1)
+    const prevCp = prev?.codePointAt(0) ?? 0
+    const isFlagHalf = isRegional(cp) && prev !== undefined && Array.from(prev).length === 1 && isRegional(prevCp)
+    if (prev !== undefined && (isAfterJoiner || cp === ZWJ || isExtend(cp) || isFlagHalf)) out[out.length - 1] = prev + ch
+    else out.push(ch)
+    isAfterJoiner = cp === ZWJ
+  }
+  return out
+}
+
+export function graphemes(text: string): string[] {
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), part => part.segment)
+  }
+  return graphemesFallback(text)
+}
+
+// Cut between whole characters, so an emoji (a ZWJ sequence or a flag too) is never split.
 function firstLine(command: string): string {
   const [head = '', ...rest] = command.trim().split('\n')
-  const line = Array.from(rest.length > 0 ? `${head} …` : head)
+  const line = graphemes(rest.length > 0 ? `${head} …` : head)
   return line.length > COMMAND_CHARS ? `${line.slice(0, COMMAND_CHARS - 1).join('')}…` : line.join('')
 }
 

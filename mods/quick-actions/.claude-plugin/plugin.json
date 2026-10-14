@@ -1,6 +1,6 @@
 {
   "name": "quick-actions",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",
@@ -8,7 +8,7 @@
     "actions": {
       "type": "string",
       "title": "Actions",
-      "description": "JSON array of {key,label,prompt,mode:'submit'|'fill',when:'edits'|'always'} replacing the defaults; a prompt starting with / runs that slash command; key is one digit or lowercase letter other than x",
+      "description": "JSON array of {key,label,prompt,mode:'submit'|'fill',when:'edits'|'always'} replacing the defaults; a prompt starting with / runs that slash command; key is one lowercase letter other than x, s, e or q (no digits: a digit typed into an empty prompt would press it)",
       "default": ""
     }
   }

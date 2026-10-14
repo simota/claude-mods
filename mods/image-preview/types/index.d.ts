@@ -16,6 +16,9 @@ export type ImageItem = {
   toolUseId: string
 }
 
+/** A PNG this plugin converted into the session's cache, and the rows that draw it. */
+export type ConvertedFile = { png: string; toolUseIds: string[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'image-preview': {
@@ -25,6 +28,8 @@ declare module 'claude-code' {
       cursor: number
       /** The images each ToolUse row draws, keyed by tool_use_id. */
       byTool: StateFamily<ImageItem[]>
+      /** Converted copies in the session's cache, oldest first: what a prune may remove, and whose rows to tell. */
+      converted: ConvertedFile[]
     }
   }
 }

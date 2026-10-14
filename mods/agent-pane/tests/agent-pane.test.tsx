@@ -222,6 +222,44 @@ test('session.start ends a foreground run whose waiting call a reload lost', asy
   expect(row).toContain('結果不明')
 })
 
+test('after a reload, a foreground run the roster still lists as working stays running and is followed', async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  // The roster holds a finished agent of the same description and the live one, in spawn order.
+  const agents: AgentInfo[] = [
+    { id: 'a-old', description: 'orphan', type: 'Explore', status: 'completed' },
+    { id: 'a-live', description: 'orphan', type: 'Explore', status: 'running' },
+  ]
+  const statuses = beneath(on, agents)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('tool.call', { tool: 'Agent' }, () => new Promise<never>(() => {}))
+
+  $.tool.call({ tool: 'Agent', description: 'orphan', prompt: 'p', subagent_type: 'Explore' }).catch(() => {})
+  await clock.advance(0)
+
+  await $.session.start(START)
+  expect(statuses.at(-1)).toBe('agents: 1 running')
+  expect((await paneTexts($, 'terminal')).find(text => text.includes('orphan')) ?? '').not.toContain('結果不明')
+
+  // The roster says it ended: the next tick draws it completed, from a-live, not a-old.
+  agents[1] = { ...agents[1]!, status: 'completed' }
+  await clock.advance(1_000)
+  expect(statuses.at(-1)).toBeUndefined()
+  const row = (await paneTexts($, 'terminal')).find(text => text.includes('orphan')) ?? ''
+  expect(row).toContain('✓')
+})
+
+test('a plain answer from another plugin is drawn as done, without throwing', async ($, on) => {
+  mock.clock(on, { now: 0 })
+  beneath(on, [])
+  on('tool.call', { tool: 'Agent' }, () => ({ result: 'answered elsewhere' as never }))
+
+  const ran = await $.tool.call({ tool: 'Agent', description: 'plain', prompt: 'p' })
+  expect(ran.result as unknown).toBe('answered elsewhere')
+  const row = (await paneTexts($, 'terminal')).find(text => text.includes('plain')) ?? ''
+  expect(row).toContain('✓')
+})
+
 test('the pane opens unasked once, and only from a fullscreen terminal', async ($, on) => {
   mock.clock(on, { now: 0 })
   beneath(on, [])
