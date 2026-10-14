@@ -122,10 +122,15 @@ export const register: Register = on => {
 
     const { Box, Button, Text } = $.ui.resolve(e)
 
+    // Stack this row above what the plugins beneath and the engine draw, rather than in its place.
+    const below = await next(e)
     return (
-      <Box>
-        <Text color="yellow">{BAND_TEXT} </Text>
-        <Button key="dismiss" label="閉じる" role="dismiss" onPress={() => update($, isFlagged, () => false)} />
+      <Box flexDirection="column">
+        <Box>
+          <Text color="yellow">{BAND_TEXT} </Text>
+          <Button key="dismiss" label="閉じる" role="dismiss" onPress={() => update($, isFlagged, () => false)} />
+        </Box>
+        {below}
       </Box>
     )
   })

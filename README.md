@@ -10,6 +10,10 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `battle-report` | RPG-style battle report after each turn: tokens, edits, lines changed and tool errors, as a toast, a notification and a sound |
 | `skill-hint` | Suggests up to three matching skills above the prompt from what was typed; never invokes them. |
 | `todo-agent` | Collects #TODO(agent) follow-ups from Claude's replies into a per-project list with a /todos pane. |
+| `context-meter` | Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost |
+| `tool-row` | Redraws finished tool-call rows in the terminal as one compact line with a Nerd Font icon, Gruvbox colors and a short stat |
+| `image-preview` | Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane |
+| `quick-actions` | Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue |
 
 ## Install
 

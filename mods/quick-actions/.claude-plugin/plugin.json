@@ -1,0 +1,15 @@
+{
+  "name": "quick-actions",
+  "version": "0.1.0",
+  "description": "Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "actions": {
+      "type": "string",
+      "title": "Actions",
+      "description": "JSON array of {key,label,prompt,mode:'submit'|'fill',when:'edits'|'always'} replacing the defaults; a prompt starting with / runs that slash command; key is one digit or lowercase letter other than x",
+      "default": ""
+    }
+  }
+}

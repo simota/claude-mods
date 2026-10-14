@@ -1,0 +1,21 @@
+{
+  "name": "image-preview",
+  "version": "0.1.0",
+  "description": "Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "inline": {
+      "type": "boolean",
+      "title": "Inline thumbnails",
+      "description": "Draw a thumbnail under the tool call that wrote or read the image (terminal only)",
+      "default": true
+    },
+    "maxRows": {
+      "type": "number",
+      "title": "Thumbnail height",
+      "description": "Terminal rows an inline thumbnail may take, 1 to 60",
+      "default": 12
+    }
+  }
+}

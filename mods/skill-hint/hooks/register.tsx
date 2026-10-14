@@ -21,12 +21,17 @@ export const register: Register = on => {
 
     const { Box, Button, Text } = $.ui.resolve(e)
 
+    // Stack this row above what the plugins beneath and the engine draw, rather than in its place.
+    const below = await next(e)
     return (
-      <Box>
-        <Text dimColor>
-          💡 skill候補: {shown.map(name => `/${name}`).join(' ')}{' '}
-        </Text>
-        <Button key="dismiss" label="閉じる" onPress={() => update($, hints, () => [])} />
+      <Box flexDirection="column">
+        <Box>
+          <Text dimColor>
+            💡 skill候補: {shown.map(name => `/${name}`).join(' ')}{' '}
+          </Text>
+          <Button key="dismiss" label="閉じる" onPress={() => update($, hints, () => [])} />
+        </Box>
+        {below}
       </Box>
     )
   })

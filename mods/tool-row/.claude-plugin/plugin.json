@@ -1,0 +1,15 @@
+{
+  "name": "tool-row",
+  "version": "0.1.0",
+  "description": "Redraws finished tool-call rows in the terminal as one compact line with a Nerd Font icon, Gruvbox colors and a short stat",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "compact": {
+      "type": "boolean",
+      "title": "Compact rows",
+      "description": "Draw finished tool calls as one compact line; off leaves every row as Claude Code draws it",
+      "default": true
+    }
+  }
+}

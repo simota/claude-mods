@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions",
   "owner": {
     "name": "simota"
   },
@@ -34,6 +34,26 @@
       "name": "todo-agent",
       "source": "./mods/todo-agent",
       "description": "Collects #TODO(agent) follow-ups from Claude's replies into a per-project list with a /todos pane."
+    },
+    {
+      "name": "context-meter",
+      "source": "./mods/context-meter",
+      "description": "Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost"
+    },
+    {
+      "name": "tool-row",
+      "source": "./mods/tool-row",
+      "description": "Redraws finished tool-call rows in the terminal as one compact line with a Nerd Font icon, Gruvbox colors and a short stat"
+    },
+    {
+      "name": "image-preview",
+      "source": "./mods/image-preview",
+      "description": "Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane"
+    },
+    {
+      "name": "quick-actions",
+      "source": "./mods/quick-actions",
+      "description": "Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue"
     }
   ]
 }
