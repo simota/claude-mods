@@ -19,6 +19,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `context-diet` | Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved |
 | `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
 | `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; off by default |
+| `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default |
 
 ## Install
 
@@ -167,6 +168,24 @@ Slash commands, prompts under 12 or over 1500 characters, prompts with any attac
 | `enabled` | `false` | |
 | `model` | `claude-haiku-5-5` | Judging model (alias or id) |
 | `timeoutMs` | `3000` | 500 to 3000 |
+
+### loopback
+
+Off by default. When on, the new findings of the detector mods are attached to the next prompt typed at an idle prompt, as context only the model reads, so the correction does not wait for the person to retype it:
+
+- `self-audit`: the violations of the latest audited reply
+- `done-gate`: edits with no passing check after them (again after a check passed and new edits were left unverified; 閉じる on its band takes the flag down, and nothing is fed)
+- `sandbox-lens`: denials seen this session, each once
+
+Each finding goes back once per session, marked as data that may be wrong for Claude to check before acting. A toast says how many went back and from where. Slash commands, hidden prompts, prompts sent by a plugin and prompts typed while a turn runs carry nothing. A detector that is not installed contributes nothing.
+
+- `/loopback` shows what was fed last and the self-audit repeat rate: of the rules fed back, how many self-audit flagged again on the next audited reply (all sessions). The rate is what the design is judged by (`.genius/decisions/loopback.md`).
+
+| Option | Default | |
+| --- | --- | --- |
+| `enabled` | `false` | |
+
+Cost: the findings ride as extra input on the prompt they are attached to (each quote clipped to 300 characters, at most 12 findings).
 
 ## Develop
 
