@@ -51,6 +51,18 @@ describe('extractTodos', () => {
     expect(extractTodos(text)).toEqual(['add a regression test for the parser', 'wire the retry flag'])
   })
 
+  test('ignores mentions of the format inside a sentence, table cell or inline code', () => {
+    const text = [
+      '| **todo-agent** | Claude の返答に出てきた `#TODO(agent): …` を記録 | `/todos` |',
+      'Mark follow-ups as `#TODO(agent): <action>` in reports.',
+      'See #TODO(agent): not a line start',
+      '> - #TODO(agent): quoted bullet counts',
+      '1. #TODO(agent): numbered counts',
+      '#TODO(agent): …',
+    ].join('\n')
+    expect(extractTodos(text)).toEqual(['quoted bullet counts', 'numbered counts'])
+  })
+
   test('drops done items first past the cap', () => {
     const items = Array.from({ length: MAX_ITEMS }, (_, i) => item(`open-${i}`, i === 0, i))
     const trimmed = addTodos(items, [item('new', false, MAX_ITEMS)])

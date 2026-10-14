@@ -49,7 +49,7 @@ Option changes apply after a restart. Bands above the prompt stack: each mod dra
 
 ### agent-pane
 
-- `/agents` opens the pane: running subagents first with elapsed time, then finished ones with ✓/✗ and duration.
+- `/agent-pane` opens the pane: running subagents first with elapsed time, then finished ones with ✓/✗ and duration.
 - In a fullscreen terminal the pane opens by itself on the session's first Agent call.
 - The status line shows `agents: N running` while any run.
 

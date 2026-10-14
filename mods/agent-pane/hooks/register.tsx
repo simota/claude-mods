@@ -71,13 +71,14 @@ function ensureTicker($: EngineInterface): void {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
-      name: 'agents',
+      // `/agents` is Claude Code's own command, which a plugin may not take.
+      name: 'agent-pane',
       description: 'サブエージェントの実行状況をペインに表示する',
     })
     return next(e)
   })
 
-  on('command.run', { command: 'agents' }, async $ => {
+  on('command.run', { command: 'agent-pane' }, async $ => {
     await $.ui.open({ id: PANE, title: TITLE })
     return { text: 'エージェントペインを開きました。' }
   })

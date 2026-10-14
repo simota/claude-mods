@@ -2,14 +2,16 @@ import type { TodoItem } from '../types'
 
 export const MAX_ITEMS = 500
 
-const MARKER = /#TODO\(agent\):\s*(.+?)\s*$/gm
-const PLACEHOLDER = '<action>'
+// The marker opens its line, after at most a quote and a list bullet: a mention inside
+// a sentence, a table cell or inline code (`#TODO(agent): …`) is talk about the format, not a TODO.
+const MARKER = /^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|\d+[.)])[ \t]+)?#TODO\(agent\):[ \t]*(.+?)[ \t]*$/gm
+const PLACEHOLDERS = new Set(['<action>', '…', '...'])
 
 export function extractTodos(text: string): string[] {
   const found: string[] = []
   for (const match of text.matchAll(MARKER)) {
     const action = match[1]?.replace(/`+$/, '').trim()
-    if (action && action !== PLACEHOLDER) found.push(action)
+    if (action && !PLACEHOLDERS.has(action)) found.push(action)
   }
   return found
 }
