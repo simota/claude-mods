@@ -126,11 +126,8 @@ export const register: Register = on => {
     return ran
   })
 
-  on('command.run', ($, e, next) => {
-    isFullscreen = e.presentation.isFullscreen
-    return next(e)
-  })
-
+  // Learned from the band's viewport, not from every command.run: a hook there would
+  // put this plugin's name on the output of every slash command.
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
     if (e.viewport?.isFullscreen !== undefined) isFullscreen = e.viewport.isFullscreen
     return next(e)

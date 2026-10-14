@@ -1,6 +1,6 @@
 {
   "name": "agent-pane",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Live pane of the session's subagents: running ones with elapsed time, finished ones with result and duration",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"
