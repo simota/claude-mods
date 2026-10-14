@@ -1,0 +1,15 @@
+{
+  "name": "pr-lamp",
+  "version": "0.1.0",
+  "description": "The current branch's pull request as a lamp: checks, review, unresolved threads and what is left before it can merge, in the status line and a /pr pane; a toast when it changes, and red checks and new review comments fed to Claude beside the next prompt",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "feed": {
+      "type": "boolean",
+      "title": "Feed Claude",
+      "description": "Attach checks turning red, new review comments and new conflicts to the next prompt typed at an idle prompt; on by default",
+      "default": true
+    }
+  }
+}

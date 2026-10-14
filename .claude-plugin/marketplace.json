@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp",
   "owner": {
     "name": "simota"
   },
@@ -79,6 +79,11 @@
       "name": "zukan",
       "source": "./mods/zukan",
       "description": "Error book: catches the errors Bash commands hit across sessions and repos, records what got past each one, and when one comes back tells Claude and the person how it was fixed last time"
+    },
+    {
+      "name": "pr-lamp",
+      "source": "./mods/pr-lamp",
+      "description": "The current branch's pull request as a lamp: checks, review, unresolved threads and what is left before a merge, in the status line and a /pr pane; red checks and new review comments fed to Claude beside the next prompt"
     }
   ]
 }

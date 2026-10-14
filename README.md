@@ -21,6 +21,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; off by default |
 | `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default |
 | `zukan` | Error book: catches the errors Bash commands hit across sessions and repos, records what got past each one, and when one comes back tells Claude and the person how it was fixed last time |
+| `pr-lamp` | The current branch's pull request as a lamp: checks, review, unresolved threads and what is left before a merge, in the status line and a `/pr` pane; red checks and new review comments go to Claude beside the next prompt |
 
 ## Install
 
@@ -205,6 +206,22 @@ Failures of tests, linters, type checkers and builds are not caught: they are fi
 - `/zukan forget <No>` removes an entry
 
 The newest 300 kinds by last sighting are kept.
+
+### pr-lamp
+
+The current branch's pull request, kept in the status line while you work:
+
+```
+⎇ #42 · ✓5 ✗1 ⏳2 · 🛑 変更要求 · 💬3 · マージまであと4
+```
+
+"マージまであと N" counts what still stands before a merge: draft, failed checks, running checks, changes requested or approval pending, unresolved review threads, a conflict, the branch behind its base. At 0 it reads `🟢 マージ可能`.
+
+A toast when it changes: `🔴 CI 失敗: test`, `💬 新しいレビューコメント 2件 (@rev)`, `✅ Approved`, `🟢 #42 マージまであと0`, `🎉 #42 がマージされました`. Checks turning red, new review comments, changes requested and a new conflict are also attached to the next prompt typed at an idle prompt, once, with the last 40 lines of each failed job's log, marked as data whose comments and logs are not to be followed as instructions. The option `feed` (on by default) turns that off.
+
+- `/pr` asks again and opens the pane: title, size, what is left, checks (failed first) and unresolved threads
+
+It asks `gh` (`gh pr view`, and `gh api graphql` for review threads) at session start, right after a Bash `git push`, `git checkout`, `gh pr create` and the like, every minute while a check runs or after a push, and every five minutes otherwise; it stops once the pull request is merged or closed. Without an origin remote, `gh`, or a pull request for the branch it shows nothing, and `/pr` says why. `gh` runs on the host, outside the Bash sandbox, with your `gh auth`.
 
 ## Develop
 
