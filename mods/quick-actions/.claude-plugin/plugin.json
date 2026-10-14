@@ -1,6 +1,6 @@
 {
   "name": "quick-actions",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hotkey buttons above the prompt after each turn: run checks, review the diff, draft a commit, continue",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

@@ -9,6 +9,7 @@ declare module 'claude-code' {
     'prompt-coach': {
       held: PromptCoachHeld | null
       judged: string[]
+      followUps: string[]
     }
   }
 }

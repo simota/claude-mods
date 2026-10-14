@@ -1,14 +1,14 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { TodoItem } from '../types'
-import { addTodos, extractTodos, formatAll, markDone, openFor } from './todos'
+import { addTodos, extractTodos, formatAll, fromStore, markDone, openFor } from './todos'
 
 const PANE = 'todo-agent'
 const STORE_KEY = 'items'
 const open = { plugin: 'todo-agent', key: 'open' } as const
 
 async function loadItems($: EngineInterface): Promise<TodoItem[]> {
-  return ((await $.store.get(STORE_KEY)) as TodoItem[] | undefined) ?? []
+  return fromStore(await $.store.get(STORE_KEY))
 }
 
 async function currentProject($: EngineInterface): Promise<string> {
@@ -24,9 +24,19 @@ async function refresh($: EngineInterface, items: readonly TodoItem[]): Promise<
   return list.length
 }
 
-async function save($: EngineInterface, items: TodoItem[]): Promise<void> {
-  await $.store.set(STORE_KEY, items)
-  await refresh($, items)
+// $.store has no versioned write: every read-modify-write of this module runs one after
+// another, each reading the store afresh, so a reply and a 完了 press never undo each other.
+let queue: Promise<unknown> = Promise.resolve()
+
+function mutate($: EngineInterface, change: (items: TodoItem[]) => TodoItem[]): Promise<TodoItem[]> {
+  const run = queue.then(async () => {
+    const items = change(await loadItems($))
+    await $.store.set(STORE_KEY, items)
+    await refresh($, items)
+    return items
+  })
+  queue = run.catch(() => undefined)
+  return run
 }
 
 export const register: Register = on => {
@@ -43,7 +53,8 @@ export const register: Register = on => {
 
   on('session.append', { door: 'response' }, async ($, e, next) => {
     const stored = await next(e)
-    if (e.message.type !== 'assistant') return stored
+    // A subagent's reply is read by the agent that spawned it, never shown to the person.
+    if (e.agentId !== undefined || e.message.type !== 'assistant') return stored
 
     const texts = e.message.content.flatMap(block =>
       block.type === 'text' && typeof block.text === 'string' ? extractTodos(block.text) : [],
@@ -63,7 +74,7 @@ export const register: Register = on => {
       createdAt,
       isDone: false,
     }))
-    await save($, addTodos(await loadItems($), added))
+    await mutate($, items => addTodos(items, added))
 
     return stored
   }).catch(($, e, next) => next(e))
@@ -90,7 +101,9 @@ export const register: Register = on => {
             <Button
               key={`done:${item.id}`}
               label="完了"
-              onPress={async () => save($, markDone(await loadItems($), item.id))}
+              onPress={async () => {
+                await mutate($, items => markDone(items, item.id))
+              }}
             />
             <Text> {item.text}</Text>
           </Box>

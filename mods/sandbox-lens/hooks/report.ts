@@ -11,14 +11,19 @@ const LABEL: Record<SandboxLensKind, string> = {
   eperm: 'EPERM',
 }
 
-function hostOf(target: string): string {
-  return target.replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1')
+export function hostOf(target: string): string {
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(target)
+  if (bracketed) return bracketed[1] ?? target
+  // A bare IPv6 address (`::1`, `fe80::1`) has no port that can be told from its last group.
+  if ((target.match(/:/g) ?? []).length > 1) return target
+  return target.replace(/:\d+$/, '')
 }
 
 /** Loopback and private addresses: their allowedDomains entry opens every port unless it names one. */
 export function isLocalHost(host: string): boolean {
   const name = host.toLowerCase()
   if (name === 'localhost' || name.endsWith('.localhost') || name === '::1' || name === '0.0.0.0') return true
+  if (name.includes(':')) return /^(fe[89ab][0-9a-f]:|f[cd][0-9a-f]{2}:)/.test(name) // link-local, unique-local
   const octets = name.split('.').map(Number)
   if (octets.length !== 4 || octets.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false
   const [a = -1, b = -1] = octets

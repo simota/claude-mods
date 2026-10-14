@@ -67,6 +67,10 @@ test('helpers format, color and encode', () => {
   expect(compact(120_000)).toBe('120k')
   expect(compact(1_500_000)).toBe('1.5M')
   expect(compact(950)).toBe('950')
+  // The unit follows the rounded value: 999,999 is 1M, not 1000k.
+  expect(compact(999_999)).toBe('1M')
+  expect(compact(999_500)).toBe('1M')
+  expect(compact(999_499)).toBe('999k')
   expect(colorFor(10)).toBe(GREEN)
   expect(colorFor(50)).toBe(YELLOW)
   expect(colorFor(80)).toBe(RED)
@@ -82,10 +86,19 @@ test('helpers format, color and encode', () => {
 })
 
 test('describe shows the change since the last turn', () => {
-  const at = (percent: number) => ({ percent, tokens: 0, window: 1, input: 120_000, output: 8_000, at: 0 })
+  const at = (percent: number) => ({ percent, tokens: 126_000, window: 1, input: 1_200_000, output: 8_000, at: 0 })
   expect(describe([])).toBeUndefined()
-  expect(describe([at(59), at(63)])).toEqual({ percent: '63%', delta: ' ▲4', rest: ' · in 120k / out 8k' })
+  expect(describe([at(59), at(63)])).toEqual({
+    percent: '63%',
+    delta: ' ▲4',
+    rest: ' · 126k · turn in 1.2M / out 8k',
+  })
   expect(describe([at(63), at(40)])?.delta).toBe(' ▼23')
+})
+
+test('a turn with no usage shows the context size alone, never under the turn label', () => {
+  const sample = { percent: 60, tokens: 120_000, window: 200_000, at: 0 }
+  expect(describe([sample])?.rest).toBe(' · 120k')
 })
 
 test('nothing is drawn before the first measured turn; the plugins beneath still draw', async ($, on) => {
@@ -107,7 +120,8 @@ test('a main-loop turn draws the meter above what lies beneath', async ($, on) =
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(band(surface))
-    const line = await ui.find({ type: 'Text', text: /ctx 63% ▲4 · in 120k \/ out 8k · \$1\.23/ })
+    // 63% of 200k is 126k of context; the turn sent 2k + 110k + 8k and received 8k.
+    const line = await ui.find({ type: 'Text', text: /ctx 63% ▲4 · 126k · turn in 120k \/ out 8k · \$1\.23/ })
     expect(line).toBeDefined()
     const percent = (await ui.findAll({ type: 'Text', text: /63%/ })).find(t => t.text === '63%')
     expect(percent?.props.color).toBe('#fabd2f')
@@ -138,12 +152,17 @@ test('the sparkline keeps to the band width', async ($, on) => {
     setContext(bottom, i * 2)
     await endTurn($)
   }
-  const ui = await $.ui.mount(band('terminal', 40))
+  // The line is `ctx 78% ▲2 · 156k · turn in 120k / out 8k`: 10 + 7 + 24 = 41 columns.
+  const ui = await $.ui.mount(band('terminal', 60))
   const spark = await ui.find({ type: 'Raster', key: 'spark' })
-  const columns = Number(spark?.props.columns)
-  expect(columns).toBeGreaterThan(0)
-  expect(columns).toBeLessThan(40)
+  expect(spark?.props.columns).toBe(60 - 41 - 1)
   await ui.unmount()
+
+  // No room beside the text: no sparkline, rather than all 40 samples.
+  const narrow = await $.ui.mount(band('terminal', 40))
+  expect(await narrow.find({ type: 'Raster', key: 'spark' })).toBeUndefined()
+  expect(await narrow.find({ type: 'Text', text: /ctx 78%/ })).toBeDefined()
+  await narrow.unmount()
 })
 
 test('a survey holds the band: only what lies beneath draws', async ($, on) => {

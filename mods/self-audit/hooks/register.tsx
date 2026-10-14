@@ -1,33 +1,49 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { SelfAuditUsage, SelfAuditViolation } from '../types'
-import { PROMPT, clip, compact, parseViolations, ruleName } from './audit'
+import type { SelfAuditLatest, SelfAuditUsage, SelfAuditViolation } from '../types'
+import { buildPrompt, clip, compact, parseViolations, ruleName } from './audit'
 
 const violations = atom({ plugin: 'self-audit', key: 'violations' } as const, [] as SelfAuditViolation[])
 const isShown = atom({ plugin: 'self-audit', key: 'isShown' } as const, false)
 const usage = atom({ plugin: 'self-audit', key: 'usage' } as const, null as SelfAuditUsage | null)
+const latest = atom({ plugin: 'self-audit', key: 'latest' } as const, { status: 'none' } as SelfAuditLatest)
 
 const PANE = 'self-audit'
 const TITLE = '自己監査'
 const RED = '#fb4934'
 const BAND_ROWS = 2
 
-// Each audit carries the round it started in; a prompt submitted since makes its answer stale.
+// Each audit carries the round it started in; a prompt or turn started since makes its answer stale.
 let round = 0
 
-async function audit($: EngineInterface, mine: number): Promise<void> {
-  const reply = await $.model.fork({ prompt: PROMPT })
+/** Forgets the previous reply's result, so nothing older is shown as the latest's. */
+async function forget($: EngineInterface): Promise<void> {
+  round += 1
+  await update($, isShown, () => false)
+  await update($, violations, () => [])
+  await update($, usage, () => null)
+  await update($, latest, () => ({ status: 'none' }) as SelfAuditLatest)
+}
+
+async function skip($: EngineInterface, turnId: string, reason: string): Promise<void> {
+  await update($, latest, () => ({ status: 'skipped', turnId, reason }) as SelfAuditLatest)
+}
+
+async function audit($: EngineInterface, mine: number, turnId: string, answer: string): Promise<void> {
+  const reply = await $.model.fork({ prompt: buildPrompt(answer) })
+  if (mine !== round) return
   if (!reply.isAnswered) {
     $.ui.log(`self-audit: no audit (${reply.reason})`, { to: 'debug' })
+    await skip($, turnId, `監査の fork が応答しませんでした（${reply.reason}）`)
     return
   }
   const found = parseViolations(reply.text)
   if (found === undefined) {
     $.ui.log('self-audit: the audit reply was not the asked JSON', { to: 'debug' })
+    await skip($, turnId, '監査の返答が JSON ではありませんでした')
     return
   }
-  if (mine !== round) return
 
   await update($, usage, () => ({
     input: reply.usage.input_tokens,
@@ -36,7 +52,22 @@ async function audit($: EngineInterface, mine: number): Promise<void> {
     cacheWrite: reply.usage.cache_creation_input_tokens,
   }))
   await update($, violations, () => found)
+  await update($, latest, () => ({ status: 'audited', turnId }) as SelfAuditLatest)
   await update($, isShown, () => found.length > 0)
+}
+
+/** Why a main-loop turn's reply is not audited, or undefined when it is. */
+function skipReason(
+  e: { isAborted: boolean; reason: string; answer: string },
+  isEnabled: boolean,
+  minChars: number,
+): string | undefined {
+  if (!isEnabled) return '自己監査は無効です'
+  if (e.isAborted || e.reason === 'aborted') return 'ターンが中断されました'
+  if (e.reason !== 'answer') return `ターンが返答以外で終わりました（${e.reason}）`
+  const length = e.answer.trim().length
+  if (length < minChars) return `返答が短いため（${length} 文字 < ${minChars}）`
+  return undefined
 }
 
 export const register: Register = (on, options) => {
@@ -54,20 +85,32 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    round += 1
-    await update($, isShown, () => false)
+    await forget($)
     return next(e)
   }).catch(($, e, next) => next(e)) // Hiding a band is never worth holding a prompt back.
 
+  on('turn.start', async ($, e, next) => {
+    // A turn no prompt started (a plugin's, a continuation) also makes the last result stale.
+    if (e.agentId === undefined) await forget($)
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
-    if (!isEnabled || e.agentId !== undefined || e.isAborted || e.reason !== 'answer') return done
-    if (e.answer.trim().length < minChars) return done
+    if (e.agentId !== undefined) return done
+
+    const reason = skipReason(e, isEnabled, minChars)
+    if (reason !== undefined) {
+      await skip($, e.turnId, reason)
+      return done
+    }
 
     const mine = round
+    const { turnId, answer } = e
+    await update($, latest, () => ({ status: 'pending', turnId }) as SelfAuditLatest)
     // Audit from a timer so the fork never holds the turn's end.
     $.clock.after(0, () => {
-      audit($, mine).catch(err => $.ui.log(`self-audit: ${String(err)}`, { to: 'debug' }))
+      audit($, mine, turnId, answer).catch(err => $.ui.log(`self-audit: ${String(err)}`, { to: 'debug' }))
     })
     return done
   })
@@ -102,8 +145,13 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
+    const state = await read($, latest)
     const list = await read($, violations)
     const cost = await read($, usage)
+
+    if (state.status === 'none') return <Text dimColor>まだ監査した返答はありません。</Text>
+    if (state.status === 'pending') return <Text dimColor>直前の返答を監査中です…</Text>
+    if (state.status === 'skipped') return <Text dimColor>直前の返答は監査されていません: {state.reason}</Text>
 
     return (
       <Box flexDirection="column">

@@ -1,10 +1,17 @@
-export type AgentRunStatus = 'running' | 'completed' | 'failed'
+/**
+ * `unknown`: the roster dropped a background run before it said how it ended,
+ * or a reload lost the call that was waiting on it.
+ * `detached`: a teammate or remote launch, which this pane does not follow.
+ */
+export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'unknown' | 'detached'
 
 export type AgentRun = {
   /** The Agent call's tool_use_id. */
   id: string
   /** The spawned agent's id, once the call names it (background runs). */
   agentId?: string
+  /** Ticks in a row the roster had no entry for `agentId`. */
+  misses?: number
   type: string
   description: string
   startedAt: number
@@ -14,6 +21,6 @@ export type AgentRun = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'agent-pane': { runs: AgentRun[]; now: number }
+    'agent-pane': { runs: AgentRun[]; now: number; hasAutoOpened: boolean }
   }
 }

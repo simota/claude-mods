@@ -48,6 +48,41 @@ describe('suggest', () => {
   test('does not match words inside other words', () => {
     expect(suggest('explain the planet layout', ALL)).toEqual([])
   })
+
+  test('a one-word skill name in prose does not silence the hints', () => {
+    expect(suggest('Can you clarify why this test throws an error?', ALL)).toEqual(['coding-debug', 'coding-test'])
+  })
+
+  test('a slash name or a hyphenated name does count as naming a skill', () => {
+    expect(suggest('/simplify this bug fix', new Set([...ALL, 'simplify']))).toEqual([])
+    expect(suggest('use coding-debug on this bug', ALL)).toEqual([])
+    expect(suggest('use /clarify first; the bug is odd', ALL)).toEqual([])
+  })
+
+  test('a name the session does not have is not a skill', () => {
+    expect(suggest('use coding-debug on this bug', new Set(['coding-test']))).toEqual([])
+    expect(suggest('use foo-bar on this test', new Set(['coding-test']))).toEqual(['coding-test'])
+  })
+
+  test('Japanese keywords need the intent, not a substring', () => {
+    expect(suggest('コンテストの結果ページを作って', ALL)).toEqual([])
+    expect(suggest('いい感じです、ありがとう', ALL)).toEqual([])
+    expect(suggest('この画面をいい感じにして', ALL)).toEqual(['clarify'])
+    expect(suggest('デザインパターンでリファクタして', ALL)).toEqual(['coding-refactor'])
+    expect(suggest('エラー処理を追加して', ALL)).toEqual([])
+    expect(suggest('ユニットテストを書いて', ALL)).toEqual(['coding-test'])
+  })
+
+  test('English keywords need the intent', () => {
+    expect(suggest('Add error handling to the parser', ALL)).toEqual([])
+    expect(suggest('the build fails on CI', ALL)).toEqual(['coding-debug'])
+    expect(suggest('apply the strategy design pattern', ALL)).toEqual([])
+  })
+
+  test("a plugin's skill matches by its short name and is suggested in full", () => {
+    expect(suggest('バグを直して', new Set(['myplug:coding-debug']))).toEqual(['myplug:coding-debug'])
+    expect(suggest('バグを直して', new Set(['myplug:coding-debug', 'coding-debug']))).toEqual(['coding-debug'])
+  })
 })
 
 function bottoms(on: On, names: readonly string[]) {
@@ -82,7 +117,7 @@ test('the band shows hints after a prompt and hides on dismiss', async ($, on) =
   await ui.unmount()
 })
 
-test('a slash command leaves earlier hints untouched', async ($, on) => {
+test('a slash command clears earlier hints, as any next prompt does', async ($, on) => {
   bottoms(on, ['coding-debug'])
   await submit($, 'バグ')
   await $.prompt.submit({
@@ -93,7 +128,7 @@ test('a slash command leaves earlier hints untouched', async ($, on) => {
   })
 
   const ui = await $.ui.mount({ plugin: 'skill-hint', surface: 'terminal', ...BAND })
-  expect(await ui.find(HINTS)).toBeDefined()
+  expect(await ui.find(HINTS)).toBeUndefined()
   await ui.unmount()
 })
 

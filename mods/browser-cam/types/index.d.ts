@@ -1,9 +1,14 @@
-/** What the pane's Image draws: the PNG bytes themselves, or a PNG file this plugin wrote. */
-export type BrowserCamSource = { png: string } | { file: string; format: 'png'; generation: number }
+/**
+ * What the pane's Image draws: a PNG file this plugin wrote into its private,
+ * per-session folder. The bytes themselves never sit in state.
+ */
+export type BrowserCamSource = { file: string; format: 'png'; generation: number }
 
 export type BrowserCamFrame = {
   /** The tool call whose result held the screenshot. */
   toolUseId: string
+  /** The order the call finished in: a frame never replaces a later one. */
+  seq: number
   /** Absent when the screenshot could not be made drawable; `note` says why. */
   source?: BrowserCamSource
   width?: number
@@ -34,6 +39,8 @@ declare module 'claude-code' {
       /** The last 30, oldest first. */
       actions: BrowserCamAction[]
       page: BrowserCamPage
+      /** The pane has opened by itself once this session: never again, reload or not. */
+      hasAutoOpened: boolean
     }
   }
 }

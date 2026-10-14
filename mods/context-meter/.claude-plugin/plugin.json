@@ -1,6 +1,6 @@
 {
   "name": "context-meter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

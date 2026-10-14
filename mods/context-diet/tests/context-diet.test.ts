@@ -96,6 +96,38 @@ describe('profile', () => {
     expect(isKept('persona-define', rules)).toBe(false)
   })
 
+  test('a blank line between entries keeps the entries after it; what follows the last entry is the tail', () => {
+    const text = [
+      'Skills:',
+      '- coding-debug: Diagnosing.',
+      '',
+      '- persona-define: Design a reviewer.',
+      '- clarify: Turning a request.',
+      '',
+      'Use them well.',
+    ].join('\n')
+    const listing = parseListing(text)
+    expect(listing.entries.map(entry => entry.name)).toEqual(['coding-debug', 'persona-define', 'clarify'])
+    expect(listing.tail).toEqual(['', 'Use them well.'])
+
+    const cut = filterListing(text, { kinds: ['rust'], keep: [], drop: [] })
+    expect(cut.text).toBe(['Skills:', '- coding-debug: Diagnosing.', '', '- clarify: Turning a request.', '', 'Use them well.'].join('\n'))
+  })
+
+  test('a description line shaped like an entry makes the cut uncertain: the listing goes as it came', () => {
+    const capital = ['- persona-define: Design a reviewer.', '- Note: continuation bullet', '- coding-debug: Diagnosing.'].join('\n')
+    const uncertain = filterListing(capital, { kinds: ['rust'], keep: [], drop: [] })
+    expect(uncertain.isUncertain).toBe(true)
+    expect(uncertain.text).toBe(capital)
+    expect(uncertain.dropped).toEqual([])
+
+    // A lowercase one passes the shape; the session's own commands tell it apart.
+    const lower = ['- persona-define: Design a reviewer.', '- note: continuation bullet', '- coding-debug: Diagnosing.'].join('\n')
+    const known = new Set(['persona-define', 'coding-debug'])
+    expect(filterListing(lower, { kinds: ['rust'], keep: [], drop: [] }, known).text).toBe(lower)
+    expect(parseListing(lower).entries.map(entry => entry.name)).toEqual(['persona-define', 'note', 'coding-debug'])
+  })
+
   test('leaves text with no entries as it came', () => {
     const odd = 'Skills: none listed today.'
     expect(filterListing(odd, { kinds: ['rust'], keep: [], drop: [] }).text).toBe(odd)
@@ -158,7 +190,39 @@ describe('context-diet in a session', () => {
     expect(report).toContain('省いた: design-ux, image-prompt, operation-incident, persona-define, dynamic-scan')
     expect(report).toMatch(/削減: 約 \d+ tokens（推定: 文字数÷4）/)
 
+    // Switched off and no listing sent since: the earlier cut is not reported as current.
     await $.command.run({ ...RUN, args: 'off' })
+    const pending = (await $.command.run({ ...RUN, args: '' })).text ?? ''
+    expect(pending).toContain('context-diet: OFF')
+    expect(pending).toContain('次のリクエストで skill 一覧を組み直します')
+    expect(pending).not.toContain('省いた: design-ux')
+
     expect((await listingOf($)).text).toBe(LISTING)
+    const off = (await $.command.run({ ...RUN, args: '' })).text ?? ''
+    expect(off).toContain('直前の skill 一覧は絞り込まずに送りました')
+    expect(off).not.toContain('省いた:')
+  })
+
+  test('a listing with nothing to drop replaces the earlier report', async ($, on) => {
+    world(on, ['package.json'])
+    await $.session.start(START)
+    await $.command.run({ ...RUN, args: 'on' })
+    await listingOf($)
+    expect((await $.command.run({ ...RUN, args: '' })).text).toContain('省いた: operation-incident, persona-define, dynamic-scan')
+
+    // Every family kept: the report says so, not what the first listing dropped.
+    await $.prompt.attachment({ type: 'skill_listing', text: '- coding-debug: Diagnosing.\n- clarify: Turning a request.', origin: { kind: 'engine' } })
+    const report = (await $.command.run({ ...RUN, args: '' })).text ?? ''
+    expect(report).toContain('残した skill: 2 件 / 省いた skill: 0 件')
+    expect(report).toContain('省いた: なし')
+  })
+
+  test('an uncertain listing is sent whole and reported as such', { options: { enabled: true } }, async ($, on) => {
+    world(on, ['Cargo.toml'])
+    await $.session.start(START)
+    const odd = '- persona-define: Design a reviewer.\n- Note: continuation bullet\n- coding-debug: Diagnosing.'
+    const sent = await $.prompt.attachment({ type: 'skill_listing', text: odd, origin: { kind: 'engine' } })
+    expect(sent.text).toBe(odd)
+    expect((await $.command.run({ ...RUN, args: '' })).text).toContain('書式を確実に読み取れなかった')
   })
 })

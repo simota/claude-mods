@@ -38,7 +38,6 @@ export type RowFacts = {
   input: unknown
   output: unknown
   isErrored: boolean
-  durationMs?: number
 }
 
 const COMMAND_CHARS = 60
@@ -81,18 +80,11 @@ function diffStats(counts: { added: number; removed: number }): Stat[] {
   ]
 }
 
-export function formatDuration(ms: number): string {
-  if (ms < 1_000) return `${Math.round(ms)}ms`
-  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`
-  const minutes = Math.floor(ms / 60_000)
-  const seconds = Math.round((ms % 60_000) / 1_000)
-  return `${minutes}m${seconds}s`
-}
-
+// Cut by code points, so an emoji's surrogate pair is never split in two.
 function firstLine(command: string): string {
   const [head = '', ...rest] = command.trim().split('\n')
-  const line = rest.length > 0 ? `${head} …` : head
-  return line.length > COMMAND_CHARS ? `${line.slice(0, COMMAND_CHARS - 1)}…` : line
+  const line = Array.from(rest.length > 0 ? `${head} …` : head)
+  return line.length > COMMAND_CHARS ? `${line.slice(0, COMMAND_CHARS - 1).join('')}…` : line.join('')
 }
 
 function host(url: string): string {
@@ -149,9 +141,9 @@ export function summarize(facts: RowFacts): Summary | undefined {
   if (tool === 'Bash') {
     const command = text(input, 'command')
     if (command === undefined) return undefined
-    const stats: Stat[] = []
-    if (isErrored) stats.push({ text: '· error', color: GRUVBOX.red })
-    if (facts.durationMs !== undefined) stats.push({ text: `· ${formatDuration(facts.durationMs)}`, color: GRUVBOX.gray })
+    // No duration: tool.call's span includes the permission prompt, and no event
+    // marks when the command itself started.
+    const stats: Stat[] = isErrored ? [{ text: '· error', color: GRUVBOX.red }] : []
     return { icon: ICONS.bash, color: tint(GRUVBOX.aqua), label: firstLine(command), stats }
   }
 

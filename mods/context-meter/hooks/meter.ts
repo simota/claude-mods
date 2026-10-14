@@ -16,8 +16,9 @@ export const colorFor = (percent: number) => (percent >= 80 ? RED : percent >= 5
 
 export const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`
 
+// The unit is chosen after rounding, so 999,999 reads 1M rather than 1000k.
 export const compact = (n: number) =>
-  n >= 1_000_000
+  Math.round(n / 1_000) >= 1_000
     ? `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
     : n >= 1_000
       ? `${Math.round(n / 1_000)}k`
@@ -39,11 +40,17 @@ export const describe = (list: readonly Sample[]): Parts | undefined => {
   const prev = list.at(-2)
   const delta = prev === undefined ? 0 : last.percent - prev.percent
   const cost = last.costUsd === undefined ? '' : ` · $${last.costUsd.toFixed(2)}`
+  // Two quantities, labelled apart: the context the last request carried, and what the
+  // whole turn sent and received over all its requests (only when the turn reported it).
+  const turn =
+    last.input === undefined || last.output === undefined
+      ? ''
+      : ` · turn in ${compact(last.input)} / out ${compact(last.output)}`
 
   return {
     percent: `${last.percent}%`,
     delta: delta > 0 ? ` ▲${delta}` : delta < 0 ? ` ▼${-delta}` : '',
-    rest: ` · in ${compact(last.input)} / out ${compact(last.output)}${cost}`,
+    rest: ` · ${compact(last.tokens)}${turn}${cost}`,
   }
 }
 

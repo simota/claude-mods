@@ -1,14 +1,16 @@
 // Pure helpers: reading a browser tool's call and result, sizing the picture in cells.
 
-export const BROWSER_TOOL = /^mcp__(claude-in-chrome|Claude_Browser)__/
+// Claude in Chrome, the desktop app's browser, and that browser reached from a cloud session.
+export const BROWSER_TOOL = /^mcp__(?:remote-devices__)?(?:claude-in-chrome|Claude_Browser)__/
 
 export function shortName(tool: string): string {
   return tool.replace(BROWSER_TOOL, '')
 }
 
+// Cut by code points, so an emoji's surrogate pair is never split in two.
 function clip(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+  const flat = Array.from(text.replace(/\s+/g, ' ').trim())
+  return flat.length > max ? `${flat.slice(0, max - 1).join('')}…` : flat.join('')
 }
 
 /** The call's key input in one short line: action, coordinate, url, text or query. */
@@ -52,17 +54,30 @@ export function screenshotOf(result: unknown): { data: string; mime: string } | 
   return found
 }
 
-/** The page a result names: a `URL:` / `Title:` line, else the first http(s) address in it. */
-export function pageOf(text: string): { url?: string; title?: string } {
-  const url = /^\s*(?:Tab\s+)?URL\s*[:：]\s*(\S+)/im.exec(text)?.[1] ?? /\bhttps?:\/\/[^\s"'<>)\]]+/.exec(text)?.[0]
-  const title = /^\s*(?:Tab\s+)?Title\s*[:：]\s*(.+)$/im.exec(text)?.[1]?.trim()
+// The tools whose own answer describes the tab: navigating, and the tab listings. Every other
+// result (read_page, get_page_text, find, javascript) carries page content the page controls.
+const TAB_TOOLS = /^(?:navigate|tabs_context(?:_mcp)?|tabs_create(?:_mcp)?)$/
+// The header a tab tool writes sits at the top of its answer.
+const HEADER_LINES = 6
+
+/**
+ * The page a call leads to: the url the call itself was given, then a `URL:` /
+ * `Title:` line at the head of a tab tool's own answer. Never page text: a page's
+ * words could otherwise name any address.
+ */
+export function pageFrom(tool: string, input: Record<string, unknown>, text: string): { url?: string; title?: string } {
+  const given = typeof input.url === 'string' && /^https?:\/\//i.test(input.url) ? input.url : undefined
+  if (!TAB_TOOLS.test(tool)) return given !== undefined && tool === 'navigate' ? { url: given } : {}
+  const head = text.split('\n').slice(0, HEADER_LINES).join('\n')
+  const url = /^\s*(?:Tab\s+)?URL\s*[:：]\s*(https?:\/\/\S+)/im.exec(head)?.[1] ?? given
+  const title = /^\s*(?:Tab\s+)?Title\s*[:：]\s*(.+)$/im.exec(head)?.[1]?.trim()
   return { ...(url !== undefined ? { url } : {}), ...(title ? { title } : {}) }
 }
 
-/** Decoded size of base64 text, in bytes. */
-export function decodedBytes(base64: string): number {
-  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
-  return Math.floor((base64.length * 3) / 4) - padding
+/** The page as it stands after a call: a new address drops the old address's title. */
+export function nextPage(old: { url?: string; title?: string }, seen: { url?: string; title?: string }): { url?: string; title?: string } {
+  if (seen.url !== undefined && seen.url !== old.url) return { url: seen.url, ...(seen.title !== undefined ? { title: seen.title } : {}) }
+  return { ...old, ...(seen.title !== undefined ? { title: seen.title } : {}) }
 }
 
 /** Width and height from the first bytes of a PNG (signature + IHDR), base64. */

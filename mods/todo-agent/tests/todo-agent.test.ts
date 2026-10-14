@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { TodoItem } from '../types'
-import { addTodos, extractTodos, MAX_ITEMS } from '../hooks/todos'
+import { addTodos, extractTodos, MAX_ITEMS, MAX_STORE_CHARS, MAX_TEXT, STORED_TEXT_NOTE } from '../hooks/todos'
 
 const PROJECT = '/repo/app'
 const SURFACES = ['terminal', 'desktop'] as const
@@ -63,6 +63,40 @@ describe('extractTodos', () => {
     expect(extractTodos(text)).toEqual(['quoted bullet counts', 'numbered counts'])
   })
 
+  test('keeps balanced backticks, strips an unbalanced closing one, and skips the quoted placeholder', () => {
+    const text = [
+      '#TODO(agent): rename `foo` to `bar`',
+      '#TODO(agent): `<action>`',
+      '#TODO(agent): wire `retry`',
+      '#TODO(agent): drop the flag`',
+    ].join('\n')
+    expect(extractTodos(text)).toEqual(['rename `foo` to `bar`', 'wire `retry`', 'drop the flag'])
+  })
+
+  test(`cuts a long action to ${MAX_TEXT} characters`, () => {
+    const [action = ''] = extractTodos(`#TODO(agent): ${'x'.repeat(1000)}`)
+    expect(action.length).toBe(MAX_TEXT)
+    expect(action.endsWith('…')).toBe(true)
+  })
+
+  test('a done item does not block the same TODO coming back', () => {
+    const done = { ...item('old', true, 1), text: 'bump deps' }
+    const again = { ...item('new', false, 2), text: 'bump deps' }
+    expect(addTodos([done], [again]).map(one => one.id)).toEqual(['old', 'new'])
+    const stillOpen = { ...done, isDone: false }
+    expect(addTodos([stillOpen], [again]).map(one => one.id)).toEqual(['old'])
+  })
+
+  test('keeps the store under its size bound, newest first', () => {
+    // 400 items of 3,000 characters is about 1.2M characters, past the 1M bound.
+    const items = Array.from({ length: 400 }, (_, i) => ({ ...item(`big-${i}`, false, i), text: `${i} ${'y'.repeat(3000)}` }))
+    const kept = addTodos([], items)
+    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(MAX_STORE_CHARS)
+    expect(kept.length).toBeLessThan(400)
+    expect(kept.some(one => one.id === 'big-399')).toBe(true)
+    expect(kept.some(one => one.id === 'big-0')).toBe(false)
+  })
+
   test('drops done items first past the cap', () => {
     const items = Array.from({ length: MAX_ITEMS }, (_, i) => item(`open-${i}`, i === 0, i))
     const trimmed = addTodos(items, [item('new', false, MAX_ITEMS)])
@@ -79,7 +113,25 @@ describe('todo-agent', () => {
     await $.session.append(reply('u2', 'again\n#TODO(agent): rotate the API key\n#TODO(agent): bump deps'))
 
     const ran = await todos($, 'all')
-    expect(ran.text).toBe(`${PROJECT} (2)\n  - rotate the API key\n  - bump deps`)
+    expect(ran.text).toBe(`${STORED_TEXT_NOTE}\n\n${PROJECT} (2)\n  - rotate the API key\n  - bump deps`)
+  })
+
+  test("skips a subagent's reply", async ($, on) => {
+    world(on)
+    await $.session.append({ ...reply('u1', '#TODO(agent): from the subagent'), agentId: 'agent-1' })
+    expect((await todos($, 'all')).text).toBe('未完了の TODO(agent) はありません。')
+  })
+
+  test('replies appended at once never undo each other', async ($, on) => {
+    world(on, { items: [item('first', false, 1)] })
+    await Promise.all([
+      $.session.append(reply('u1', '#TODO(agent): one')),
+      $.session.append(reply('u2', '#TODO(agent): two')),
+      $.session.append(reply('u3', '#TODO(agent): three')),
+    ])
+    const lines = ((await todos($, 'all')).text ?? '').split('\n')
+    expect(lines).toContain(`${PROJECT} (4)`)
+    for (const text of ['one', 'two', 'three', 'first']) expect(lines).toContain(`  - ${text}`)
   })
 
   test('leaves the row as it came', async ($, on) => {
@@ -98,7 +150,7 @@ describe('todo-agent', () => {
       ],
     })
     const ran = await todos($, 'all')
-    expect(ran.text).toBe('/p/one (1)\n  - first\n\n/p/two (1)\n  - second')
+    expect(ran.text).toBe(`${STORED_TEXT_NOTE}\n\n/p/one (1)\n  - first\n\n/p/two (1)\n  - second`)
   })
 
   for (const surface of SURFACES) {
@@ -126,7 +178,7 @@ describe('todo-agent', () => {
 
       expect(await ui.find({ type: 'Text', text: /newer/ })).toBeUndefined()
       expect(await ui.find({ type: 'Text', text: /older/ })).toBeDefined()
-      expect((await todos($, 'all')).text).toBe(`${PROJECT} (1)\n  - older`)
+      expect((await todos($, 'all')).text).toBe(`${STORED_TEXT_NOTE}\n\n${PROJECT} (1)\n  - older`)
       await ui.unmount()
     })
   }

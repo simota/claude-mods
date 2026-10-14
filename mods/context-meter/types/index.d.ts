@@ -1,9 +1,11 @@
 export type Sample = {
   percent: number
+  /** The context the last request of the turn carried. */
   tokens: number
   window: number
-  input: number
-  output: number
+  /** The turn's totals over all its requests: absent when the turn reported no usage. */
+  input?: number
+  output?: number
   costUsd?: number
   at: number
 }

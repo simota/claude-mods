@@ -7,9 +7,14 @@ const hints = atom({ plugin: 'skill-hint', key: 'hints' } as const, [])
 
 export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
-    if (e.command !== undefined || e.isMeta) return next(e)
+    if (e.isMeta) return next(e)
+    // A slash command is a prompt too: the hints for the one before it are stale now.
+    if (e.command !== undefined) {
+      await update($, hints, () => [])
+      return next(e)
+    }
 
-    const available = new Set((await $.command.list()).map(command => command.name))
+    const available = (await $.command.list()).map(command => command.name)
     await update($, hints, () => suggest(e.text, available))
 
     return next(e)

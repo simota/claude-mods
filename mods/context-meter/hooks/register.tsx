@@ -21,11 +21,12 @@ export const register: Register = (on, options) => {
         percent: context.percent,
         tokens: context.tokens ?? 0,
         window: context.window,
-        input:
-          usage === undefined
-            ? (context.tokens ?? 0)
-            : usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
-        output: usage?.output_tokens ?? 0,
+        ...(usage === undefined
+          ? {}
+          : {
+              input: usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
+              output: usage.output_tokens,
+            }),
         ...(cost === undefined ? {} : { costUsd: cost.usd }),
         at: await $.clock.now(),
       }
@@ -50,7 +51,8 @@ export const register: Register = (on, options) => {
     const below = await next(e)
     const text = lineText(parts)
     const room = Math.max(0, e.props.bodyColumns - text.length - 1)
-    const spark = list.slice(-Math.min(list.length, room))
+    // slice(-0) is the whole list: with no room left, there is no sparkline at all.
+    const spark = room === 0 ? [] : list.slice(-Math.min(list.length, room))
     const percentColor = hex(colorFor(list.at(-1)?.percent ?? 0))
     const dim = hex(FG4)
     const { Box, Text } = $.ui.resolve(e)

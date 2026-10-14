@@ -1,6 +1,6 @@
 {
   "name": "context-diet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

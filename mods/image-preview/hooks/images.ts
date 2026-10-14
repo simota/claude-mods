@@ -2,14 +2,38 @@
 
 export const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i
 
-const PATH_IN_TEXT = /(?:^|[\s'"`(=:,\[])((?:~|\.{1,2})?\/?[^\s'"`()<>|;,\[\]]*\.(?:png|jpe?g|webp|gif))(?=$|[\s'"`),;:\]])/gim
+// A quoted path may hold spaces: "…", '…' or `…`.
+const QUOTED = /(["'`])([^"'`\n]*?\.(?:png|jpe?g|webp|gif))\1/gi
+// A bare path holds none, and may end a sentence: `out/cat.png.`, `out/cat.png。`, `(out/cat.png)`.
+const BARE =
+  /(?:^|[\s(=:,\[「『])((?:~|\.{1,2})?\/?[^\s'"`()<>|;,\[\]「」『』。、：]*\.(?:png|jpe?g|webp|gif))(?=$|[\s'"`),;:：\].。、」』!?！？])/gim
+// The token before a bare match, when it reads as the head of a path split at a
+// space (`/tmp/a` before `b/x.jpg`): a path start, no file extension of its own.
+const SPLIT_HEAD = /(?:^|\s)((?:~|\.{1,2})?\/[^\s'"`]*) $/
+const HAS_EXTENSION = /\.\w{1,5}$/
 
 /** Image-looking paths in a command or its output, in order, each once. */
 export function findImagePaths(text: string): string[] {
+  const found: { at: number; path: string }[] = []
+  for (const match of text.matchAll(QUOTED)) {
+    if (match[2] !== undefined) found.push({ at: match.index, path: match[2] })
+  }
+  // Quoted spans are blanked out, so a space inside one is never read as a split.
+  const bare = text.replace(QUOTED, span => ' '.repeat(span.length))
+  for (const match of bare.matchAll(BARE)) {
+    let path = match[1]
+    if (path === undefined) continue
+    let start = match.index + match[0].length - path.length
+    // An unquoted path with a space in it comes out in pieces: join them back.
+    for (let head = SPLIT_HEAD.exec(bare.slice(0, start)); head?.[1] !== undefined && !HAS_EXTENSION.test(head[1]); head = SPLIT_HEAD.exec(bare.slice(0, start))) {
+      path = `${head[1]} ${path}`
+      start -= head[1].length + 1
+    }
+    found.push({ at: start, path })
+  }
   const seen = new Set<string>()
-  for (const match of text.matchAll(PATH_IN_TEXT)) {
-    const path = match[1]
-    if (path !== undefined && !/^[a-z]+:\/\//i.test(path)) seen.add(path)
+  for (const one of found.sort((a, b) => a.at - b.at)) {
+    if (!/^[a-z]+:\/\//i.test(one.path)) seen.add(one.path)
   }
   return [...seen]
 }

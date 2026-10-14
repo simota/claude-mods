@@ -1,10 +1,10 @@
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { GRUVBOX, ICONS, formatDuration, summarize } from '../hooks/summary'
+import { GRUVBOX, ICONS, summarize } from '../hooks/summary'
 
-const ENGINE_ROW = 'engine row'
+const DECORATED = 'a plugin beneath decorated this row'
 
 type RowProps = {
   tool: string
@@ -16,11 +16,16 @@ type RowProps = {
   id?: string
 }
 
-// The engine's own row: one Text, drawn when the plugin passes.
+// Beneath the plugin stands the engine: its answer is the engine's own row.
 function engineRow(on: On) {
+  on('ui.render', { component: 'ToolUse' }, () => ({ type: 'engine', ref: 0 }))
+}
+
+// A plugin beneath (image-preview, say) that drew the row itself.
+function decoratedRow(on: On) {
   on('ui.render', { component: 'ToolUse' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
-    return <Text>{ENGINE_ROW}</Text>
+    return <Text>{DECORATED}</Text>
   })
 }
 
@@ -74,20 +79,26 @@ describe('summarize', () => {
     expect(summary?.stats.map(stat => stat.text)).toEqual(['(42行)'])
   })
 
-  test('Bash shows the first line, the duration, and turns red on error', () => {
-    const ok = summarize({ tool: 'Bash', input: { command: 'bun test\necho done' }, output: { stdout: '' }, isErrored: false, durationMs: 1_234 })
+  test('Bash shows the first line and no duration, and turns red on error', () => {
+    const ok = summarize({ tool: 'Bash', input: { command: 'bun test\necho done' }, output: { stdout: '' }, isErrored: false })
     expect(ok?.label).toBe('bun test …')
-    expect(ok?.stats.map(stat => stat.text)).toEqual(['· 1.2s'])
+    expect(ok?.stats).toEqual([])
     expect(ok?.color).toBe(GRUVBOX.aqua)
 
-    const failed = summarize({ tool: 'Bash', input: { command: 'false' }, output: 'Exit code 1', isErrored: true, durationMs: 80 })
+    const failed = summarize({ tool: 'Bash', input: { command: 'false' }, output: 'Exit code 1', isErrored: true })
     expect(failed?.color).toBe(GRUVBOX.red)
-    expect(failed?.stats.map(stat => stat.text)).toEqual(['· error', '· 80ms'])
+    expect(failed?.stats.map(stat => stat.text)).toEqual(['· error'])
   })
 
-  test('a long command is cut', () => {
+  test('a long command is cut to 60 characters', () => {
     const summary = summarize({ tool: 'Bash', input: { command: 'x'.repeat(100) }, output: {}, isErrored: false })
-    expect(summary?.label.length).toBe(60)
+    expect(summary?.label).toBe(`${'x'.repeat(59)}…`)
+  })
+
+  test('a long command of emoji is cut between code points, never inside a surrogate pair', () => {
+    const summary = summarize({ tool: 'Bash', input: { command: `echo ${'😀'.repeat(70)}` }, output: {}, isErrored: false })
+    // "echo " is 5 code points, so 54 emoji fill the 59 before the ellipsis.
+    expect(summary?.label).toBe(`echo ${'😀'.repeat(54)}…`)
   })
 
   test('Grep, Glob, Agent, WebFetch, WebSearch and MCP tools', () => {
@@ -104,12 +115,6 @@ describe('summarize', () => {
     expect(summarize({ tool: 'TodoWrite', input: {}, output: {}, isErrored: false })).toBeUndefined()
     expect(summarize({ tool: 'Edit', input: {}, output: {}, isErrored: false })).toBeUndefined()
   })
-
-  test('durations read as ms, seconds and minutes', () => {
-    expect(formatDuration(450)).toBe('450ms')
-    expect(formatDuration(12_340)).toBe('12.3s')
-    expect(formatDuration(125_000)).toBe('2m5s')
-  })
 })
 
 test('the terminal draws a finished Edit as one compact line', async ($, on) => {
@@ -118,18 +123,16 @@ test('the terminal draws a finished Edit as one compact line', async ($, on) => 
   expect(found).toEqual([ICONS.edit, '/repo/src/app.ts', '+2', '−1'])
 })
 
-test('the terminal shows a Bash call with the time tool.call measured', async ($, on) => {
+test('a finished Bash call shows its command alone, no duration', async ($, on) => {
   engineRow(on)
-  const clock = mock.clock(on, { now: 0 })
-  on('tool.call', { tool: 'Bash' }, async () => {
-    await clock.advance(2_500)
-    return { result: { stdout: 'ok', stderr: '', interrupted: false } }
-  })
+  const found = await texts($, 'terminal', { tool: 'Bash', input: { command: 'bun test' }, output: { stdout: 'ok' } })
+  expect(found).toEqual([ICONS.bash, 'bun test'])
+})
 
-  await $.tool.call({ tool: 'Bash', command: 'bun test', tool_use_id: 'toolu_bash' })
-
-  const found = await texts($, 'terminal', { tool: 'Bash', input: { command: 'bun test' }, output: { stdout: 'ok' }, id: 'toolu_bash' })
-  expect(found).toEqual([ICONS.bash, 'bun test', '· 2.5s'])
+test('a row a plugin beneath decorated is left as it drew it', async ($, on) => {
+  decoratedRow(on)
+  const found = await texts($, 'terminal', { tool: 'Write', input: { file_path: '/out/cat.png', content: '' }, output: { type: 'create' } })
+  expect(found).toEqual([DECORATED])
 })
 
 test('running, interrupted, unresolved and unknown calls keep the engine row', async ($, on) => {
@@ -141,16 +144,16 @@ test('running, interrupted, unresolved and unknown calls keep the engine row', a
     { tool: 'TodoWrite', input: { todos: [] }, output: {} },
   ]
   for (const row of cases) {
-    expect(await texts($, 'terminal', row)).toEqual([ENGINE_ROW])
+    expect(await texts($, 'terminal', row)).toEqual([])
   }
 })
 
 test('every other surface keeps the engine row', async ($, on) => {
   engineRow(on)
-  expect(await texts($, 'desktop', { tool: 'Edit', input: { file_path: '/repo/src/app.ts' }, output: EDIT_OUTPUT })).toEqual([ENGINE_ROW])
+  expect(await texts($, 'desktop', { tool: 'Edit', input: { file_path: '/repo/src/app.ts' }, output: EDIT_OUTPUT })).toEqual([])
 })
 
 test('compact off keeps the engine row on the terminal', { options: { compact: false } }, async ($, on) => {
   engineRow(on)
-  expect(await texts($, 'terminal', { tool: 'Edit', input: { file_path: '/repo/src/app.ts' }, output: EDIT_OUTPUT })).toEqual([ENGINE_ROW])
+  expect(await texts($, 'terminal', { tool: 'Edit', input: { file_path: '/repo/src/app.ts' }, output: EDIT_OUTPUT })).toEqual([])
 })

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { actionsFor, parseActions, slashCommand } from './actions'
+import { actionsFor, hasTreeChanged, parseActions, slashCommand } from './actions'
 import type { Action } from './actions'
 
 const isShown = atom({ plugin: 'quick-actions', key: 'isShown' } as const, false)
@@ -9,24 +9,53 @@ const hasEdits = atom({ plugin: 'quick-actions', key: 'hasEdits' } as const, fal
 
 const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'] as const
 
+// Repo hooks and the fsmonitor stay off, and no index lock is taken: a read, nothing more.
+const GIT = ['git', '-c', 'core.fsmonitor=false', '--no-optional-locks'] as const
+const GIT_TIMEOUT_MS = 5000
+
+/** What git says of the working tree, or undefined outside a repository. */
+const treeState = async ($: EngineInterface): Promise<string | undefined> => {
+  try {
+    const cwd = await $.session.cwd()
+    const [status, diff] = await Promise.all([
+      $.process.run([...GIT, 'status', '--porcelain'], { cwd, timeoutMs: GIT_TIMEOUT_MS }),
+      $.process.run([...GIT, 'diff', '--numstat', 'HEAD'], { cwd, timeoutMs: GIT_TIMEOUT_MS }),
+    ])
+    return status.exitCode === 0 ? `${status.stdout}\0${diff.stdout}` : undefined
+  } catch {
+    return undefined // git missing or too slow: Bash edits go uncounted this turn, nothing else
+  }
+}
+
 const hide = ($: EngineInterface) => update($, isShown, () => false)
 
+/** Runs one action; a failure says so and leaves the band up to try again. */
 const runAction = async ($: EngineInterface, action: Action) => {
   await hide($)
-  if (action.mode === 'fill') {
-    await $.prompt.fill({ text: action.prompt })
-    return
+  try {
+    if (action.mode === 'fill') {
+      // Inserted where the caret is, so a draft already typed is kept.
+      const filled = await $.prompt.fill({ text: action.prompt, mode: 'insert' })
+      if (!filled.isFilled) throw new Error('入力欄に入れられませんでした')
+      return
+    }
+    const slash = slashCommand(action.prompt)
+    if (slash !== undefined) {
+      await $.command.run(slash)
+      return
+    }
+    await $.prompt.submit({ text: action.prompt, asUser: true })
+  } catch (error) {
+    await update($, isShown, () => true)
+    const reason = error instanceof Error ? error.message : String(error)
+    await $.ui.toast(`${$.plugin.name}: 「${action.label}」を実行できませんでした: ${reason}`)
   }
-  const slash = slashCommand(action.prompt)
-  if (slash !== undefined) {
-    await $.command.run(slash)
-    return
-  }
-  await $.prompt.submit({ text: action.prompt, asUser: true })
 }
 
 export const register: Register = (on, options) => {
   const { actions, error } = parseActions(options.actions)
+  // The tree as the main loop's turn started, keyed by turn.
+  const treeAtStart = new Map<string, Promise<string | undefined>>()
 
   on('session.start', ($, e, next) => {
     if (error !== undefined) {
@@ -39,6 +68,7 @@ export const register: Register = (on, options) => {
     if (e.agentId === undefined) {
       await hide($)
       await update($, hasEdits, () => false)
+      treeAtStart.set(e.turnId, treeState($))
     }
     return next(e)
   })
@@ -52,11 +82,26 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined && !e.isAborted) {
-      await update($, isShown, () => true)
+    if (e.agentId === undefined) {
+      const before = treeAtStart.get(e.turnId)
+      treeAtStart.delete(e.turnId)
+      if (!e.isAborted) {
+        if (!(await read($, hasEdits)) && hasTreeChanged(await before, await treeState($))) {
+          await update($, hasEdits, () => true)
+        }
+        await update($, isShown, () => true)
+      }
     }
     return next(e)
   })
+
+  // Typing a new prompt retires the row before anything is sent, whatever plugin above
+  // answers the submission (one that holds it back never reaches this plugin's hook).
+  on('prompt.edit', async ($, e, next) => {
+    const box = await next(e)
+    if (box.text.trim() !== '' && (await read($, isShown))) await hide($)
+    return box
+  }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
     await hide($)
@@ -68,8 +113,13 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    const { Box, Button } = $.ui.resolve(e)
     const shown = actionsFor(actions, await read($, hasEdits))
+    // A row of nothing but 閉じる offers nothing.
+    if (shown.length === 0) {
+      return next(e)
+    }
+
+    const { Box, Button } = $.ui.resolve(e)
     const mine = (
       <Box key="quick-actions" flexDirection="row" gap={2}>
         {shown.map(action => (

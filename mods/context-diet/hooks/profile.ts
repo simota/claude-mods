@@ -64,42 +64,66 @@ export function isKept(name: string, rules: Rules): boolean {
   return true
 }
 
-type Listing = { head: string[]; entries: { name: string; lines: string[] }[]; tail: string[] }
-
-const ENTRY = /^- (\S+?):(?:\s|$)/
-
-/**
- * Splits a listing into its lead-in, one entry per `- name: description` line
- * (with the lines that continue it), and whatever follows a blank line after
- * the entries. Nothing is reworded: joining the parts gives the text back.
- */
-export function parseListing(text: string): Listing {
-  const listing: Listing = { head: [], entries: [], tail: [] }
-  let part: 'head' | 'entries' | 'tail' = 'head'
-
-  for (const line of text.split('\n')) {
-    const entry = part === 'tail' ? null : ENTRY.exec(line)
-    if (entry !== null) {
-      part = 'entries'
-      listing.entries.push({ name: entry[1] ?? '', lines: [line] })
-    } else if (part === 'entries' && line.trim() !== '') {
-      listing.entries.at(-1)?.lines.push(line)
-    } else if (part === 'entries') {
-      part = 'tail'
-      listing.tail.push(line)
-    } else {
-      listing[part].push(line)
-    }
-  }
-  return listing
+type Listing = {
+  head: string[]
+  entries: { name: string; lines: string[] }[]
+  tail: string[]
+  /** False when a line looks like an entry but is not one: cutting could orphan its neighbours. */
+  isCertain: boolean
 }
 
-export type Filtered = { text: string; kept: string[]; dropped: ContextDietEntry[] }
+// A top-level entry line: `- name: description`, at column 0.
+const ENTRY = /^- (\S+?):(?:\s|$)/
+// What a skill's name looks like: lowercase words joined by - _ . and scoped by : or /.
+const SKILL_NAME = /^[a-z0-9][a-z0-9_.-]*(?:[:/][a-z0-9][a-z0-9_.-]*)*$/
 
-/** The listing with the dropped entries left out; a listing with no entries comes back as given. */
-export function filterListing(text: string, rules: Rules): Filtered {
-  const listing = parseListing(text)
-  if (listing.entries.length === 0) return { text, kept: [], dropped: [] }
+/**
+ * Splits a listing into its lead-in, one entry per `- name: description` line (with every
+ * line up to the next entry: wrapped description lines, blank lines between entries), and
+ * whatever follows a blank line after the last entry. An entry's name must look like a skill's
+ * and, when `known` is given, be one of the session's commands; a line shaped like an entry that
+ * fails that (`- Note: …` inside a description) makes the parse uncertain. Nothing is reworded:
+ * joining the parts gives the text back.
+ */
+export function parseListing(text: string, known?: ReadonlySet<string>): Listing {
+  const lines = text.split('\n')
+  const nameOf = (line: string) => ENTRY.exec(line)?.[1]
+  const isEntry = (name: string) => SKILL_NAME.test(name) && (known === undefined || known.size === 0 || known.has(name))
+
+  const starts = lines.flatMap((line, i) => {
+    const name = nameOf(line)
+    return name !== undefined && isEntry(name) ? [i] : []
+  })
+  const first = starts[0]
+  if (first === undefined) return { head: lines, entries: [], tail: [], isCertain: true }
+
+  const entries = starts.map((start, n) => {
+    const end = starts[n + 1] ?? lines.length
+    return { name: nameOf(lines[start] ?? '') ?? '', lines: lines.slice(start, end) }
+  })
+
+  // The last entry runs to the first blank line after it; from there on is what follows the list.
+  const lastEntry = entries.at(-1)!
+  const blank = lastEntry.lines.findIndex((line, i) => i > 0 && line.trim() === '')
+  const tail = blank === -1 ? [] : lastEntry.lines.splice(blank)
+
+  const head = lines.slice(0, first)
+  const strays = [...head, ...entries.flatMap(entry => entry.lines.slice(1))]
+  const isCertain = !strays.some(line => nameOf(line) !== undefined)
+
+  return { head, entries, tail, isCertain }
+}
+
+export type Filtered = { text: string; kept: string[]; dropped: ContextDietEntry[]; isUncertain: boolean }
+
+/**
+ * The listing with the dropped entries left out. A listing with no entries, or one whose
+ * shape is uncertain, comes back as given: the full listing is the safe answer.
+ */
+export function filterListing(text: string, rules: Rules, known?: ReadonlySet<string>): Filtered {
+  const listing = parseListing(text, known)
+  if (listing.entries.length === 0) return { text, kept: [], dropped: [], isUncertain: false }
+  if (!listing.isCertain) return { text, kept: listing.entries.map(entry => entry.name), dropped: [], isUncertain: true }
 
   const kept = listing.entries.filter(entry => isKept(entry.name, rules))
   const dropped = listing.entries.filter(entry => !isKept(entry.name, rules))
@@ -109,6 +133,7 @@ export function filterListing(text: string, rules: Rules): Filtered {
     text: lines.join('\n'),
     kept: kept.map(entry => entry.name),
     dropped: dropped.map(entry => ({ name: entry.name, text: entry.lines.join('\n') })),
+    isUncertain: false,
   }
 }
 

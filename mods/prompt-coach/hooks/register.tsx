@@ -2,10 +2,24 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PromptCoachHeld } from '../types'
-import { SYSTEM, clampTimeout, heldFrom, isJudgeable, parseVerdict, promptFor, remember } from './judge'
+import {
+  FOLLOW_UP,
+  SYSTEM,
+  carriesMore,
+  clampTimeout,
+  heldFrom,
+  isFollowUp,
+  isJudgeable,
+  parseVerdict,
+  promptFor,
+  remember,
+} from './judge'
 
 const held = atom({ plugin: 'prompt-coach', key: 'held' } as const, null as PromptCoachHeld | null)
 const judged = atom({ plugin: 'prompt-coach', key: 'judged' } as const, [] as string[])
+const followUps = atom({ plugin: 'prompt-coach', key: 'followUps' } as const, [] as string[])
+
+export const DEFAULT_MODEL = 'haiku'
 
 const DROP_REASON = 'prompt-coach: 依頼が曖昧なため送信を保留しました（入力欄の上の案内を参照）'
 
@@ -18,7 +32,7 @@ const release = async ($: EngineInterface): Promise<string | undefined> => {
 
 export const register: Register = (on, options) => {
   const isEnabled = options.enabled === true
-  const model = typeof options.model === 'string' && options.model !== '' ? options.model : 'claude-haiku-5-5'
+  const model = typeof options.model === 'string' && options.model !== '' ? options.model : DEFAULT_MODEL
   const timeoutMs = clampTimeout(options.timeoutMs)
 
   on('prompt.submit', async ($, e, next) => {
@@ -28,9 +42,20 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    // A new prompt from the person replaces whatever was held.
-    if ((await read($, held)) !== null) await update($, held, () => null)
+    // A new prompt while one is held: send the new one, and put the held words back in
+    // the box rather than drop them (the drop had emptied the box).
+    const before = await release($)
+    if (before !== undefined) {
+      const ran = await next(e)
+      const filled = await $.prompt.fill({ text: before, mode: 'insert' })
+      if (!filled.isFilled) await $.ui.toast(`保留していた依頼: ${before}`)
+      return ran
+    }
 
+    // Pasted items and @mentions are expanded only for what the person typed; a resend
+    // from here would lose them, so such a prompt is never held.
+    if (carriesMore(e.text, e.attachments)) return next(e)
+    if (isFollowUp(e.text, await read($, followUps))) return next(e)
     if (!isJudgeable(e.text) || (await read($, judged)).includes(e.text)) return next(e)
     await update($, judged, list => remember(list, e.text))
 
@@ -56,7 +81,10 @@ export const register: Register = (on, options) => {
     }
     const addCondition = async () => {
       const text = await release($)
-      if (text !== undefined) await $.prompt.fill({ text: `${text}\n完了条件: `, mode: 'replace' })
+      if (text === undefined) return
+      // What comes back completed is the person's answer to the coach: never held again.
+      await update($, followUps, list => remember(list, text))
+      await $.prompt.fill({ text: `${text}${FOLLOW_UP}`, mode: 'replace' })
     }
     const dismiss = async () => {
       const text = await release($)
@@ -68,13 +96,15 @@ export const register: Register = (on, options) => {
         <Text color="yellow">⚠ 送信を保留しました。足りない点: {prompt.missing.join(' / ')}</Text>
         {prompt.rewrite !== undefined && <Text dimColor>案: {prompt.rewrite}</Text>}
         <Box flexDirection="row" gap={2}>
-          <Button key="send" hotkey="1" plain onPress={sendAsIs}>
+          {/* Letters only: a bare digit in an empty box presses a band Button, and the
+              box is empty right after the hold. None shared with quick-actions. */}
+          <Button key="send" hotkey="s" plain onPress={sendAsIs}>
             このまま送る
           </Button>
-          <Button key="add" hotkey="2" plain onPress={addCondition}>
+          <Button key="add" hotkey="e" plain onPress={addCondition}>
             補足して送る
           </Button>
-          <Button key="dismiss" hotkey="x" plain dimColor role="dismiss" onPress={dismiss}>
+          <Button key="coach-dismiss" hotkey="q" plain dimColor role="dismiss" onPress={dismiss}>
             閉じる
           </Button>
         </Box>

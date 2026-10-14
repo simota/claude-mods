@@ -93,7 +93,7 @@ test('a refused call is drawn as failed, typed general-purpose', async ($, on) =
 
 test('a background agent keeps running, its time ticking, until the roster says it ended', async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
-  const agents: AgentInfo[] = []
+  const agents: AgentInfo[] = [{ id: 'a-bg', description: 'background', type: 'fork', status: 'running' } as AgentInfo]
   const statuses = beneath(on, agents)
   on('tool.call', { tool: 'Agent' }, () => ({ result: launched('a-bg', 'background') }))
 
@@ -107,7 +107,7 @@ test('a background agent keeps running, its time ticking, until the roster says 
     expect(texts.find(text => text.includes('background'))).toContain('5秒')
   }
 
-  agents.push({ id: 'a-bg', description: 'background', type: 'fork', status: 'completed' } as AgentInfo)
+  agents[0] = { id: 'a-bg', description: 'background', type: 'fork', status: 'completed' } as AgentInfo
   await clock.advance(1_000)
   expect(statuses.at(-1)).toBeUndefined()
   for (const surface of SURFACES) {
@@ -147,6 +147,106 @@ test('running agents are listed before finished ones', async ($, on) => {
     expect(texts[at('broken plan')]).toContain('1分5秒')
     expect(at('broken plan')).toBeLessThan(at('old search'))
   }
+})
+
+const BAND_PROPS = {
+  hasSurvey: false,
+  isWorking: false,
+  maxRows: 10,
+  bodyColumns: 100,
+  scroll: { offset: 0, bodyRows: 9 },
+  view: {},
+} as const
+
+const START = { cwd: '/repo', surface: 'terminal', isInteractive: true } as const
+
+test('a teammate or a remote launch is drawn as launched and untracked, never as completed', async ($, on) => {
+  mock.clock(on, { now: 0 })
+  beneath(on, [])
+  on('tool.call', { tool: 'Agent' }, ($, e) =>
+    e.description === 'scout'
+      ? { result: { status: 'teammate_spawned', agentId: 't-1', name: 'scout', model: 'opus' } as never }
+      : { result: { status: 'remote_launched', taskId: 'r-1', sessionUrl: 'https://x', description: 'cloud', prompt: 'p' } as never },
+  )
+
+  await $.tool.call({ tool: 'Agent', description: 'scout', prompt: 'p', name: 'scout' } as never)
+  await $.tool.call({ tool: 'Agent', description: 'cloud', prompt: 'p' })
+
+  for (const surface of SURFACES) {
+    const texts = await paneTexts($, surface)
+    for (const name of ['scout', 'cloud']) {
+      const row = texts.find(text => text.includes(name)) ?? ''
+      expect(row).toContain('↗')
+      expect(row).toContain('起動済み（追跡外）')
+      expect(row).not.toContain('✓')
+    }
+  }
+})
+
+test('a background run the roster drops is ended as unknown after three ticks, and the timer stops', async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const statuses = beneath(on, [])
+  on('tool.call', { tool: 'Agent' }, () => ({ result: launched('a-gone', 'vanished') }))
+
+  await $.tool.call({ tool: 'Agent', description: 'vanished', prompt: 'p', subagent_type: 'fork' })
+  await clock.advance(2_000)
+  expect(statuses.at(-1)).toBe('agents: 1 running')
+
+  await clock.advance(1_000)
+  expect(statuses.at(-1)).toBeUndefined()
+  for (const surface of SURFACES) {
+    const row = (await paneTexts($, surface)).find(text => text.includes('vanished')) ?? ''
+    expect(row).toContain('?')
+    expect(row).toContain('結果不明')
+  }
+
+  const count = statuses.length
+  await clock.advance(10_000)
+  expect(statuses.length).toBe(count)
+})
+
+test('session.start ends a foreground run whose waiting call a reload lost', async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const statuses = beneath(on, [])
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('tool.call', { tool: 'Agent' }, () => new Promise<never>(() => {}))
+
+  $.tool.call({ tool: 'Agent', description: 'orphan', prompt: 'p', subagent_type: 'Explore' }).catch(() => {})
+  await clock.advance(0)
+  expect(statuses.at(-1)).toBe('agents: 1 running')
+
+  await $.session.start(START)
+  expect(statuses.at(-1)).toBeUndefined()
+  const row = (await paneTexts($, 'terminal')).find(text => text.includes('orphan')) ?? ''
+  expect(row).toContain('結果不明')
+})
+
+test('the pane opens unasked once, and only from a fullscreen terminal', async ($, on) => {
+  mock.clock(on, { now: 0 })
+  beneath(on, [])
+  const opened: string[] = []
+  on('ui.open', ($, e) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('tool.call', { tool: 'Agent' }, () => ({ result: completed('x') }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+
+  // A desktop surface that docks panes says nothing about the terminal.
+  const desk = await $.ui.mount({ plugin: 'agent-pane', surface: 'desktop', component: 'AbovePrompt', props: BAND_PROPS, viewport: { columns: 200, rows: 50, isFullscreen: true } })
+  await desk.unmount()
+  await $.tool.call({ tool: 'Agent', description: 'one', prompt: 'p' })
+  expect(opened).toEqual([])
+
+  const term = await $.ui.mount({ plugin: 'agent-pane', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS, viewport: { columns: 200, rows: 50, isFullscreen: true } })
+  await term.unmount()
+  await $.tool.call({ tool: 'Agent', description: 'two', prompt: 'p' })
+  await $.tool.call({ tool: 'Agent', description: 'three', prompt: 'p' })
+  expect(opened).toEqual(['agent-pane'])
 })
 
 test('the pane says when nothing ran yet', async $ => {

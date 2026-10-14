@@ -7,9 +7,12 @@ const PANE = 'agent-pane'
 const TITLE = 'エージェント'
 const KEEP = 100
 const TICK_MS = 1000
+// Ticks in a row a background run may be missing from the roster before it counts as ended.
+const MISS_LIMIT = 3
 
 const runs = atom({ plugin: 'agent-pane', key: 'runs' } as const, [])
 const now = atom({ plugin: 'agent-pane', key: 'now' } as const, 0)
+const hasAutoOpened = atom({ plugin: 'agent-pane', key: 'hasAutoOpened' } as const, false)
 
 const ENDED = new Set(['completed', 'failed', 'killed'])
 
@@ -25,10 +28,17 @@ function finish(list: AgentRun[], id: string, status: AgentRunStatus, endedAt: n
   return list.map(run => (run.id === id ? { ...run, status, endedAt } : run))
 }
 
+const GLYPH: Record<Exclude<AgentRunStatus, 'running'>, { mark: string; color: string }> = {
+  completed: { mark: '✓ ', color: 'success' },
+  failed: { mark: '✗ ', color: 'error' },
+  unknown: { mark: '? ', color: 'warning' },
+  detached: { mark: '↗ ', color: 'suggestion' },
+}
+
+// The timer lives in this environment only; a reload drops it and session.start starts it again.
 let ticker: Timer | undefined
-// Learnt from drawings and commands: session.start carries no viewport.
+// Learnt from the terminal's band drawing: session.start carries no viewport.
 let isFullscreen: boolean | undefined
-let hasAutoOpened = false
 let shownStatus: string | undefined
 
 async function refreshStatus($: EngineInterface): Promise<number> {
@@ -51,7 +61,24 @@ async function tick($: EngineInterface): Promise<void> {
     const agents = await $.agent.list()
     for (const run of pending) {
       const agent = agents.find(one => one.id === run.agentId)
-      if (agent === undefined || !ENDED.has(agent.status)) continue
+      if (agent === undefined) {
+        // The engine drops a subagent's entry some time after it ends: past the limit, its end is unknown.
+        const misses = (run.misses ?? 0) + 1
+        await update($, runs, list =>
+          list.map(one =>
+            one.id !== run.id
+              ? one
+              : misses >= MISS_LIMIT
+                ? { ...one, misses, status: 'unknown', endedAt: at }
+                : { ...one, misses },
+          ),
+        )
+        continue
+      }
+      if (!ENDED.has(agent.status)) {
+        if (run.misses) await update($, runs, list => list.map(one => (one.id === run.id ? { ...one, misses: 0 } : one)))
+        continue
+      }
       const status = agent.status === 'completed' ? 'completed' : 'failed'
       await update($, runs, list => finish(list, run.id, status, at))
     }
@@ -75,6 +102,19 @@ export const register: Register = on => {
       name: 'agent-pane',
       description: 'サブエージェントの実行状況をペインに表示する',
     })
+
+    // After a reload: a foreground run's waiting call is gone, so its end cannot be learnt;
+    // a background run is followed again from the roster.
+    const at = await $.clock.now()
+    const list = await read($, runs)
+    if (list.some(run => run.status === 'running' && run.agentId === undefined)) {
+      await update($, runs, all =>
+        all.map(run => (run.status === 'running' && run.agentId === undefined ? { ...run, status: 'unknown', endedAt: at } : run)),
+      )
+    }
+    if (list.some(run => run.status === 'running' && run.agentId !== undefined)) ensureTicker($)
+    await refreshStatus($)
+
     return next(e)
   })
 
@@ -97,8 +137,8 @@ export const register: Register = on => {
     await refreshStatus($)
     ensureTicker($)
 
-    if (isFullscreen === true && !hasAutoOpened) {
-      hasAutoOpened = true
+    if (isFullscreen === true && !(await read($, hasAutoOpened))) {
+      await update($, hasAutoOpened, () => true)
       void $.ui.open({ id: PANE, title: TITLE })
     }
 
@@ -108,28 +148,29 @@ export const register: Register = on => {
     if (ran.deny !== undefined || ran.isError === true) {
       await update($, runs, list => finish(list, run.id, 'failed', endedAt))
     } else {
-      // A background launch (the model's, or a plugin's spawn record) ends later; a teammate is not followed.
+      // A background launch (the model's, or a plugin's spawn record) ends later and is followed;
+      // a teammate or a remote launch is not followed, so it is drawn as launched, never as done.
       const record = ran.result
-      const agentId = !('status' in record)
-        ? record.agentId
-        : record.status === 'async_launched'
-          ? record.agentId
-          : undefined
-      await update($, runs, list =>
-        agentId === undefined
-          ? finish(list, run.id, 'completed', endedAt)
-          : list.map(one => (one.id === run.id ? { ...one, agentId } : one)),
-      )
+      const agentId = !('status' in record) || record.status === 'async_launched' ? record.agentId : undefined
+      const status = 'status' in record ? record.status : undefined
+      if (agentId !== undefined) {
+        await update($, runs, list => list.map(one => (one.id === run.id ? { ...one, agentId } : one)))
+      } else if (status === 'completed') {
+        await update($, runs, list => finish(list, run.id, 'completed', endedAt))
+      } else {
+        await update($, runs, list => finish(list, run.id, 'detached', endedAt))
+      }
     }
     await refreshStatus($)
 
     return ran
   })
 
-  // Learned from the band's viewport, not from every command.run: a hook there would
-  // put this plugin's name on the output of every slash command.
+  // Learned from the terminal's band viewport, not from every command.run: a hook there would
+  // put this plugin's name on the output of every slash command. Another surface's layout says
+  // nothing about whether the terminal docks a pane.
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
-    if (e.viewport?.isFullscreen !== undefined) isFullscreen = e.viewport.isFullscreen
+    if (e.surface === 'terminal' && e.viewport?.isFullscreen !== undefined) isFullscreen = e.viewport.isFullscreen
     return next(e)
   })
 
@@ -151,17 +192,24 @@ export const register: Register = on => {
           </Text>
         ))}
         {finished.length > 0 && <Text bold>完了 ({finished.length})</Text>}
-        {finished.map(run => (
-          <Text key={run.id} wrap="truncate-end" dimColor={run.status === 'completed'}>
-            <Text color={run.status === 'completed' ? 'success' : 'error'}>
-              {run.status === 'completed' ? '✓ ' : '✗ '}
+        {finished.map(run => {
+          const glyph = GLYPH[run.status as Exclude<AgentRunStatus, 'running'>]
+          const detail =
+            run.status === 'detached'
+              ? '起動済み（追跡外）'
+              : run.status === 'unknown'
+                ? `結果不明 · ${formatDuration((run.endedAt ?? at) - run.startedAt)}以上`
+                : formatDuration((run.endedAt ?? at) - run.startedAt)
+          return (
+            <Text key={run.id} wrap="truncate-end" dimColor={run.status === 'completed'}>
+              <Text color={glyph.color}>{glyph.mark}</Text>
+              {run.description}{' '}
+              <Text dimColor>
+                {run.type} · {detail}
+              </Text>
             </Text>
-            {run.description}{' '}
-            <Text dimColor>
-              {run.type} · {formatDuration((run.endedAt ?? at) - run.startedAt)}
-            </Text>
-          </Text>
-        ))}
+          )
+        })}
       </Box>
     )
   })

@@ -19,25 +19,50 @@ const BAND = {
   },
 } as const
 
-type Calls = { submitted: string[]; filled: string[]; ran: string[] }
+type Calls = {
+  submitted: string[]
+  filled: string[]
+  modes: (string | undefined)[]
+  ran: string[]
+  toasts: string[]
+  // What `git status` reports; a test changes it to stand for Bash editing files.
+  tree: string
+  failCommand: boolean
+}
 
 // Stands for the engine beneath the plugin, recording what the buttons asked for.
 const engine = (on: On): Calls => {
-  const calls: Calls = { submitted: [], filled: [], ran: [] }
+  const calls: Calls = { submitted: [], filled: [], modes: [], ran: [], toasts: [], tree: '', failCommand: false }
   on('tool.call', () => ({ result: 'ok', text: 'ok' }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('session.cwd', () => ({ value: '/repo' }))
+  on('process.run', ($, e) => ({
+    value: {
+      exitCode: 0,
+      stdout: e.argv.includes('status') ? calls.tree : '',
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
   on('prompt.submit', ($, e) => {
     calls.submitted.push(e.text)
     return { text: e.text }
   })
   on('prompt.fill', ($, e) => {
     calls.filled.push(e.text)
+    calls.modes.push(e.mode)
     return { isFilled: true, box: { text: e.text, cursor: e.text.length } }
   })
   on('command.run', ($, e) => {
+    if (calls.failCommand) throw new Error(`unknown command /${e.command}`)
     calls.ran.push(`/${e.command} ${e.args}`.trim())
     return {}
+  })
+  on('ui.toast', ($, e) => {
+    calls.toasts.push(e.text)
+    return { value: undefined }
   })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Box } = $.ui.resolve(e)
@@ -47,19 +72,22 @@ const engine = (on: On): Calls => {
 }
 
 let turn = 0
-const runTurn = async ($: Engine, withEdit: boolean) => {
+const runTurn = async ($: Engine, withEdit: boolean, during?: () => void) => {
   const turnId = `t${++turn}`
   await $.turn.start({ text: 'go', turnId })
   if (withEdit) {
     await $.tool.call({ tool: 'Edit', file_path: '/tmp/a.ts', old_string: 'a', new_string: 'b' })
   }
+  during?.()
   await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId, reason: 'answer' })
 }
+
+const KEYS = ['action-t', 'action-r', 'action-m', 'action-c', 'dismiss']
 
 const labels = async ($: Engine, surface: (typeof SURFACES)[number]) => {
   const ui = await $.ui.mount({ ...BAND, surface })
   const found = []
-  for (const key of ['action-1', 'action-2', 'action-3', 'action-c', 'dismiss']) {
+  for (const key of KEYS) {
     if ((await ui.find({ key })) !== undefined) {
       found.push(key)
     }
@@ -77,10 +105,21 @@ describe('parseActions', () => {
     expect(parseActions('{').error).toBeDefined()
     expect(parseActions('[{"key":"x","label":"a","prompt":"b","mode":"submit","when":"always"}]').error).toBeDefined()
     const twice = JSON.stringify([
-      { key: '1', label: 'a', prompt: 'b', mode: 'submit', when: 'always' },
-      { key: '1', label: 'c', prompt: 'd', mode: 'fill', when: 'edits' },
+      { key: 'g', label: 'a', prompt: 'b', mode: 'submit', when: 'always' },
+      { key: 'g', label: 'c', prompt: 'd', mode: 'fill', when: 'edits' },
     ])
     expect(parseActions(twice).actions).toEqual(DEFAULT_ACTIONS)
+  })
+
+  test('digits and the keys prompt-coach uses are refused', () => {
+    for (const key of ['1', '0', 's', 'e', 'q']) {
+      const raw = JSON.stringify([{ key, label: 'a', prompt: 'b', mode: 'submit', when: 'always' }])
+      expect(parseActions(raw).error).toBeDefined()
+    }
+  })
+
+  test('the default hotkeys are letters', () => {
+    expect(DEFAULT_ACTIONS.map(a => a.key)).toEqual(['t', 'r', 'm', 'c'])
   })
 
   test('a valid list replaces the defaults', () => {
@@ -88,10 +127,11 @@ describe('parseActions', () => {
     expect(parseActions(JSON.stringify(mine))).toEqual({ actions: mine })
   })
 
-  test('slash prompts become command runs', () => {
+  test('slash prompts become command runs; a prompt opening with a path does not', () => {
     expect(slashCommand('/code-review')).toEqual({ command: 'code-review', args: '' })
     expect(slashCommand('/code-review high')).toEqual({ command: 'code-review', args: 'high' })
     expect(slashCommand('続けて')).toBeUndefined()
+    expect(slashCommand('/Users/me/x.png を説明して')).toBeUndefined()
   })
 })
 
@@ -99,16 +139,25 @@ test('a turn with edits shows every button, one without only continue', async ($
   engine(on)
   for (const surface of SURFACES) {
     await runTurn($, true)
-    expect(await labels($, surface)).toEqual(['action-1', 'action-2', 'action-3', 'action-c', 'dismiss'])
+    expect(await labels($, surface)).toEqual(['action-t', 'action-r', 'action-m', 'action-c', 'dismiss'])
     await runTurn($, false)
     expect(await labels($, surface)).toEqual(['action-c', 'dismiss'])
   }
 })
 
-test('presses submit, run the slash command, or fill the prompt', async ($, on) => {
+test('files changed through Bash count as edits', async ($, on) => {
+  const calls = engine(on)
+  calls.tree = ''
+  await runTurn($, false, () => {
+    calls.tree = ' M src/a.ts\n'
+  })
+  expect(await labels($, 'terminal')).toEqual(['action-t', 'action-r', 'action-m', 'action-c', 'dismiss'])
+})
+
+test('presses submit, run the slash command, or fill the prompt without wiping a draft', async ($, on) => {
   const calls = engine(on)
   for (const surface of SURFACES) {
-    for (const key of ['action-1', 'action-2', 'action-3', 'action-c']) {
+    for (const key of ['action-t', 'action-r', 'action-m', 'action-c']) {
       await runTurn($, true)
       const ui = await $.ui.mount({ ...BAND, surface })
       await ui.press({ key })
@@ -120,6 +169,19 @@ test('presses submit, run the slash command, or fill the prompt', async ($, on) 
   ])
   expect(calls.ran).toEqual(['/code-review', '/code-review'])
   expect(calls.filled).toEqual(['変更をコミットして', '変更をコミットして'])
+  expect(calls.modes).toEqual(['insert', 'insert'])
+})
+
+test('a failed action says so and leaves the row up', async ($, on) => {
+  const calls = engine(on)
+  calls.failCommand = true
+  await runTurn($, true)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'action-r' })
+  expect(await ui.find({ key: 'action-r' })).toBeDefined()
+  await ui.unmount()
+  expect(calls.toasts.length).toBe(1)
+  expect(calls.toasts[0]).toContain('差分レビュー')
 })
 
 test('a press hides the row', async ($, on) => {
@@ -140,6 +202,16 @@ test('the next prompt or turn hides the row', async ($, on) => {
   await runTurn($, false)
   await $.turn.start({ text: 'again', turnId: 'next' })
   expect(await labels($, 'terminal')).toEqual([])
+})
+
+const ONLY_EDITS = JSON.stringify([{ key: 'g', label: 'Go', prompt: 'go', mode: 'submit', when: 'edits' }])
+
+test('a row that would hold only 閉じる is not drawn', { options: { actions: ONLY_EDITS } }, async ($, on) => {
+  engine(on)
+  await runTurn($, false)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ key: 'dismiss' })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('what the plugins beneath draw stays under the row', async ($, on) => {

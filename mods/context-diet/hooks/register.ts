@@ -39,6 +39,17 @@ function summary(stats: ContextDietStats | null, isActive: boolean, engineTokens
     return `context-diet: ${state}\nskill 一覧はまだ届いていません（次のリクエストで反映）。`
   }
 
+  // What the last listing went out as, which a switch since then has not reached yet.
+  if (stats.isActive !== isActive) {
+    return `context-diet: ${state}\n次のリクエストで skill 一覧を組み直します（直前の一覧は ${stats.isActive ? '絞り込み済み' : '未加工'}）。`
+  }
+  if (!stats.isActive) {
+    return `context-diet: ${state}\n直前の skill 一覧は絞り込まずに送りました。`
+  }
+  if (stats.isUncertain) {
+    return `context-diet: ${state}\n直前の skill 一覧は書式を確実に読み取れなかったため、絞り込まずに送りました。`
+  }
+
   const saved = estimateTokens(stats.beforeChars - stats.afterChars)
   const engine = engineTokens === undefined ? '' : ` / engine の見積り 約 ${engineTokens} tokens`
   return [
@@ -66,21 +77,28 @@ export const register: Register = (on, options) => {
   })
 
   // The skill listing reaches the model as this attachment; only its entries are filtered.
+  // Every listing is recorded, cut or not, so the report never shows an earlier listing's cut.
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
-    if (!(await isActive($, configured))) return next(e)
+    const asSent = (stats: Omit<ContextDietStats, 'beforeChars' | 'afterChars'>, text: string) =>
+      update($, last, () => ({ ...stats, beforeChars: e.text.length, afterChars: text.length }))
+
+    if (!(await isActive($, configured))) {
+      await asSent({ isActive: false, isUncertain: false, kinds: [], kept: [], dropped: [] }, e.text)
+      return next(e)
+    }
 
     const rules: Rules = { kinds: await projectKinds($), keep, drop }
-    const filtered = filterListing(e.text, rules)
-    if (filtered.dropped.length === 0) return next(e)
-
-    await update($, last, () => ({
-      kinds: [...rules.kinds],
-      kept: filtered.kept,
-      dropped: filtered.dropped,
-      beforeChars: e.text.length,
-      afterChars: filtered.text.length,
-    }))
-    return next({ ...e, text: filtered.text })
+    // The session's commands tell a skill's entry from a line of a description shaped like one.
+    const known = await $.command
+      .list()
+      .then(commands => new Set(commands.map(command => command.name)))
+      .catch(() => undefined)
+    const filtered = filterListing(e.text, rules, known)
+    await asSent(
+      { isActive: true, isUncertain: filtered.isUncertain, kinds: [...rules.kinds], kept: filtered.kept, dropped: filtered.dropped },
+      filtered.text,
+    )
+    return filtered.dropped.length === 0 ? next(e) : next({ ...e, text: filtered.text })
   }).catch(($, e, next) => next(e)) // The full listing is the safe answer.
 
   // A dropped skill the person names is described to the model beside that prompt.

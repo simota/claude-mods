@@ -1,6 +1,6 @@
 {
   "name": "prompt-coach",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers to send it as is or add one; off by default",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",
@@ -15,7 +15,7 @@
       "type": "string",
       "title": "Judge model",
       "description": "Model alias or id that judges the prompt",
-      "default": "claude-haiku-5-5"
+      "default": "haiku"
     },
     "timeoutMs": {
       "type": "number",
