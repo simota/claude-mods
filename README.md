@@ -1,5 +1,7 @@
 # claude-mods
 
+English | [日本語](README.ja.md)
+
 Personal Claude Code mods (function-hook plugins), published as one marketplace.
 
 | Mod | What it does |
