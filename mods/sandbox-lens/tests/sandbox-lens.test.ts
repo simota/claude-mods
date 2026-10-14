@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { merge, parseDenials } from '../hooks/parse'
+import { networkEntry } from '../hooks/report'
 
 const NETWORK_OUTPUT = [
   'Post "https://api.github.com/graphql": Forbidden',
@@ -68,6 +69,23 @@ describe('parseDenials', () => {
     const once = merge([], [{ kind: 'network', target: 'a:443' }], 'curl a', 1)
     const twice = merge(once, [{ kind: 'network', target: 'a:443' }, { kind: 'file-read', target: '/x' }], 'curl a', 2)
     expect(twice.map(one => [one.target, one.count])).toEqual([['a:443', 2], ['/x', 1]])
+  })
+})
+
+describe('networkEntry', () => {
+  test('drops the port of a public host', () => {
+    expect(networkEntry('api.github.com:443')).toBe('api.github.com')
+    expect(networkEntry('8.8.8.8:53')).toBe('8.8.8.8')
+    expect(networkEntry('172.32.0.1:80')).toBe('172.32.0.1')
+  })
+
+  test('keeps the port of a loopback or private address', () => {
+    expect(networkEntry('127.0.0.1:3000')).toBe('127.0.0.1:3000')
+    expect(networkEntry('localhost:5173')).toBe('localhost:5173')
+    expect(networkEntry('[::1]:8080')).toBe('[::1]:8080')
+    expect(networkEntry('192.168.1.20:8000')).toBe('192.168.1.20:8000')
+    expect(networkEntry('10.0.0.5:5432')).toBe('10.0.0.5:5432')
+    expect(networkEntry('172.16.0.1:80')).toBe('172.16.0.1:80')
   })
 })
 

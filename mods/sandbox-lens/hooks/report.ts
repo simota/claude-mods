@@ -12,14 +12,29 @@ const LABEL: Record<SandboxLensKind, string> = {
 }
 
 function hostOf(target: string): string {
-  return target.replace(/:\d+$/, '')
+  return target.replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1')
+}
+
+/** Loopback and private addresses: their allowedDomains entry opens every port unless it names one. */
+export function isLocalHost(host: string): boolean {
+  const name = host.toLowerCase()
+  if (name === 'localhost' || name.endsWith('.localhost') || name === '::1' || name === '0.0.0.0') return true
+  const octets = name.split('.').map(Number)
+  if (octets.length !== 4 || octets.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false
+  const [a = -1, b = -1] = octets
+  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 169 && b === 254)
+}
+
+/** The allowedDomains entry to suggest: a local address keeps its port, so the hint never opens every port. */
+export function networkEntry(target: string): string {
+  return isLocalHost(hostOf(target)) ? target : hostOf(target)
 }
 
 /** Which setting would allow a denial: a hint for the person, never applied. */
 export function hintFor(denial: SandboxLensDenial): string {
   switch (denial.kind) {
     case 'network':
-      return `sandbox.network.allowedDomains に "${hostOf(denial.target)}"`
+      return `sandbox.network.allowedDomains に "${networkEntry(denial.target)}"`
     case 'file-write':
       return `sandbox.filesystem.allowWrite に "${denial.target}"`
     case 'file-read':
