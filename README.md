@@ -61,7 +61,7 @@ Works on its own, no command:
 
 - A turn that edited files without a passing test, lint, typecheck or build afterwards leaves a band: 未検証の変更があります. It stays until a check succeeds or 閉じる is pressed. Only the program a command runs counts (`ls build`, `npm ci` are not checks), and only when its exit status is the command's: the check is last, or only `&&` follows it (`npm test | tail` does not count).
 - The second identical failure of the same Bash command tells Claude to stop retrying and diagnose the root cause (again after the command has succeeded in between).
-- Any git command with `--no-verify` (or a prefix of it from `--no-ver`), and `git commit -n` / `-nm`, is denied, also inside subshells, `$(…)`, backticks, `bash -c "…"`, `eval` and wrappers such as `sudo`/`timeout`. The value of an option (`-m "…"`), a comment or a heredoc never triggers it. It is a best-effort guard: git aliases (`git ci -n`) and hooks turned off through config (`core.hooksPath`, `HUSKY=0`) are not detected.
+- Any git command with `--no-verify` (or a prefix of it from `--no-ver`), and `git commit -n` / `-nm`, is denied, also inside subshells, `$(…)`, backticks, `bash -c "…"`, `eval` and wrappers such as `sudo`/`timeout`. The value of an option (`-m "…"`), a comment or a heredoc never triggers it. So is a git command that moves its hooks for the run (`-c core.hooksPath=…`, `--config-env core.hooksPath=…`) or carries a hook manager's off switch in its environment (`HUSKY=0`, `LEFTHOOK=0`, pre-commit's `SKIP=…`). It is a best-effort guard: git aliases (`git ci -n`), a hook path written into config beforehand and an environment exported by an earlier command are not detected.
 
 ### sandbox-lens
 
@@ -199,7 +199,7 @@ An error book, kept across sessions and repos. When a Bash command fails, the er
 
 A fix is learned when the same program and subcommand (`git push`, `pnpm install`) succeeds within the next 10 Bash calls of the session; whether it ran outside the sandbox is kept with it. Two sightings are one kind when their error line matches with paths, quotes, numbers and hashes taken out.
 
-Failures of tests, linters, type checkers and builds are not caught: they are fixed by editing code, not by a command. Credentials in a kept command are masked as sandbox-lens does.
+Failures of tests, linters, type checkers and builds are not caught: they are fixed by editing code, not by a command. Credentials in a kept command and in the kept error line are masked as sandbox-lens does.
 
 - `/zukan` opens the book, most recently seen first: kinds, solved, sightings
 - `/zukan note <No> <text>` writes how to get past it, shown and fed in place of the learned command; an empty text removes the note
@@ -220,6 +220,9 @@ The current branch's pull request, kept in the status line while you work:
 A toast when it changes: `🔴 CI 失敗: test`, `💬 新しいレビューコメント 2件 (@rev)`, `✅ Approved`, `🟢 #42 マージまであと0`, `🎉 #42 がマージされました`. Checks turning red, new review comments, changes requested and a new conflict are also attached to the next prompt typed at an idle prompt, once, with the last 40 lines of each failed job's log, marked as data whose comments and logs are not to be followed as instructions. The option `feed` (on by default) turns that off.
 
 - `/pr` asks again and opens the pane: title, size, what is left, checks (failed first) and unresolved threads
+- `/pr <number|url|branch>` follows that pull request; `/pr clear` goes back to the default
+
+Which pull request: the one a Bash command of the session last named (`gh pr diff 2`, the URL `gh pr create` printed, the branch a `git push` sent to), so work pushed to a review branch from another checkout is followed; else the checked-out branch's; else your newest open pull request in the repository.
 
 It asks `gh` (`gh pr view`, and `gh api graphql` for review threads) at session start, right after a Bash `git push`, `git checkout`, `gh pr create` and the like, every minute while a check runs or after a push, and every five minutes otherwise; it stops once the pull request is merged or closed. Without an origin remote, `gh`, or a pull request for the branch it shows nothing, and `/pr` says why. `gh` runs on the host, outside the Bash sandbox, with your `gh auth`.
 

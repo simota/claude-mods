@@ -40,7 +40,7 @@ export const register: Register = on => {
   on('tool.call', { tool: 'Bash' }, ($, e, next) =>
     skipsHooks(e.command)
       ? {
-          deny: `${$.plugin.name}: --no-verify はこの環境では禁止です。フックやチェックを通る形で根本原因を直してください。`,
+          deny: `${$.plugin.name}: --no-verify などフックを止める実行はこの環境では禁止です。フックやチェックを通る形で根本原因を直してください。`,
         }
       : next(e),
   ).catch(($, e, next) =>

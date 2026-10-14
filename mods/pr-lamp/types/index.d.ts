@@ -43,10 +43,12 @@ export type PrSnapshot = {
 declare module 'claude-code' {
   interface PluginState {
     'pr-lamp': {
-      /** The pull request of the session's branch, null when there is none. */
+      /** The pull request shown, null when there is none. */
       snapshot: PrSnapshot | null
       /** Why nothing is shown (no gh, no remote, no pull request), for the pane. */
       problem: string | null
+      /** The pull request the session works on beside its branch's (a number, URL or branch), null when none. */
+      pinned: string | null
       /** What changed for the worse since the last prompt, waiting to go to Claude. */
       feed: string[]
     }

@@ -288,6 +288,25 @@ test('a different error resets the count', async ($, on) => {
   expect(session.appended().length).toBe(0)
 })
 
+test('hooks moved or switched off by config or environment are denied too', async ($, on) => {
+  engine(on)
+  for (const command of [
+    'git -c core.hooksPath=/dev/null commit -m x',
+    'git -c core.hookspath= push origin main',
+    'git --config-env core.hooksPath=EMPTY commit -m x',
+    'HUSKY=0 git commit -m x',
+    'env SKIP=lint git commit -m x',
+    'LEFTHOOK=false git push',
+  ]) {
+    const ran = await bash($, command)
+    expect(ran.deny).toContain('--no-verify')
+  }
+  for (const command of ['git -c user.name=x commit -m y', 'SKIP=1 make', 'HUSKY=1 git commit -m x']) {
+    const ran = await bash($, command)
+    expect(ran.deny).toBeUndefined()
+  }
+})
+
 test('git --no-verify is denied before the tool runs', async ($, on) => {
   const bottom = engine(on)
   for (const command of [

@@ -493,14 +493,25 @@ function clusterHasN(cluster: string): { hasN: boolean; takesNext: boolean } {
   return { hasN: false, takesNext: false }
 }
 
+// Environment assignments that switch off the hook managers git runs (husky, lefthook, pre-commit).
+const HOOK_OFF_ENV = /^(?:HUSKY=(?:0|false)|HUSKY_SKIP_HOOKS=|LEFTHOOK=(?:0|false)|SKIP=)/
+
+/** `-c core.hooksPath=…` or `--config-env core.hooksPath=…`: the hooks moved for one command. */
+const movesHooks = (option: string, value: string | undefined) =>
+  (option === '-c' || option === '--config-env') && value !== undefined && /^core\.hookspath=/i.test(value)
+
 function bypassesHooks(simple: Simple): boolean {
   const run = program(simple.words)
   if (run === undefined || run.name !== 'git') return false
   const { args } = run
+  // The words before git: `HUSKY=0 git commit`, `env SKIP=lint git commit`.
+  const before = simple.words.slice(0, simple.words.length - args.length - 1)
+  if (before.some(word => HOOK_OFF_ENV.test(word))) return true
 
   let k = 0
   while (k < args.length && (args[k] as string).startsWith('-')) {
     const option = args[k] as string
+    if (movesHooks(option, args[k + 1])) return true
     k += GIT_VALUE_OPTIONS.has(option) ? 2 : 1
   }
   const sub = args[k]
@@ -527,9 +538,11 @@ function bypassesHooks(simple: Simple): boolean {
 }
 
 /**
- * Whether a command runs git with its hooks switched off (--no-verify, a prefix of it, or
- * `git commit -n`), anywhere it runs: chained, grouped, substituted, or inside `bash -c`.
- * Best effort: a git alias (`git ci -n`) or a hook path set in config is not seen.
+ * Whether a command runs git with its hooks switched off (--no-verify, a prefix of it,
+ * `git commit -n`, `-c core.hooksPath=…`, or a hook manager's off switch in its environment),
+ * anywhere it runs: chained, grouped, substituted, or inside `bash -c`.
+ * Best effort: a git alias (`git ci -n`), a hook path written into config beforehand, or an
+ * environment exported by an earlier command is not seen.
  */
 export function skipsHooks(command: string): boolean {
   return allCommands(command).some(bypassesHooks)

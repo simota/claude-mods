@@ -7,8 +7,9 @@ import {
   contextOf,
   FAST_MS,
   jobOf,
-  logTail,
+  logEntry,
   paneLines,
+  pinOf,
   PR_FIELDS,
   repoOf,
   SLOW_MS,
@@ -23,9 +24,10 @@ const PANE = 'pr-lamp'
 const snapshot = atom({ plugin: 'pr-lamp', key: 'snapshot' } as const, null as PrSnapshot | null)
 const problem = atom({ plugin: 'pr-lamp', key: 'problem' } as const, null as string | null)
 const feed = atom({ plugin: 'pr-lamp', key: 'feed' } as const, [] as string[])
+const pinned = atom({ plugin: 'pr-lamp', key: 'pinned' } as const, null as string | null)
 
 // Commands after which the pull request is worth asking about at once.
-const MOVES = /\b(?:git\s+(?:push|checkout|switch|pull|merge|rebase)|gh\s+pr\s+(?:create|ready|merge|close|reopen|checkout|review|comment))\b/
+const MOVES = /\b(?:git\s+(?:push|checkout|switch|pull|merge|rebase)|gh\s+pr\s+(?:create|ready|merge|close|reopen|checkout|review|comment|edit))\b/
 
 /** gh's or git's answer, or why there is none. */
 async function run($: EngineInterface, argv: string[]): Promise<{ ok: true; stdout: string } | { ok: false; why: string }> {
@@ -57,15 +59,39 @@ async function nothing($: EngineInterface, why: string): Promise<void> {
   $.ui.status(undefined)
 }
 
+const isNoPr = (why: string) => /no pull requests? found|could not resolve to a pullrequest|no open pull requests/i.test(why)
+
+/**
+ * The pull request to show: the one a command of the session named (it may live on another
+ * branch than the checkout, as when work is pushed to a review branch), else the checked-out
+ * branch's, else the newest open one of the person's in this repository.
+ */
+async function view($: EngineInterface, branch: string): Promise<{ ok: true; stdout: string } | { ok: false; why: string }> {
+  const pin = await read($, pinned)
+  if (pin !== null) {
+    const named = await run($, ['gh', 'pr', 'view', pin, '--json', PR_FIELDS])
+    if (named.ok || !isNoPr(named.why)) return named
+    await update($, pinned, () => null)
+  }
+  if (branch !== '') {
+    const own = await run($, ['gh', 'pr', 'view', '--json', PR_FIELDS])
+    if (own.ok || !isNoPr(own.why)) return own
+  }
+  const mine = await run($, ['gh', 'pr', 'list', '--author', '@me', '--state', 'open', '--limit', '1', '--json', 'number'])
+  if (!mine.ok) return mine
+  const newest = (json(mine.stdout) as { number?: unknown }[] | null)?.[0]?.number
+  if (typeof newest !== 'number') return { ok: false, why: 'no pull requests found' }
+  return run($, ['gh', 'pr', 'view', String(newest), '--json', PR_FIELDS])
+}
+
 async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
   if ((await $.session.repo())?.remote == null) return nothing($, 'origin リモートがありません')
   const head = await run($, ['git', 'branch', '--show-current'])
   const branch = head.ok ? head.stdout.trim() : ''
-  if (branch === '') return nothing($, 'ブランチにいません（detached HEAD）')
 
-  const viewed = await run($, ['gh', 'pr', 'view', '--json', PR_FIELDS])
+  const viewed = await view($, branch)
   if (!viewed.ok) {
-    if (/no pull requests? found/i.test(viewed.why)) return nothing($, `⎇ ${branch} に PR はありません`)
+    if (isNoPr(viewed.why)) return nothing($, `${branch === '' ? 'detached HEAD' : `⎇ ${branch}`} に PR がなく、自分の open な PR もありません`)
     // gh failing (offline, signed out) is asked again later rather than given up on.
     await nothing($, `gh: ${viewed.why.split('\n')[0]}`)
     return schedule($, SLOW_MS)
@@ -73,7 +99,7 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
 
   const pr = json(viewed.stdout) as { number?: unknown; url?: unknown } | null
   const prev = await read($, snapshot)
-  const isSame = (s: PrSnapshot | null): s is PrSnapshot => s !== null && s.branch === branch && s.number === pr?.number
+  const isSame = (s: PrSnapshot | null): s is PrSnapshot => s !== null && s.number === pr?.number && s.url === pr?.url
   const where = repoOf(typeof pr?.url === 'string' ? pr.url : '')
   let threads: PrThread[] | undefined
   if (where !== undefined && typeof pr?.number === 'number') {
@@ -99,7 +125,7 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
         const job = jobOf(check.url)
         if (job === undefined) continue
         const log = await run($, ['gh', 'run', 'view', '--job', job, '--log-failed'])
-        if (log.ok && log.stdout.trim() !== '') logs.push(`Last lines of the failed log of ${check.name}:\n\`\`\`\n${logTail(log.stdout)}\n\`\`\``)
+        if (log.ok && log.stdout.trim() !== '') logs.push(logEntry(check.name, log.stdout))
       }
       await update($, feed, all => [...all, ...change.feed, ...logs])
     }
@@ -126,7 +152,11 @@ export const register: Register = (on, options) => {
   isFeeding = options.feed !== false
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'pr', description: '今のブランチの PR を開く（CI・レビュー・未解決スレッド・マージまでの残り）' })
+    await $.command.register({
+      name: 'pr',
+      description: 'PR を開く（CI・レビュー・未解決スレッド・マージまでの残り）。番号・URL・ブランチで追う PR を指定、clear で解除',
+      argumentHint: '[<番号|URL|ブランチ> | clear]',
+    })
     const started = await next(e)
     void refresh($, false)
     return started
@@ -134,7 +164,10 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    if (ran.deny === undefined && ran.isError !== true && MOVES.test(e.command)) void refresh($, /\bgit\s+push\b|\bgh\s+pr\s+create\b/.test(e.command))
+    if (ran.deny !== undefined || ran.isError === true) return ran
+    const pin = pinOf(e.command, ran.text ?? '')
+    if (pin !== undefined && pin !== (await read($, pinned))) await update($, pinned, () => pin)
+    if (pin !== undefined || MOVES.test(e.command)) void refresh($, /\bgit\s+push\b|\bgh\s+pr\s+create\b/.test(e.command))
     return ran
   }).catch(($, e, next) => next(e))
 
@@ -148,11 +181,15 @@ export const register: Register = (on, options) => {
     return next({ ...e, context: [...(e.context ?? []), contextOf(s, waiting)] })
   }).catch(($, e, next) => next(e))
 
-  on('command.run', { command: 'pr' }, async $ => {
+  on('command.run', { command: 'pr' }, async ($, e) => {
+    // `/pr 12`, `/pr <url>` or `/pr <branch>` follows that one; `/pr clear` goes back to the branch's.
+    const arg = e.args.trim()
+    if (arg === 'clear') await update($, pinned, () => null)
+    else if (arg !== '') await update($, pinned, () => arg.replace(/^#/, ''))
     await refresh($, false)
     await $.ui.open({ id: PANE, title: 'Pull request' })
     const s = await read($, snapshot)
-    return { text: s === null ? `pr-lamp: ${(await read($, problem)) ?? 'PR はありません'}` : `pr-lamp: ${statusOf(s)}` }
+    return { text: s === null ? (await read($, problem)) ?? 'PR はありません' : statusOf(s) }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

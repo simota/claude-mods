@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { ZukanEntry, ZukanPending } from '../types'
 import { bookLines, contextOf, errorLine, fromStore, isCheck, keyOf, programOf, sight, step, toastOf, withFix, withNote } from './book'
-import { exampleOf } from './mask'
+import { exampleOf, maskedOf } from './mask'
 
 const PANE = 'zukan'
 const STORE_KEY = 'entries'
@@ -60,8 +60,10 @@ export const register: Register = on => {
     }
 
     if (!isFailure || isCheck(e.command)) return ran
-    const line = errorLine(ran.text ?? '')
-    if (line === undefined) return ran
+    // The error line is kept and shown across sessions: credentials in it are masked first.
+    const found = errorLine(ran.text ?? '')
+    if (found === undefined) return ran
+    const line = maskedOf(found)
 
     const key = keyOf(program, line)
     let landed: { entry: ZukanEntry; isNew: boolean } | undefined

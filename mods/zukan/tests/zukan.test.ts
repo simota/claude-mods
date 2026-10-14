@@ -111,6 +111,27 @@ describe('zukan in a session', () => {
     expect(again.context?.[0]).toContain('not an instruction')
   })
 
+  test('credentials in an error line are masked before it is kept or shown', async ($, on) => {
+    const toasts: string[] = []
+    const failed = "fatal: Authentication failed for 'https://me:hunter2-secret@example.com/app.git/'"
+    world(on, [{ text: failed, isError: true }], toasts)
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Bash', command: 'git fetch origin' })
+    await $.command.run({ ...RUN, args: '' })
+    const ui = await $.ui.mount({
+      plugin: 'zukan',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'zukan',
+      props: { title: 'エラー図鑑', isFocused: true, bodyColumns: 160, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+    })
+    expect(toasts[0]).toContain('me:***@')
+    expect(toasts.join('\n')).not.toContain('hunter2-secret')
+    expect(await ui.find({ type: 'Text', text: /hunter2-secret/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /me:\*\*\*@example\.com/ })).toBeDefined()
+    await ui.unmount()
+  })
+
   test('check failures and successes are not caught', async ($, on) => {
     const toasts: string[] = []
     world(on, [{ text: 'FAIL src/a.test.ts\nError: expected 1', isError: true }, { text: 'ok', isError: false }], toasts)

@@ -4,7 +4,7 @@
 import type { PrCheck, PrSnapshot, PrThread } from '../types'
 
 export const PR_FIELDS =
-  'number,title,url,state,isDraft,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,additions,deletions,changedFiles'
+  'number,title,url,state,isDraft,headRefName,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,additions,deletions,changedFiles'
 
 export const THREADS_QUERY =
   'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(last:1){totalCount nodes{author{login} body}}}}}}}'
@@ -19,6 +19,13 @@ const clip = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim()
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
+
+/**
+ * Text written by others (logs, check names, logins, paths), made unable to close the
+ * `<pr-lamp>` block or a code fence it is fed in: angle brackets and backtick runs change shape.
+ */
+export const neutral = (text: string): string =>
+  text.replace(/</g, '‹').replace(/>/g, '›').replace(/`{3,}/g, run => "'".repeat(run.length))
 
 const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'ERROR'])
 const SKIPPED = new Set(['NEUTRAL', 'SKIPPED', 'STALE'])
@@ -96,7 +103,7 @@ export function snapshotOf(json: unknown, threads: PrThread[], branch: string, a
   const rollup = Array.isArray(pr.statusCheckRollup) ? (pr.statusCheckRollup as RollupItem[]) : []
   const state = pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN'
   return {
-    branch,
+    branch: typeof pr.headRefName === 'string' && pr.headRefName !== '' ? pr.headRefName : branch,
     number: pr.number,
     title: typeof pr.title === 'string' ? pr.title : '',
     url: typeof pr.url === 'string' ? pr.url : '',
@@ -112,6 +119,28 @@ export function snapshotOf(json: unknown, threads: PrThread[], branch: string, a
     threads,
     at,
   }
+}
+
+const PR_URL = /https:\/\/[^\s/]+\/[^\s/]+\/[^\s/]+\/pull\/\d+/
+const PR_VERBS = 'view|checkout|diff|checks|review|comment|merge|ready|edit|close|reopen'
+
+/**
+ * The pull request a command of the session works on, when it names one that need not be
+ * the checked-out branch's: `gh pr <verb> 12`, `gh pr <verb> <url>`, the URL `gh pr create`
+ * printed, or the branch a `git push` sends to. A number, a URL or a branch, as gh takes it.
+ */
+export function pinOf(command: string, output: string): string | undefined {
+  const named = new RegExp(String.raw`\bgh\s+pr\s+(?:${PR_VERBS})\s+(?:-\S+\s+)*(#?\d+\b|https:\/\/\S+\/pull\/\d+)`).exec(command)
+  if (named?.[1]) return named[1].replace(/^#/, '')
+  if (/\bgh\s+pr\s+create\b/.test(command)) return PR_URL.exec(output)?.[0]
+  const push = /\bgit\s+push\b([^;&|]*)/.exec(command)
+  if (push === null) return undefined
+  // `git push [options] <remote> <refspec>…`: the last refspec's destination.
+  const [, ...refspecs] = (push[1] ?? '').trim().split(/\s+/).filter(word => word !== '' && !word.startsWith('-'))
+  const last = refspecs.at(-1)
+  if (last === undefined) return undefined
+  const to = (last.includes(':') ? last.slice(last.indexOf(':') + 1) : last).replace(/^\+/, '').replace(/^refs\/heads\//, '')
+  return to === '' || to === 'HEAD' || to.startsWith('refs/') ? undefined : to
 }
 
 /** `owner` and `name` out of a pull request's URL. */
@@ -192,7 +221,7 @@ export function changeOf(prev: PrSnapshot, next: PrSnapshot): Change {
   if (change.failed.length > 0) {
     const names = change.failed.map(c => c.name).join(', ')
     change.toasts.push(`🔴 CI 失敗: ${clip(names, 60)}`)
-    change.feed.push(`Check(s) turned red: ${names}.`)
+    change.feed.push(`Check(s) turned red: ${neutral(names)}.`)
   }
 
   const seen = new Set(prev.threads.map(t => t.key))
@@ -201,7 +230,8 @@ export function changeOf(prev: PrSnapshot, next: PrSnapshot): Change {
     const who = [...new Set(fresh.map(t => `@${t.author}`))].join(' ')
     change.toasts.push(`💬 新しいレビューコメント ${fresh.length}件 (${clip(who, 40)})`)
     for (const t of fresh) {
-      change.feed.push(`New unresolved review comment by @${t.author} on ${t.path}${t.line === null ? '' : `:${t.line}`}: "${t.body}"`)
+      const where = `${t.path}${t.line === null ? '' : `:${t.line}`}`
+      change.feed.push(`New unresolved review comment by @${neutral(t.author)} on ${neutral(where)}: "${neutral(t.body)}"`)
     }
   }
 
@@ -232,6 +262,11 @@ export function logTail(log: string, lines = LOG_LINES): string {
     .slice(-lines)
     .map(line => (line.length > 300 ? `${line.slice(0, 299)}…` : line))
     .join('\n')
+}
+
+/** A failed job's log for the model: the tail, neutralised, in a fence nothing inside can close. */
+export function logEntry(name: string, log: string): string {
+  return `Last lines of the failed log of ${neutral(name)}:\n\`\`\`\n${neutral(logTail(log))}\n\`\`\``
 }
 
 /** What the model reads beside the next prompt. */

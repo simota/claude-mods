@@ -49,12 +49,17 @@ const SECRETS: Mask[] = [
 const ATTACHED_P = /\b(?:mysql|mariadb|mysqldump|mysqladmin)\b/
 const SPACED_P = /\bsshpass\b|\b(?:docker|podman|nerdctl|helm)\b(?:\s+\S+)*?\s+login\b/
 
-/** The command as an example: credentials masked, cut to a line. */
-export function exampleOf(command: string): string {
-  let masked = SECRETS.reduce((text, [pattern, mask]) => text.replace(pattern, mask as Replacer), command)
+/** The text with the credentials it carries masked: a command, or a line of its output. */
+export function maskedOf(text: string): string {
+  let masked = SECRETS.reduce((all, [pattern, mask]) => all.replace(pattern, mask as Replacer), text)
   if (ATTACHED_P.test(masked)) masked = masked.replace(/(\s-p)(?!\s)\S+/g, '$1***')
   if (SPACED_P.test(masked)) masked = masked.replace(/(\s-p\s+)\S+/g, '$1***')
-  masked = masked.replace(/ {2,}/g, ' ')
+  return masked
+}
+
+/** The command as an example: credentials masked, cut to a line. */
+export function exampleOf(command: string): string {
+  const masked = maskedOf(command).replace(/ {2,}/g, ' ')
   return masked.length > EXAMPLE_CHARS ? `${masked.slice(0, EXAMPLE_CHARS)}…` : masked
 }
 
