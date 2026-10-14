@@ -20,7 +20,10 @@ const held = atom({ plugin: 'prompt-coach', key: 'held' } as const, null as Prom
 const judged = atom({ plugin: 'prompt-coach', key: 'judged' } as const, [] as string[])
 const followUps = atom({ plugin: 'prompt-coach', key: 'followUps' } as const, [] as string[])
 
-export const DEFAULT_MODEL = 'haiku'
+export const DEFAULT_MODEL = 'claude-haiku-5-5'
+
+/** One per guess, in order: letters (a bare digit fires on an empty box), none taken by s/e/q or quick-actions. */
+export const OPTION_HOTKEYS = ['a', 'b', 'd'] as const
 
 const DROP_REASON = 'prompt-coach: 依頼が曖昧なため送信を保留しました（入力欄の上の案内を参照）'
 
@@ -64,7 +67,7 @@ export const register: Register = (on, options) => {
     await update($, judged, list => remember(list, e.text))
 
     const reply = await $.model.complete(
-      { model, system: SYSTEM, prompt: promptFor(e.text), maxTokens: 300, effort: 'low', timeoutMs },
+      { model, system: SYSTEM, prompt: promptFor(e.text), maxTokens: 600, effort: 'low', timeoutMs },
       { signal: next.signal },
     )
     const verdict = reply.isAnswered ? parseVerdict(reply.text) : undefined
@@ -90,6 +93,12 @@ export const register: Register = (on, options) => {
       await update($, followUps, list => remember(list, text))
       await $.prompt.fill({ text: `${text}${FOLLOW_UP}`, mode: 'replace' })
     }
+    // A guess goes into the box to edit and send, and is not held again once sent.
+    const choose = (option: string) => async () => {
+      if ((await release($)) === undefined) return
+      await update($, followUps, list => remember(list, option))
+      await $.prompt.fill({ text: option, mode: 'replace' })
+    }
     const dismiss = async () => {
       const text = await release($)
       if (text !== undefined) await $.prompt.fill({ text, mode: 'replace' })
@@ -98,7 +107,16 @@ export const register: Register = (on, options) => {
     const mine = (
       <Box key="prompt-coach" flexDirection="column">
         <Text color="yellow">⚠ 送信を保留しました。足りない点: {prompt.missing.join(' / ')}</Text>
-        {prompt.rewrite !== undefined && <Text dimColor>案: {prompt.rewrite}</Text>}
+        {prompt.options.length > 0 && (
+          <Box flexDirection="column">
+            <Text dimColor>もしかして:</Text>
+            {prompt.options.map((option, index) => (
+              <Button key={`option-${index}`} hotkey={OPTION_HOTKEYS[index]} plain onPress={choose(option.prompt)}>
+                {option.label}: {option.prompt}
+              </Button>
+            ))}
+          </Box>
+        )}
         <Box flexDirection="row" gap={2}>
           {/* Letters only: a bare digit in an empty box presses a band Button, and the
               box is empty right after the hold. None shared with quick-actions. */}

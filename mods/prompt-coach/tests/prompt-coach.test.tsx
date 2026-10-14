@@ -45,7 +45,7 @@ const engine = (on: On, isSlow = false): Calls => {
     if (isSlow) return { value: { isAnswered: false, reason: 'aborted', usage: USAGE } as const }
     const isVague = e.prompt.includes(VAGUE)
     const text = isVague
-      ? '{"ambiguous": true, "missing": ["対象の範囲", "完了条件"], "rewrite": "<対象> を <完了条件> になるよう整えて"}'
+      ? '{"ambiguous": true, "missing": ["対象の範囲", "完了条件"], "options": [{"label": "既存に揃える", "prompt": "このページを既存ページの余白と配色に揃えて"}, {"label": "読みやすく", "prompt": "このページの見出し階層を整理して"}]}'
       : '{"ambiguous": false, "missing": []}'
     return { value: { isAnswered: true, text, usage: USAGE } as const }
   })
@@ -70,15 +70,32 @@ const typed = ($: Engine, text: string, extra: Record<string, unknown> = {}) =>
 
 describe('judge helpers', () => {
   test('parseVerdict reads JSON around prose and rejects anything unclear', () => {
-    expect(parseVerdict('ok {"ambiguous": true, "missing": ["a", "b", "c"], "rewrite": "r"}')).toEqual({
+    expect(parseVerdict('ok {"ambiguous": true, "missing": ["a", "b", "c"], "options": [{"label": "L", "prompt": "P"}]}')).toEqual({
       isAmbiguous: true,
       missing: ['a', 'b'],
-      rewrite: 'r',
+      options: [{ label: 'L', prompt: 'P' }],
     })
-    expect(parseVerdict('{"ambiguous": false}')).toEqual({ isAmbiguous: false, missing: [] })
+    expect(parseVerdict('{"ambiguous": false}')).toEqual({ isAmbiguous: false, missing: [], options: [] })
     expect(parseVerdict('maybe')).toBeUndefined()
     expect(parseVerdict('{"ambiguous": "yes"}')).toBeUndefined()
     expect(parseVerdict('{broken')).toBeUndefined()
+  })
+
+  test('parseVerdict keeps at most three well-formed options', () => {
+    const options = [
+      { label: '1', prompt: 'p1' },
+      'bare',
+      { label: ' ', prompt: 'blank label' },
+      { label: '2', prompt: 7 },
+      { label: ' 3 ', prompt: ' p3 ' },
+      { label: '4', prompt: 'p4' },
+      { label: '5', prompt: 'p5' },
+    ]
+    expect(parseVerdict(JSON.stringify({ ambiguous: true, missing: [], options }))?.options).toEqual([
+      { label: '1', prompt: 'p1' },
+      { label: '3', prompt: 'p3' },
+      { label: '4', prompt: 'p4' },
+    ])
   })
 
   test('only mid-length prompts that are not commands are judged', () => {
@@ -124,7 +141,9 @@ test('an ambiguous prompt is held back once, with the band', ON, async ($, on) =
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...BAND, surface })
     expect(await ui.find({ type: 'Text', text: /対象の範囲 \/ 完了条件/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /案: <対象>/ })).toBeDefined()
+    expect(await ui.find({ key: 'option-0' })).toBeDefined()
+    expect(await ui.find({ key: 'option-1' })).toBeDefined()
+    expect(await ui.find({ key: 'option-2' })).toBeUndefined()
     expect(await ui.find({ key: 'send' })).toBeDefined()
     await ui.unmount()
   }
@@ -276,10 +295,26 @@ test('the judge reads the request as a JSON string, never as markup', ON, async 
   expect(calls.judged[0]).not.toContain('<request>')
 })
 
-test('the default judge model is the haiku alias', ON, async ($, on) => {
+test('the default judge model is Haiku 5.5', ON, async ($, on) => {
   const calls = engine(on)
   await typed($, CLEAR)
-  expect(calls.models).toEqual(['haiku'])
+  expect(calls.models).toEqual(['claude-haiku-5-5'])
+})
+
+test('a guess goes into the box, and sending it is not held again', ON, async ($, on) => {
+  const calls = engine(on)
+  await typed($, VAGUE)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'option-1' })
+  expect(await ui.find({ key: 'send' })).toBeUndefined()
+  await ui.unmount()
+  expect(calls.filled).toEqual(['このページの見出し階層を整理して'])
+  expect(calls.modes).toEqual(['replace'])
+  const sent = 'このページの見出し階層を整理して。h1 は1つだけ'
+  const result = await typed($, sent)
+  expect(result.drop).toBeUndefined()
+  expect(calls.judged.length).toBe(1)
+  expect(calls.entered).toEqual([sent])
 })
 
 test('band buttons use letter hotkeys none of which quick-actions uses', ON, async ($, on) => {
@@ -287,9 +322,9 @@ test('band buttons use letter hotkeys none of which quick-actions uses', ON, asy
   await typed($, VAGUE)
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const keys = []
-  for (const key of ['send', 'add', 'coach-dismiss']) keys.push((await ui.find({ key }))?.props.hotkey)
+  for (const key of ['option-0', 'option-1', 'send', 'add', 'coach-dismiss']) keys.push((await ui.find({ key }))?.props.hotkey)
   await ui.unmount()
-  expect(keys).toEqual(['s', 'e', 'q'])
+  expect(keys).toEqual(['a', 'b', 's', 'e', 'q'])
 })
 
 test('what the plugins beneath draw stays under the row', ON, async ($, on) => {

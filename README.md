@@ -19,7 +19,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `self-audit` | After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt |
 | `context-diet` | Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved |
 | `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
-| `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers to send it as is or add one; off by default |
+| `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; off by default |
 
 ## Install
 
@@ -165,8 +165,9 @@ Off by default. When on, the skill listing is trimmed to what the project kind n
 
 ### prompt-coach
 
-Off by default. When on, a typed prompt that looks ambiguous (no done-condition and an unclear target, or only evaluative words like いい感じ) is held back, and a band shows what is missing with a suggested rewrite:
+Off by default. When on, a typed prompt that looks ambiguous (no done-condition and an unclear target, or only evaluative words like いい感じ) is held back, and a band shows what is missing with up to three guesses at what it meant (judged along the lines of the `clarify` skill: the likeliest reading first, each a different deliverable with a checkable done-condition):
 
+- `a` / `b` / `d`: a guess goes into the prompt to edit and send (not held again)
 - `s: このまま送る` sends it unchanged
 - `e: 補足して送る` puts it back with `完了条件: ` to fill in (not held again)
 - `q: 閉じる` puts it back in the prompt
@@ -178,7 +179,7 @@ Slash commands, prompts under 12 or over 1500 characters, prompts with any attac
 | Option | Default | |
 | --- | --- | --- |
 | `enabled` | `false` | |
-| `model` | `haiku` | Judging model (alias or id) |
+| `model` | `claude-haiku-5-5` | Judging model (alias or id) |
 | `timeoutMs` | `3000` | 500 to 3000 |
 
 ## Develop

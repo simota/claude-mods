@@ -1,7 +1,13 @@
+/** One guess at what an ambiguous prompt meant: a short label and the request rewritten. */
+export type PromptCoachOption = {
+  label: string
+  prompt: string
+}
+
 export type PromptCoachHeld = {
   text: string
   missing: string[]
-  rewrite?: string
+  options: PromptCoachOption[]
 }
 
 declare module 'claude-code' {
