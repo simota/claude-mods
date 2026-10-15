@@ -84,7 +84,10 @@ export const register: Register = on => {
     const fresh: LedgerEntry[] = found.map((one, i) => ({
       ...one,
       label: maskedOf(one.label),
-      undo: maskedOf(one.undo),
+      // A failed call changed nothing to undo, and its output may name what was there before (a
+      // PR that already existed). A push may have moved some refs before others were rejected:
+      // its undo names only the refs it printed as moved.
+      undo: isOk || one.kind === 'push' ? maskedOf(one.undo) : '失敗したため取り消すものはない（途中まで反映されていないかは確認）',
       id: `${e.tool_use_id ?? at}:${i}`,
       at,
       source: source.replace(/\s+/g, ' ').slice(0, 300),

@@ -35,10 +35,15 @@ describe('ledger', () => {
     expect(classifyCommand('git push origin main', `${moved}\n${moved.replace('me/app', 'me/mirror')}`)[0]?.undo).not.toContain('1a2b3c4')
   })
 
-  test('a push behind git options or cd undoes in the same repository; option values and redirects are not the remote', () => {
+  test('a push in another directory names the remote git printed; option values and redirects are not the remote', () => {
     const moved = 'To github.com:me/app.git\n   1a2b3c4..5d6e7f8  main -> main'
-    expect(classifyCommand('git -C app push origin main', moved)[0]?.undo).toBe('git -C app push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
-    expect(classifyCommand('cd app && git push origin feat', 'To github.com:me/app.git\n * [new branch]      feat -> feat')[0]?.undo).toBe('git -C app push origin --delete feat')
+    const created = 'To github.com:me/app.git\n * [new branch]      feat -> feat'
+    // A remote name means a different remote from another directory: the URL means the same one anywhere.
+    expect(classifyCommand('git -C app push origin main', moved)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 github.com:me/app.git 1a2b3c4:main')
+    for (const command of ['cd app && git push origin feat', 'cd app && cd - && git push origin feat', '(cd app && git push origin feat)', 'pushd app && git push origin feat', 'GIT_DIR=x/.git git push origin feat']) {
+      expect(classifyCommand(command, created)[0]?.undo).toBe('git push github.com:me/app.git --delete feat')
+    }
+    expect(classifyCommand('(cd app && git push origin feat)', created)[0]?.label).toBe('git push origin feat')
     expect(classifyCommand('git -c core.sshCommand=ssh push origin main', moved)[0]?.kind).toBe('push')
     expect(classifyCommand('git push -o ci.skip origin main', moved)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
     expect(classifyCommand('git push 2>&1 | tail -5', moved)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 github.com:me/app.git 1a2b3c4:main')
@@ -67,6 +72,23 @@ describe('ledger', () => {
     expect(undo('helm install web ./chart -n prod')).toBe('helm uninstall web -n prod')
     expect(undo('helm upgrade --install web ./chart --namespace prod')).toBe('helm history web --namespace prod → helm rollback web <revision> --namespace prod（初回 install なら helm uninstall web --namespace prod）')
     expect(classifyCommand('helm uninstall web', '')[0]?.reversibility).toBe('hard')
+    // A flag not known to take or not take a value: the release cannot be told, so none is named.
+    expect(undo('helm install --replace web nginx -n prod')).toBe('helm uninstall web -n prod')
+    expect(undo('helm install --some-new-flag web nginx -n prod')).toBe('helm uninstall <release> -n prod')
+    expect(undo('helm install web nginx --set a=b -f v.yaml')).toBe('helm uninstall web')
+    expect(undo('gh release create --unknown-flag v1.0')).toMatch(/^gh release delete <タグ>/)
+    // A production deploy is never undone by removing it.
+    expect(undo('vercel deploy --target=production', 'https://proj.vercel.app')).toContain('rollback')
+    expect(undo('vercel deploy --target production', 'https://proj.vercel.app')).toContain('rollback')
+    expect(undo('vercel deploy', 'Preview: https://proj-abc123.vercel.app')).toBe('vercel remove https://proj-abc123.vercel.app（プレビューのみ、本番は変わっていない）')
+    expect(undo('vercel deploy', 'https://proj.vercel.app')).toBe('vercel remove <プレビューURL>（プレビューのみ、本番は変わっていない）')
+    none('vercel --version')
+    // GitHub's hint after a push is not the PR; a fetch after the push is not a ref it moved.
+    const chained = classifyCommand('git push -u origin feat && gh pr create --fill', 'remote: Create a pull request for feat:\nremote:   https://github.com/o/r/pull/new/feat\nTo github.com:o/r.git\n * [new branch]      feat -> feat\nhttps://github.com/o/r/pull/9')
+    expect(chained[1]?.undo).toBe('gh pr close https://github.com/o/r/pull/9')
+    expect(undo('git push origin main && git fetch upstream', 'To github.com:me/app.git\n   1a2b3c4..5d6e7f8  main -> main\nFrom github.com:up/app\n   3333333..4444444  main -> upstream/main')).toBe(
+      'git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main',
+    )
   })
 
   test('knows GitHub, publishing, deploys and infrastructure', () => {
@@ -137,6 +159,7 @@ function world(on: On): World {
     const command = (e as unknown as { command?: string }).command
     if (command === 'git push origin main') return { result: {}, text: PUSH }
     if (command === 'npm publish') return { result: {}, text: 'npm error 403 Forbidden', isError: true }
+    if (command === 'gh pr create --fill') return { result: {}, text: 'a pull request for branch "x" into branch "main" already exists:\nhttps://github.com/o/r/pull/7', isError: true }
     return { result: {}, text: 'ok' }
   })
   return w
@@ -172,6 +195,15 @@ describe('side-effect-ledger in a session', () => {
       await ui.unmount()
     })
   }
+
+  test('a call that failed is given no undo that would act on what was there before', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill' })
+    const [entry] = w.kept['ledger:/w'] as { undo: string; isOk: boolean }[]
+    expect(entry?.isOk).toBe(false)
+    expect(entry?.undo).not.toContain('gh pr close')
+  })
 
   test('keeps no credential a command carried', async ($, on) => {
     const w = world(on)
