@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, trust label, visual diff, journey trace, token lens",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, trust label, visual diff, journey trace, token lens",
   "owner": {
     "name": "simota"
   },
@@ -19,11 +19,6 @@
       "name": "sandbox-lens",
       "source": "./mods/sandbox-lens",
       "description": "Tallies sandbox denials seen in Bash output and reports them with /sandbox-report"
-    },
-    {
-      "name": "battle-report",
-      "source": "./mods/battle-report",
-      "description": "RPG-style battle report after each turn: tokens, edits, lines changed and tool errors, as a toast, a notification and a sound"
     },
     {
       "name": "skill-hint",

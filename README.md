@@ -9,7 +9,6 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `agent-pane` | Live pane of the session's subagents: running ones with elapsed time, finished ones with result and duration |
 | `done-gate` | Flags unverified edits, stops repeated failing commands, and blocks git --no-verify |
 | `sandbox-lens` | Tallies sandbox denials seen in Bash output and reports them with /sandbox-report |
-| `battle-report` | RPG-style battle report after each turn: tokens, edits, lines changed and tool errors, as a toast, a notification and a sound |
 | `skill-hint` | Suggests up to three matching skills above the prompt from what was typed; never invokes them. |
 | `todo-agent` | Collects #TODO(agent) follow-ups from Claude's replies into a per-project list with a /todos pane. |
 | `context-meter` | Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost |
@@ -83,16 +82,6 @@ Works on its own, no command:
 - `/sandbox-report reset` clears the record.
 - Hints only: it never changes sandbox settings. A loopback or private address keeps its port in the hint (`127.0.0.1:3000`), since an entry without a port opens every port.
 - Only a `<sandbox_violations>` block that ends the output, and `Operation not permitted` lines a program printed about itself, are read; a block inside a shown file or page is ignored. Credentials in the example command (tokens, passwords, `Authorization`/`Cookie` headers, URL userinfo, keys in env assignments) are masked. Each section shows the top 10; when the record is full (200), the least recently seen entry gives way.
-
-### battle-report
-
-After each turn: a toast, a native notification and a sound with that turn's tokens (including cache reads and writes), edits, lines changed by its Edit/Write calls (changes made through Bash are not counted; no git command is run) and tool errors. A turn that ends in an API error or refusal is reported as failed with Basso; an interrupted turn is not reported. Calls refused by a hook, a permission rule or the person are not counted as errors.
-
-| Option | Default | |
-| --- | --- | --- |
-| `sound` | `true` | Glass for a clean turn, Basso with tool errors (afplay, macOS) |
-| `notify` | `true` | Native notification besides the toast |
-| `quietTurns` | `true` | Skip turns that called no tool |
 
 ### skill-hint
 
@@ -252,7 +241,7 @@ The repository as a map under fog, cleared as Claude works through it:
       ● lamp.ts  +43 −2  編集 4回
       ✗ register.tsx  +59 −16  編集 6回  エラー 1  ★
   ▸ loopback/  ○●
-  ░ agent-pane/  ░ battle-report/  ░ browser-cam/  …8
+  ░ agent-pane/  ░ browser-cam/  ░ context-diet/  …8
 ⚠ 編集したファイルを import しているが未読: mods/pr-lamp/tests/pr-lamp.test.ts
 ```
 

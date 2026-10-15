@@ -9,7 +9,6 @@
 | `agent-pane` | セッションのサブエージェントをペインで表示。実行中は経過時間、完了したものは結果と所要時間 |
 | `done-gate` | 未検証の変更を指摘し、同じ失敗の繰り返しを止め、`git --no-verify` を拒否 |
 | `sandbox-lens` | Bash 出力に現れた sandbox の拒否を集計し、`/sandbox-report` で報告 |
-| `battle-report` | ターンごとに RPG 風の戦果報告（トークン、編集数、増減行数、ツールエラー）をトースト・通知・効果音で |
 | `skill-hint` | 入力したプロンプトに合う skill を最大 3 件、入力欄の上に提案（自動では起動しない） |
 | `todo-agent` | Claude の返答にある `#TODO(agent)` をプロジェクトごとに集め、`/todos` ペインで管理 |
 | `context-meter` | 入力欄の上に、ターンごとのコンテキスト使用率のスパークライン（Gruvbox 配色）とトークン数・コスト |
@@ -83,16 +82,6 @@ echo '{"enabled":"true"}' | claude plugin configure <mod>@simota-mods --values-s
 - `/sandbox-report reset` で記録を消去します。
 - ヒントを出すだけで、sandbox の設定は変更しません。loopback やプライベートアドレスはポート付きでヒントに出します（例: `127.0.0.1:3000`）。ポートなしで登録すると全ポートが開くためです。
 - 読むのは、出力の末尾にある `<sandbox_violations>` ブロックと、プログラム自身が出した `Operation not permitted` の行だけです。表示したファイルやページの中にあるブロックは無視します。コマンド例に含まれる認証情報（トークン、パスワード、`Authorization`/`Cookie` ヘッダ、URL のユーザー情報、環境変数の代入に含まれる鍵）は伏せ字にします。各セクションは上位 10 件を表示し、記録が上限（200 件）に達すると、最後に見てから最も時間が経ったものが入れ替わります。
-
-### battle-report
-
-ターンが終わるたびに、そのターンのトークン数（キャッシュの読み書きを含む）、編集数、Edit/Write による増減行数（Bash での変更は数えず、git コマンドも実行しません）、ツールエラー数を、トースト・OS 通知・効果音で知らせます。API エラーや拒否で終わったターンは Basso で失敗として報告し、中断したターンは報告しません。hook、権限ルール、本人が拒否した呼び出しはエラーに数えません。
-
-| 設定 | 既定値 | |
-| --- | --- | --- |
-| `sound` | `true` | エラーなしなら Glass、ツールエラーがあれば Basso（afplay、macOS） |
-| `notify` | `true` | トーストに加えて OS 通知も出す |
-| `quietTurns` | `true` | ツールを呼ばなかったターンは報告しない |
 
 ### skill-hint
 
@@ -252,7 +241,7 @@ slash コマンド、12 文字未満または 1500 文字を超えるプロン�
       ● lamp.ts  +43 −2  編集 4回
       ✗ register.tsx  +59 −16  編集 6回  エラー 1  ★
   ▸ loopback/  ○●
-  ░ agent-pane/  ░ battle-report/  ░ browser-cam/  …8
+  ░ agent-pane/  ░ browser-cam/  ░ context-diet/  …8
 ⚠ 編集したファイルを import しているが未読: mods/pr-lamp/tests/pr-lamp.test.ts
 ```
 
