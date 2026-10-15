@@ -22,6 +22,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default |
 | `zukan` | Error book: catches the errors Bash commands hit across sessions and repos, records what got past each one, and when one comes back tells Claude and the person how it was fixed last time |
 | `pr-lamp` | The current branch's pull request as a lamp: checks, review, unresolved threads and what is left before a merge, in the status line and a `/pr` pane; red checks and new review comments go to Claude beside the next prompt |
+| `fog-map` | Exploration map: the repository as a tree under fog, cleared where Claude read and marked where it edited, made a file or hit an error, with the importers an edit may have broken unseen; `/map` |
 
 ## Install
 
@@ -225,6 +226,32 @@ A toast when it changes: `🔴 CI 失敗: test`, `💬 新しいレビューコ�
 Which pull request: the one a Bash command of the session last named (`gh pr diff 2`, the URL `gh pr create` printed, the branch a `git push` sent to), so work pushed to a review branch from another checkout is followed; else the checked-out branch's; else your newest open pull request in the repository.
 
 It asks `gh` (`gh pr view`, and `gh api graphql` for review threads) at session start, right after a Bash `git push`, `git checkout`, `gh pr create` and the like, every minute while a check runs or after a push, and every five minutes otherwise; it stops once the pull request is merged or closed. Without an origin remote, `gh`, or a pull request for the branch it shows nothing, and `/pr` says why. `gh` runs on the host, outside the Bash sandbox, with your `gh auth`.
+
+### fog-map
+
+The repository as a map under fog, cleared as Claude works through it:
+
+```
+🗺 探索率 31%  ██████░░░░░░░░░░░░░░  読 23 · 編 9 · ✗ 2 / 101
+▾ mods/
+  ▾ pr-lamp/
+    ▾ hooks/
+      ● lamp.ts  +43 −2  編集 4回
+      ✗ register.tsx  +59 −16  編集 6回  エラー 1  ★
+  ▸ loopback/  ○●
+  ░ agent-pane/  ░ battle-report/  ░ browser-cam/  …8
+⚠ 編集したファイルを import しているが未読: mods/pr-lamp/tests/pr-lamp.test.ts
+```
+
+`░` nothing touched yet, `○` read (Read, or `cat`, `sed`, `grep`… in Bash), `●` edited (Edit, Write, NotebookEdit, `sed -i`), `✚` made by the session, `✗` named with a line number by a failed Bash command since its last edit, `★` the file touched last. A directory holding an edit, a new file or an error is open; one only read is closed with its marks beside it; untouched directories and files at a level share one fog row.
+
+Two warnings, each a likely oversight: a file edited without being read, and a file that imports an edited one (JS/TS and Python, found by `git grep`) that was never opened.
+
+- `/map` opens the pane
+- The status line keeps `🗺 31% · ●9 · ✗2 · ⚠1`
+- A toast at 25, 50, 75 and 100% explored, and when an edit first reaches a new area (`🗺 新しい区域を開拓: mods/zukan/`)
+
+The map is the session's, subagents' calls included; files outside the repository are not mapped. Explored is touched files over `git ls-files`, read again after a checkout, pull, `mv` or `rm`. Outside a git repository only the edit count is shown.
 
 ## Develop
 

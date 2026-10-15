@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map",
   "owner": {
     "name": "simota"
   },
@@ -84,6 +84,11 @@
       "name": "pr-lamp",
       "source": "./mods/pr-lamp",
       "description": "The current branch's pull request as a lamp: checks, review, unresolved threads and what is left before a merge, in the status line and a /pr pane; red checks and new review comments fed to Claude beside the next prompt"
+    },
+    {
+      "name": "fog-map",
+      "source": "./mods/fog-map",
+      "description": "Exploration map: the repository as a tree under fog, cleared where Claude read, marked where it edited, made a file or hit an error, with the importers an edit may have broken unseen; /map"
     }
   ]
 }
