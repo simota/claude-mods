@@ -1,6 +1,6 @@
 {
   "name": "artifact-shelf",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A shelf of what the sessions made: CSV, PDF, HTML, video, audio, images, patches and archives, each tied to the call that made it and the request it answered; /shelf finds them by kind, word, place or time",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"

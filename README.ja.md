@@ -82,7 +82,7 @@ echo '{"enabled":"true"}' | claude plugin configure <mod>@simota-mods --values-s
 - `/sandbox-report` で、Bash の出力に現れた sandbox の拒否を、このセッション分と全期間分の両方について一覧表示します。拒否されたホストやパス、回数、最終発生時刻、コマンド例、許可する場合の設定を出します。
 - `/sandbox-report reset` で記録を消去します。
 - ヒントを出すだけで、sandbox の設定は変更しません。loopback やプライベートアドレスはポート付きでヒントに出します（例: `127.0.0.1:3000`）。ポートなしで登録すると全ポートが開くためです。
-- 読むのは、出力の末尾にある `<sandbox_violations>` ブロックと、プログラム自身が出した `Operation not permitted` の行だけです。表示したファイルやページの中にあるブロックは無視します。コマンド例に含まれる認証情報（トークン、パスワード、`Authorization`/`Cookie` ヘッダ、URL のユーザー情報、環境変数の代入に含まれる鍵）は伏せ字にします。各セクションは上位 10 件を表示し、記録が上限（200 件）に達すると、最後に見てから最も時間が経ったものが入れ替わります。
+- 読むのは、出力の末尾にある `<sandbox_violations>` ブロックと、プログラム自身が出した `Operation not permitted` の行だけです。表示したファイルやページの中にあるブロックは無視します。コマンド例に含まれる認証情報（トークン、パスワード、`Authorization`/`Cookie` や `X-API-Key` などの認証ヘッダ、URL のユーザー情報、`PGPASSWORD` のような区切りのない名前も含む環境変数の代入の鍵、既知のキー形式）は伏せ字にします。各セクションは上位 10 件を表示し、記録が上限（200 件）に達すると、最後に見てから最も時間が経ったものが入れ替わります。
 
 ### skill-hint
 
@@ -316,7 +316,7 @@ Edit・Write・MultiEdit のたびに、呼び出し前後のファイル全体�
 
 ### side-effect-ledger
 
-作業ツリーの外を変える Bash コマンドとツール呼び出しを記録します: `git push`（取り消し方を push の出力から作る: `git push --force-with-lease=main:<new> origin <old>:main`、新規ブランチは `--delete`）、`gh pr|issue|release|repo …`、`gh api -X POST…`、npm/cargo/PyPI/gem の公開、docker push、kubectl、helm、terraform、pulumi、cdk、vercel、netlify、fly、wrangler、firebase、gcloud、aws、ローカル以外への `curl -X POST|PUT|PATCH|DELETE`、リモートへの scp/rsync、作成・更新・送信する MCP ツール、Artifact の公開・削除。各項目に結果（失敗も）、取り消し方と難しさを残し、`/ledger` で取り消し方を確かめたら **確認済みにする** か **不要** にします。ステータスラインにセッションの件数と未確認数。コマンド中の認証情報（`Authorization` ヘッダ、`token=`、`NAME_TOKEN=`、既知のキー形式）は zukan と同じく伏せてから保存します。リポジトリごとにセッションをまたいで 300 件。
+作業ツリーの外を変える Bash コマンドとツール呼び出しを記録します: `git push`（取り消し方を push の出力から作る: `git push --force-with-lease=main:<new> origin <old>:main`、新規ブランチは `--delete`）、`gh pr|issue|release|repo …`、`gh api -X POST…`、npm/cargo/PyPI/gem の公開、docker push、kubectl、helm、terraform、pulumi、cdk、vercel、netlify、fly、wrangler、firebase、gcloud、aws、ローカル以外への `curl -X POST|PUT|PATCH|DELETE`、リモートへの scp/rsync、作成・更新・送信する MCP ツール、Artifact の公開・削除。各項目に結果（失敗も）、取り消し方と難しさを残し、`/ledger` で取り消し方を確かめたら **確認済みにする** か **不要** にします。ステータスラインにセッションの件数と未確認数。コマンド中の認証情報（`Authorization` などの認証ヘッダ、`token=`、`NAME_TOKEN=`、`PGPASSWORD=`、JSON の `"api_key": "…"`、既知のキー形式）は zukan と同じく伏せてから保存します。リポジトリごとにセッションをまたいで 300 件。
 
 ### trust-label
 
