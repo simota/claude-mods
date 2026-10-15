@@ -113,16 +113,26 @@ function github(argv: string[], output: string): Classified | undefined {
   const number = url?.match(/\/(?:pull|issues)\/(\d+)/)?.[1]
   const tail = number !== undefined ? ` → #${number}` : url !== undefined ? ` → ${url}` : ''
   const label = `gh ${area} ${action}${tail}`
-  // By URL, so a PR made with -R in another repository is closed there; the head branch is left
-  // alone (it may have existed long before the PR).
-  if (area === 'pr' && action === 'create') return { kind: 'github', label, undo: `gh pr close ${url ?? '<番号>'}`, reversibility: 'easy' }
+  // A close or delete only on the output's word that this call made the thing: a failure hidden
+  // behind a pipe or `|| true` exits 0 and prints what already existed. By URL, so a PR made with
+  // -R is closed in its repository; the head branch is left alone (it may predate the PR).
+  if (area === 'pr' && action === 'create') {
+    if (/already exists/i.test(output) || url === undefined) return { kind: 'github', label, undo: 'PR が作られたかは gh pr list で確認（既にあった PR は閉じない）', reversibility: 'manual' }
+    return { kind: 'github', label, undo: `gh pr close ${url}`, reversibility: 'easy' }
+  }
   if (area === 'pr' && action === 'merge') return { kind: 'github', label, undo: 'マージコミットを git revert -m 1 <sha> して push（またはリバート PR を作る）', reversibility: 'manual' }
   if (area === 'pr' && /^(?:comment|review|edit|close|ready|reopen)$/.test(action)) return { kind: 'github', label, undo: `gh pr ${action === 'close' ? 'reopen' : 'view --web'} ${argv[3] ?? ''}（コメント・レビューは GitHub 上で削除/編集）`.trim(), reversibility: 'manual' }
-  if (area === 'issue' && action === 'create') return { kind: 'github', label, undo: `gh issue close ${url ?? '<番号>'}（削除は gh issue delete）`, reversibility: 'easy' }
+  if (area === 'issue' && action === 'create') {
+    // gh prints the new issue's URL last; an earlier one in a chain (gh issue view) is another issue.
+    const made = [...output.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/g)].at(-1)?.[0]
+    if (made === undefined) return { kind: 'github', label, undo: 'issue が作られたかは gh issue list で確認', reversibility: 'manual' }
+    return { kind: 'github', label, undo: `gh issue close ${made}（削除は gh issue delete）`, reversibility: 'easy' }
+  }
   if (area === 'issue' && /^(?:comment|edit|close|reopen|delete|transfer)$/.test(action)) return { kind: 'github', label, undo: action === 'delete' ? '削除した issue は戻せません' : 'GitHub 上で編集・再オープン', reversibility: action === 'delete' ? 'hard' : 'manual' }
   if (area === 'release' && action === 'create') {
     const { tag, repo } = releaseArgs(argv.slice(3))
     const target = [tag ?? '<タグ>', ...repo].join(' ')
+    if (!/\/releases\/tag\//.test(output)) return { kind: 'publish', label: `gh release create ${tag ?? ''}`.trim(), undo: 'release が作られたかは gh release list で確認（既にあった release は消さない）', reversibility: 'manual' }
     return {
       kind: 'publish',
       label: `gh release create ${tag ?? ''}`.trim(),
@@ -130,7 +140,10 @@ function github(argv: string[], output: string): Classified | undefined {
       reversibility: 'easy',
     }
   }
-  if (area === 'repo' && action === 'create') return { kind: 'github', label, undo: `gh repo delete ${argv[3] ?? '<owner/repo>'}（delete_repo 権限が必要）`, reversibility: 'manual' }
+  if (area === 'repo' && action === 'create') {
+    if (!/Created repository/i.test(output)) return { kind: 'github', label, undo: 'リポジトリが作られたかは gh repo view で確認（既にあったリポジトリは消さない）', reversibility: 'manual' }
+    return { kind: 'github', label, undo: `gh repo delete ${argv[3] ?? '<owner/repo>'}（delete_repo 権限が必要）`, reversibility: 'manual' }
+  }
   if (area === 'repo' && action === 'delete') return { kind: 'github', label, undo: '削除したリポジトリは 90 日以内なら Settings から復元を依頼できる場合あり', reversibility: 'hard' }
   if (area === 'workflow' && action === 'run') return { kind: 'deploy', label, undo: '起動したワークフローは gh run cancel <run-id>。実行済みの副作用はワークフロー次第', reversibility: 'manual' }
   if (area === 'api' && argv.some((word, i) => /^(?:-X|--method)$/.test(word) && /^(?:POST|PUT|PATCH|DELETE)$/i.test(argv[i + 1] ?? ''))) {
@@ -182,13 +195,19 @@ function helmArgs(args: readonly string[]): { release: string; where: string } {
   return { release: first ?? '<release>', where: kept.length === 0 ? '' : ` ${kept.join(' ')}` }
 }
 
-function helm(sub: string, args: readonly string[]): Classified {
+function helm(sub: string, args: readonly string[], output: string): Classified {
   const { release, where } = helmArgs(args)
   const label = `helm ${sub} ${args.join(' ')}`.trim()
   const back = `helm history ${release}${where} → helm rollback ${release} <revision>${where}`
-  if (sub === 'install') return { kind: 'infra', label, undo: `helm uninstall ${release}${where}`, reversibility: 'easy' }
+  // An uninstall only on helm's word that this call installed the release: a name already in use
+  // fails, and behind `|| true` exits 0.
+  const isInstalled = sub === 'install' ? /^STATUS: deployed/m.test(output) : /does not exist\. Installing it now/.test(output)
+  if (sub === 'install') {
+    if (!isInstalled) return { kind: 'infra', label, undo: `helm status ${release}${where} で状態を確認（入っていたリリースを消さないよう uninstall はしない）`, reversibility: 'manual' }
+    return { kind: 'infra', label, undo: `helm uninstall ${release}${where}`, reversibility: 'easy' }
+  }
   if (sub === 'uninstall' || sub === 'delete') return { kind: 'infra', label, undo: `同じ chart と values で helm install ${release} <chart>${where}（--keep-history 付きで消したなら helm rollback）`, reversibility: 'hard' }
-  if (sub === 'upgrade' && args.some(word => word === '--install' || word === '-i')) return { kind: 'infra', label, undo: `${back}（初回 install なら helm uninstall ${release}${where}）`, reversibility: 'easy' }
+  if (sub === 'upgrade' && isInstalled) return { kind: 'infra', label, undo: `helm uninstall ${release}${where}`, reversibility: 'easy' }
   return { kind: 'infra', label, undo: back, reversibility: 'easy' }
 }
 
@@ -241,7 +260,7 @@ export function classifyArgv(given: string[], output: string, isElsewhere = fals
     return { kind: 'publish', label: `docker ${rest}`, undo: 'レジストリ側でタグを削除し、以前のダイジェストを付け直す', reversibility: 'manual' }
   }
   if (name === 'kubectl') return kubectl(argv.slice(1))
-  if (name === 'helm' && /^(?:install|upgrade|uninstall|rollback|delete)$/.test(sub)) return helm(sub, argv.slice(2))
+  if (name === 'helm' && /^(?:install|upgrade|uninstall|rollback|delete)$/.test(sub)) return helm(sub, argv.slice(2), output)
   if (name === 'terraform' && (/^(?:apply|destroy|import)$/.test(sub) || (sub === 'state' && /^(?:rm|mv|push|replace-provider)$/.test(third)))) return { kind: 'infra', label: `terraform ${rest}`, undo: '以前の設定に戻して terraform apply（state のバックアップは terraform.tfstate.backup）', reversibility: sub === 'destroy' ? 'hard' : 'manual' }
   if ((name === 'pulumi' && /^(?:up|destroy)$/.test(sub)) || (name === 'cdk' && /^(?:deploy|destroy)$/.test(sub))) return { kind: 'infra', label: `${name} ${rest}`, undo: '以前のコードに戻して再デプロイ（pulumi stack history / cdk diff で差を確認）', reversibility: 'manual' }
   if (name === 'vercel' && (sub === '' || sub === 'deploy' || (sub.startsWith('-') && !/^(?:-v|--version|-h|--help)$/.test(sub)))) {

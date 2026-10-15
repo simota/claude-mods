@@ -54,7 +54,7 @@ describe('ledger', () => {
   test('undos never delete what existed before, and dry runs and reads are not recorded', () => {
     const undo = (command: string, output = '') => classifyCommand(command, output)[0]?.undo
     expect(undo('gh pr create --base main --head develop', 'https://github.com/me/app/pull/12')).toBe('gh pr close https://github.com/me/app/pull/12')
-    expect(undo('gh release create --notes-start-tag v0.9 -R o/r --title "Big one" v1.0 dist/app.tgz')).toBe(
+    expect(undo('gh release create --notes-start-tag v0.9 -R o/r --title "Big one" v1.0 dist/app.tgz', 'https://github.com/o/r/releases/tag/v1.0')).toBe(
       'gh release delete v1.0 -R o/r（タグも消すなら --cleanup-tag。release より前からあったタグなら付けない）',
     )
     expect(undo('helm uninstall web -n prod')).toBe('同じ chart と values で helm install web <chart> -n prod（--keep-history 付きで消したなら helm rollback）')
@@ -69,28 +69,37 @@ describe('ledger', () => {
     expect(classifyCommand('kubectl apply -f k.yaml --dry-run=none', '')[0]?.kind).toBe('infra')
     expect(undo('vercel deploy')).not.toContain('rollback')
     expect(undo('vercel --prod')).toContain('rollback')
-    expect(undo('helm install web ./chart -n prod')).toBe('helm uninstall web -n prod')
-    expect(undo('helm upgrade --install web ./chart --namespace prod')).toBe('helm history web --namespace prod → helm rollback web <revision> --namespace prod（初回 install なら helm uninstall web --namespace prod）')
+    expect(undo('helm install web ./chart -n prod', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall web -n prod')
+    expect(undo('helm upgrade --install web ./chart --namespace prod', 'Release "web" does not exist. Installing it now.\nSTATUS: deployed')).toBe('helm uninstall web --namespace prod')
+    expect(undo('helm upgrade --install web ./chart --namespace prod', 'Release "web" has been upgraded.')).toBe('helm history web --namespace prod → helm rollback web <revision> --namespace prod')
     expect(classifyCommand('helm uninstall web', '')[0]?.reversibility).toBe('hard')
     // A flag not known to take or not take a value: the release cannot be told, so none is named.
-    expect(undo('helm install --replace web nginx -n prod')).toBe('helm uninstall web -n prod')
-    expect(undo('helm install --some-new-flag web nginx -n prod')).toBe('helm uninstall <release> -n prod')
-    expect(undo('helm install web nginx --set a=b -f v.yaml')).toBe('helm uninstall web')
-    expect(undo('gh release create --unknown-flag v1.0')).toMatch(/^gh release delete <タグ>/)
+    expect(undo('helm install --replace web nginx -n prod', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall web -n prod')
+    expect(undo('helm install --some-new-flag web nginx -n prod', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall <release> -n prod')
+    expect(undo('helm install web nginx --set a=b -f v.yaml', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall web')
+    expect(undo('gh release create --unknown-flag v1.0', 'https://github.com/o/r/releases/tag/v1.0')).toMatch(/^gh release delete <タグ>/)
     // A production deploy is never undone by removing it.
     expect(undo('vercel deploy --target=production', 'https://proj.vercel.app')).toContain('rollback')
     expect(undo('vercel deploy --target production', 'https://proj.vercel.app')).toContain('rollback')
     expect(undo('vercel deploy', 'Preview: https://proj-abc123.vercel.app')).toBe('vercel remove https://proj-abc123.vercel.app（プレビューのみ、本番は変わっていない）')
     expect(undo('vercel deploy', 'https://proj.vercel.app')).toBe('vercel remove <プレビューURL>（プレビューのみ、本番は変わっていない）')
     none('vercel --version')
+    // A delete or close is given only on the output's word that this call made the thing: a failure
+    // hidden behind a pipe or `|| true` exits 0 but names what already existed.
+    expect(undo('gh pr create --fill 2>&1 | tail -5', 'a pull request for branch "x" into branch "main" already exists:\nhttps://github.com/o/r/pull/7')).not.toContain('gh pr close')
+    expect(undo('helm install web ./chart -n prod || true', 'Error: INSTALLATION FAILED: cannot re-use a name that is still in use')).not.toContain('helm uninstall')
+    expect(undo('helm install web ./chart -n prod || true', 'Error: INSTALLATION FAILED: cannot re-use a name that is still in use')).toContain('helm status web -n prod')
+    expect(undo('gh release create v1.0 || true', 'HTTP 422: Validation Failed (tag_name already exists)')).not.toContain('gh release delete')
+    expect(undo('gh repo create o/x --private || true', 'GraphQL: Name already exists on this account')).not.toContain('gh repo delete')
+    expect(undo('gh issue view 3 && gh issue create -t a', 'https://github.com/o/r/issues/3\nhttps://github.com/o/r/issues/4')).toBe('gh issue close https://github.com/o/r/issues/4（削除は gh issue delete）')
     expect(undo('vercel deploy --target=staging', 'https://proj-staging.vercel.app')).not.toContain('remove')
     // Where the release or repository lives rides along: another cluster's or repository's is not touched.
-    expect(undo('helm install web ./chart --kubeconfig ~/.kube/prod')).toBe('helm uninstall web --kubeconfig ~/.kube/prod')
+    expect(undo('helm install web ./chart --kubeconfig ~/.kube/prod', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall web --kubeconfig ~/.kube/prod')
     // Environment that pointed the command elsewhere is named for every command of the undo; a token is not replayed.
     expect(undo('KUBECONFIG=~/.kube/prod HELM_NAMESPACE=prod HELM_KUBETOKEN=t helm upgrade --install web ./chart')).toBe(
-      'helm history web → helm rollback web <revision>（初回 install なら helm uninstall web）（どれも KUBECONFIG=~/.kube/prod HELM_NAMESPACE=prod を付けて実行）',
+      'helm history web → helm rollback web <revision>（どれも KUBECONFIG=~/.kube/prod HELM_NAMESPACE=prod を付けて実行）',
     )
-    expect(undo('GH_REPO=o/other gh release create v1.0')).toMatch(/^gh release delete v1\.0.*（どれも GH_REPO=o\/other を付けて実行）$/)
+    expect(undo('GH_REPO=o/other gh release create v1.0', 'https://github.com/o/other/releases/tag/v1.0')).toMatch(/^gh release delete v1\.0.*（どれも GH_REPO=o\/other を付けて実行）$/)
     // kubectl's options before the subcommand do not hide the write, and say where it went.
     expect(undo('kubectl --context prod -n app apply -f x.yaml')).toBe('kubectl rollout undo <deployment>、または以前のマニフェストを kubectl apply（どれも --context prod -n app を付けて実行）')
     expect(classifyCommand('kubectl --insecure-skip-tls-verify apply -f x.yaml', '')[0]?.kind).toBe('infra')
