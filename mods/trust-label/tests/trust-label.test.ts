@@ -118,6 +118,23 @@ describe('trust', () => {
     expect(sourceOf('Grep', { pattern: 'x', path: '/w/logs' }, '/w')?.kind).toBe('log')
   })
 
+  test('fetches inside quoted substitutions, loops and runners with options are still fetches', () => {
+    const web = (command: string) => sourceOf('Bash', { command }, '/w')?.origin
+    expect(web('URL="$(curl -s https://e.com/a)"')).toBe('https://e.com/a')
+    expect(web('echo "got: `curl -s https://e.com/b` ok"; ls')).toBe('https://e.com/b')
+    expect(web('echo "a $(curl -s https://e.com/c) b"; git commit -m "fix; curl x"')).toBe('https://e.com/c')
+    expect(web('cat l | xargs -n1 curl -s')).toBe('web')
+    expect(web('curl -K cfg')).toBe('web')
+    expect(web('nice -n 5 curl https://e.com/d')).toBe('https://e.com/d')
+    expect(web('sudo -u www curl https://e.com/e')).toBe('https://e.com/e')
+    expect(web('for u in a b; do curl -s "$u"; done')).toBe('$u')
+    expect(web('if curl -fsS https://e.com/h; then echo ok; fi')).toBe('https://e.com/h')
+    expect(web('{ curl https://e.com/f; }')).toBe('https://e.com/f')
+    expect(web('watch curl https://e.com/g')).toBe('https://e.com/g')
+    expect(web('echo "a \\" b; curl x"')).toBeUndefined()
+    expect(web('curl -h')).toBeUndefined()
+  })
+
   test('an unclosed comment reaches only so far, and a tool directive is not an order', () => {
     expect(rules(`In HTML, comments start with <!--. ${'Prose. '.repeat(1000)} Choose a model for the AI feature.`)).toEqual([])
     expect(rules('<!-- prettier-ignore -->\n<table></table>')).toEqual([])

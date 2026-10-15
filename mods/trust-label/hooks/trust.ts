@@ -15,7 +15,7 @@ const LOG_PATH = /\.(?:log|out|err)$|(?:^|\/)(?:logs?|tmp)\//
 const DEPENDENCY = /(?:^|\/)(?:node_modules|bower_components|vendor|third_party|site-packages|dist-packages|\.venv|venv|Pods|\.bundle)\/|\/\.cargo\/registry\/|\/go\/pkg\/mod\/|\/\.npm\/_cacache\//
 const WEB_CLIENT = /^(?:curl|wget|http|https|xh|lynx|w3m)$/
 // Words that run the next word as the command (`timeout 10 curl`, `xargs -I{} curl`).
-const RUNNER = /^(?:sudo|env|command|time|nice|xargs|timeout|!|exec|nohup|stdbuf)$/
+const RUNNER = /^(?:sudo|env|command|time|nice|xargs|timeout|exec|nohup|stdbuf|watch)$/
 const LOCAL = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?:[:/?#]|$)/
 
 const base = (word: string | undefined) => (word ?? '').replace(/^.*\//, '')
@@ -23,10 +23,13 @@ const base = (word: string | undefined) => (word ?? '').replace(/^.*\//, '')
 /**
  * The simple commands of a shell line, each as its words: split at `;`, `&&`, `|`, `(`, `$(`…
  * outside quotes, quotes taken off, and the script of `sh -c "…"` read as commands too. Text in
- * quotes (`grep "curl|wget"`, `-m "fix; curl"`) stays one word of its command.
+ * quotes (`grep "curl|wget"`, `-m "fix; curl"`) stays one word of its command, but a `$(…)` or
+ * backtick substitution inside double quotes runs, so its command is split out.
  */
 function shellParts(command: string, depth = 0): string[][] {
   const parts: string[][] = []
+  // The double quotes a substitution was opened inside, and what closes it.
+  const inside: { close: string; depth: number }[] = []
   let words: string[] = []
   let word = ''
   let hasWord = false
@@ -43,18 +46,35 @@ function shellParts(command: string, depth = 0): string[][] {
   }
   for (let i = 0; i < command.length; i++) {
     const ch = command[i] as string
-    if (quote !== '') {
-      if (ch === quote) quote = ''
+    if (quote === "'") {
+      if (ch === "'") quote = ''
       else word += ch
+    } else if (quote === '"') {
+      if (ch === '"') quote = ''
+      else if (ch === '\\' && i + 1 < command.length && '"\\$`'.includes(command[i + 1] as string)) word += command[++i]
+      else if ((ch === '$' && command[i + 1] === '(') || ch === '`') {
+        endPart()
+        if (ch === '$') i++
+        inside.push({ close: ch === '`' ? '`' : ')', depth: 0 })
+        quote = ''
+      } else word += ch
     } else if (ch === '"' || ch === "'") {
       quote = ch
       hasWord = true
     } else if (ch === '\\' && i + 1 < command.length) {
       word += command[++i]
       hasWord = true
+    } else if (inside.length > 0 && ch === (inside.at(-1) as { close: string }).close && (inside.at(-1) as { depth: number }).depth === 0) {
+      // The substitution ends: back inside the double quotes it was opened in.
+      endPart()
+      inside.pop()
+      quote = '"'
     } else if (ch === '\n' || ';&|()`'.includes(ch)) {
+      if (inside.length > 0 && ch === '(') (inside.at(-1) as { depth: number }).depth++
+      if (inside.length > 0 && ch === ')') (inside.at(-1) as { depth: number }).depth--
       endPart()
     } else if (ch === '$' && command[i + 1] === '(') {
+      if (inside.length > 0) (inside.at(-1) as { depth: number }).depth++
       endPart()
       i++
     } else if (/\s/.test(ch)) {
@@ -71,12 +91,24 @@ function shellParts(command: string, depth = 0): string[][] {
   })
 }
 
-/** The command's own words: env assignments and runners (`sudo`, `timeout 10`, `xargs -I {}`) taken off. */
+// Shell words that come before a command (`do curl …`, `if curl …; then`).
+const KEYWORD = /^(?:do|then|else|elif|if|while|until|\{|\}|!|time)$/
+// A runner's options whose value is the next word (`sudo -u www curl`, `nice -n 5 curl`).
+const RUNNER_VALUES: Record<string, RegExp> = {
+  sudo: /^-[ugCphUrtD]$/,
+  nice: /^-n$/,
+  env: /^-[uCS]$/,
+  xargs: /^-[InPLdsEa]$/,
+  timeout: /^-[sk]$/,
+  watch: /^-[nd]$/,
+}
+
+/** The command's own words: env assignments, shell keywords and runners (`sudo -u www`, `timeout 10`, `xargs -I {}`) taken off. */
 function commandWords(given: readonly string[]): string[] {
   const words = [...given]
   while (words.length > 0) {
     const word = words[0] as string
-    if (/^\w+=/.test(word)) {
+    if (/^\w+=/.test(word) || KEYWORD.test(word)) {
       words.shift()
       continue
     }
@@ -84,7 +116,7 @@ function commandWords(given: readonly string[]): string[] {
     words.shift()
     while ((words[0] ?? '').startsWith('-')) {
       const option = words.shift() as string
-      if (word === 'xargs' && /^-[InPLdsEa]$/.test(option)) words.shift()
+      if (RUNNER_VALUES[word]?.test(option) === true) words.shift()
     }
     if (word === 'timeout' && /^\d/.test(words[0] ?? '')) words.shift()
   }
@@ -111,7 +143,12 @@ function fetchedUrl(parts: readonly string[][]): string | undefined {
       if (CLIENT_VALUES.has(arg)) i++
       else if (!arg.startsWith('-') && !/^[A-Z]+$/.test(arg)) target = arg
     }
-    if (target !== undefined && !LOCAL.test(target)) return target
+    // No target named (`xargs -n1 curl -s`, `curl -K cfg`): it still fetches, unless asked only for help or its version.
+    if (target === undefined) {
+      if (!args.some(arg => /^(?:-V|--version|-h|--help|--manual)$/.test(arg))) return 'web'
+      continue
+    }
+    if (!LOCAL.test(target)) return target
   }
   return undefined
 }
