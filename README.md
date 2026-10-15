@@ -18,7 +18,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `context-diet` | Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved |
 | `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
 | `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; on by default |
-| `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default |
+| `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person, skipping rules hit-rate found mostly wrong; off by default |
 | `zukan` | Error book: catches the errors Bash commands hit across sessions and repos, records what got past each one, and when one comes back tells Claude and the person how it was fixed last time |
 | `pr-lamp` | The current branch's pull request as a lamp: checks, review, unresolved threads and what is left before a merge, in the status line and a `/pr` pane; red checks and new review comments go to Claude beside the next prompt |
 | `fog-map` | Exploration map: the repository as a tree under fog, cleared where Claude read and marked where it edited, made a file or hit an error, with the importers an edit may have broken unseen; `/map` |
@@ -34,6 +34,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `trust-label` | Labels external text (web, issues, logs, browser pages, services) with its source beside the result and flags candidate injected instructions; a heuristic, never a safety verdict; `/trust` |
 | `visual-diff` | Compares browser screenshots of the same URL and size before and after an edit: side by side, a map of changed cells, regions, and the edits in between; `/vdiff` |
 | `journey-trace` | Records Claude's browser actions and the expected states as a replayable recipe; `/journey md` for a bug report, `/journey e2e` for a Playwright draft |
+| `hit-rate` | Gives each finding of done-gate, assertion-guard, self-audit and zukan a later verdict from what the session did next, keeps each rule's precision across sessions, and names the rules loopback stops feeding; `/hit-rate`; off by default |
 | `token-lens` | Checks an element's actual colours, spacing and type against the project's design tokens and lists off-token values with the nearest token; `/token-lens <selector>` |
 
 ## Install
@@ -184,7 +185,9 @@ Off by default. When on, the new findings of the detector mods are attached to t
 
 Each finding goes back once per session, marked as data that may be wrong for Claude to check before acting. A toast says how many went back and from where. Slash commands, hidden prompts, prompts sent by a plugin and prompts typed while a turn runs carry nothing. A detector that is not installed contributes nothing.
 
-- `/loopback` shows what was fed last and the self-audit repeat rate: of the rules fed back, how many self-audit flagged again on the next audited reply (all sessions). The rate is what the design is judged by (`.genius/decisions/loopback.md`).
+With hit-rate on, the rules it muted are not fed (`sandbox-lens` denials never are muted).
+
+- `/loopback` shows what was fed last and the self-audit repeat rate: of the rules fed back, how many self-audit flagged again on the next audited reply (all sessions). The rate is what the design is judged by (`.genius/decisions/loopback.md`). It also names the rules hit-rate muted.
 
 | Option | Default | |
 | --- | --- | --- |
@@ -335,6 +338,29 @@ Claude in Chrome navigations, clicks, typing, keys, form fills and scrolls are r
 
 Tokens are read from the repository's stylesheets (`--name:` custom properties, SCSS `$variables`) and tokens JSON (`$value`/`value`), references resolved. `/token-lens <selector>` (or, with no argument, the text selected in the page) runs a script in the tab Claude drives through Claude in Chrome's `javascript_tool` and checks up to five elements' colour, background, border, margin, padding, gap, radius, font family, size, weight, line height and letter spacing: equal to a token, or an off-token value with the nearest token and how far off. `/token-lens tokens` counts what was found; `/token-lens reload` reads them again.
 
+### hit-rate
+
+Off by default. When on, each finding gets a verdict later, from what the session did next, never from a judge model:
+
+| Rule | True (tp) | False (fp) |
+| --- | --- | --- |
+| `done-gate:unverified` | the first test, lint, typecheck or build after the flag fails | it passes first time |
+| `assertion-guard:<kind>` | a later edit undoes the weakening (the old line back, the new one gone, counted against duplicates) | the person marked it checked and it still stands a whole turn later |
+| `self-audit:R1`…`R5` | the next audited reply no longer breaks the rule | it breaks it again |
+| `zukan:recall` | the recalled fix is what got past the error | another command did |
+
+What nothing decides counts as unknown: a done-gate band taken down with 閉じる, an error zukan stops waiting on, anything still open at session end. The counts are kept across sessions. A rule with at least `minN` true-or-false verdicts and a precision below `threshold` is named in `muted`, and loopback does not feed it; its detector still draws its band.
+
+- `/hit-rate` lists every rule with TP / FP / unknown, precision and n, the share of unknown verdicts, and this session's latest verdicts. The design is judged by these numbers (`.genius/decisions/hit-rate.md`).
+
+| Option | Default | |
+| --- | --- | --- |
+| `enabled` | `false` | |
+| `minN` | `20` | verdicts a rule needs before it can be muted |
+| `threshold` | `0.5` | precision below which a rule is muted |
+
+The verdicts are proxies: a failing check may fail for reasons the edits did not cause, and a rule that does not recur may simply not have come up. A muted rule is no longer fed but keeps being scored, so it can come back.
+
 ## Develop
 
 ```
@@ -344,7 +370,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts` is done-gate's; `mask.ts` in side-effect-ledger, handoff-capsule and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
+Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts` and `mods/hit-rate/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger, handoff-capsule and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
 
 ## License
 

@@ -2,6 +2,8 @@ export type LoopbackFinding = {
   source: 'self-audit' | 'done-gate' | 'sandbox-lens'
   /** Names the finding for this session, so the same one is fed once. */
   key: string
+  /** The hit-rate rule it is scored under (`self-audit:R1`, `done-gate:unverified`); absent for sandbox-lens. */
+  rule?: string
   text: string
 }
 

@@ -1,0 +1,35 @@
+{
+  "name": "hit-rate",
+  "version": "0.1.0",
+  "description": "Gives each finding of done-gate, assertion-guard, self-audit and zukan a later verdict from what the session did next, keeps each rule's precision across sessions, and names the rules loopback should stop feeding; off by default",
+  "author": {
+    "name": "simota"
+  },
+  "types": "./types/index.d.ts",
+  "dependencies": [
+    "done-gate",
+    "assertion-guard",
+    "self-audit",
+    "zukan"
+  ],
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Enabled",
+      "description": "Score the detectors' findings by what happened next; off by default",
+      "default": false
+    },
+    "minN": {
+      "type": "number",
+      "title": "Minimum verdicts",
+      "description": "A rule is judged for muting only once it has this many true or false verdicts",
+      "default": 20
+    },
+    "threshold": {
+      "type": "number",
+      "title": "Precision threshold",
+      "description": "A rule whose precision is below this (0 to 1) is named for loopback to stop feeding",
+      "default": 0.5
+    }
+  }
+}

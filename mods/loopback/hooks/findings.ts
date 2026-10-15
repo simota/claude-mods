@@ -41,6 +41,7 @@ export function collect(sources: Sources): LoopbackFinding[] {
       found.push({
         source: 'self-audit',
         key: `self-audit:${latest.turnId}:${ruleId(v.rule)}`,
+        rule: `self-audit:${ruleId(v.rule)}`,
         text: `${ruleId(v.rule)}: "${clip(v.quote)}" — ${clip(v.why)}`,
       })
     }
@@ -49,6 +50,7 @@ export function collect(sources: Sources): LoopbackFinding[] {
     found.push({
       source: 'done-gate',
       key: 'done-gate:unverified',
+      rule: 'done-gate:unverified',
       text: 'Files were edited with no passing test, lint, typecheck or build after the edits.',
     })
   }
@@ -60,6 +62,12 @@ export function collect(sources: Sources): LoopbackFinding[] {
     })
   }
   return found
+}
+
+/** The findings hit-rate has not muted: a rule scored often enough and found below its threshold is not fed. sandbox-lens reports facts and has no rule. */
+export function gate(found: readonly LoopbackFinding[], muted: readonly string[] | undefined): LoopbackFinding[] {
+  if (muted === undefined || muted.length === 0) return [...found]
+  return found.filter(f => f.rule === undefined || !muted.includes(f.rule))
 }
 
 /**

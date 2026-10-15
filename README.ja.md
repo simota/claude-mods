@@ -18,7 +18,7 @@
 | `context-diet` | skill 一覧をプロジェクトの種類に必要なものだけに絞る（既定オフ）。`/context-diet` で省いた skill と削減トークン数を表示 |
 | `browser-cam` | Claude が操作中のブラウザをペインで表示。Claude in Chrome の最新スクリーンショット、ページの URL、直近の操作 |
 | `prompt-coach` | 曖昧に見えるプロンプト（完了条件がない、対象が不明確）の送信を止め、意図の推定候補・そのまま送る・補足するから選ばせる（既定オン） |
-| `loopback` | self-audit・done-gate・sandbox-lens の発見を、人に見せるだけでなく次のプロンプトに添えて Claude へ返す（既定オフ） |
+| `loopback` | self-audit・done-gate・sandbox-lens の発見を、人に見せるだけでなく次のプロンプトに添えて Claude へ返す。hit-rate が外れが多いと判定したルールは返さない（既定オフ） |
 | `zukan` | エラー図鑑: セッションやリポジトリをまたいで Bash のエラーを集め、通った直し方を記録し、同じエラーが再び出たら前回の直し方を Claude と人に伝える |
 | `pr-lamp` | 今のブランチの PR を信号灯に: CI・レビュー・未解決スレッド・マージまでの残りをステータスラインと `/pr` ペインに出し、赤くなったチェックと新しいレビューコメントを次のプロンプトと一緒に Claude へ渡す |
 | `fog-map` | 探索マップ: リポジトリのツリーを霧で覆い、Claude が読んだ所は晴らし、編集・新規作成・エラーの所に印を付け、編集の影響で見落とされた import 元を警告。`/map` |
@@ -34,6 +34,7 @@
 | `trust-label` | Web・issue・ログ・ブラウザ・外部サービス由来の内容に出典ラベルを付けて Claude に渡し、不審な指示の候補を警告（安全性の判定ではない）。`/trust` |
 | `visual-diff` | 同じ URL・画面サイズのスクリーンショットを編集の前後で並べ、変化したセル・領域と間の編集を表示。`/vdiff` |
 | `journey-trace` | Claude のブラウザ操作と期待状態を再現レシピとして記録し、`/journey md` でバグ報告、`/journey e2e` で Playwright の下書きに |
+| `hit-rate` | done-gate・assertion-guard・self-audit・zukan の各発見を、その後セッションで起きたことから当たり/外れと判定し、ルールごとの的中率をセッションをまたいで記録。的中率の低いルールは loopback が返さない。`/hit-rate`（既定オフ） |
 | `token-lens` | 要素の実際の色・余白・字体を登録済みデザイントークンと照合し、独自値と最寄りのトークンを一覧。`/token-lens <セレクタ>` |
 
 ## インストール
@@ -184,7 +185,9 @@ slash コマンド、12 文字未満または 1500 文字を超えるプロン�
 
 各発見はセッション中に 1 回だけ返し、誤りうるデータなので行動前に確かめるよう添えます。何件をどこから返したかはトーストに出ます。slash コマンド、隠しプロンプト、plugin が送ったもの、ターン実行中に打ったプロンプトには何も添えません。入れていない検出 mod の分は空です。
 
-- `/loopback` で、最後に返した内容と self-audit 再発率（返した違反のうち、次に監査された返信で再び指摘された割合。全セッション累計）を表示します。この割合で設計の当否を判定します（`.genius/decisions/loopback.md`）。
+hit-rate がオンなら、hit-rate が止めたルールは返しません（`sandbox-lens` の拒否は止めません）。
+
+- `/loopback` で、最後に返した内容と self-audit 再発率（返した違反のうち、次に監査された返信で再び指摘された割合。全セッション累計）を表示します。この割合で設計の当否を判定します（`.genius/decisions/loopback.md`）。hit-rate が止めたルールも表示します。
 
 | 設定 | 既定値 | |
 | --- | --- | --- |
@@ -335,6 +338,29 @@ Claude in Chrome の遷移・クリック・入力・キー・フォーム入力
 
 トークンはリポジトリのスタイルシート（`--name:` のカスタムプロパティ、SCSS の `$変数`）と tokens JSON（`$value`/`value`）から読み、参照を解決します。`/token-lens <セレクタ>`（引数なしならページで選択したテキスト）で、Claude が操作中のタブに Claude in Chrome の `javascript_tool` でスクリプトを流し、最大 5 要素の色・背景・枠線・margin・padding・gap・角丸・フォント・サイズ・太さ・行高・字間を照合します: トークンと一致、または独自値と最寄りのトークンとの差。`/token-lens tokens` で読み込んだ件数、`/token-lens reload` で読み直し。
 
+### hit-rate
+
+既定はオフです。オンにすると、各発見に後から判定を付けます。判定の材料はその後セッションで起きたことだけで、判定用のモデルは使いません。
+
+| ルール | 当たり（tp） | 外れ（fp） |
+| --- | --- | --- |
+| `done-gate:unverified` | 旗の後で最初のテスト・lint・型チェック・ビルドが失敗 | 一発で成功 |
+| `assertion-guard:<kind>` | 後の編集で弱めた変更が戻された（元の行が戻り、新しい行が消える。重複行は数で区別） | 人が確認済みにした後、丸 1 ターン経ってもそのまま |
+| `self-audit:R1`〜`R5` | 次に監査された返信でその違反が消えた | 同じ違反が再び出た |
+| `zukan:recall` | 伝えた前回の直し方でエラーを抜けた | 別のコマンドで抜けた |
+
+判定できないものは unknown として数えます（閉じる で下ろした done-gate の帯、zukan が待つのをやめたエラー、セッション終了時に未判定のもの）。件数はセッションをまたいで記録します。当たりと外れの合計が `minN` 以上で、的中率が `threshold` 未満のルールを `muted` に載せ、loopback はそのルールを返しません（検出 mod の帯は今まで通り出ます）。
+
+- `/hit-rate` で、ルールごとの TP / FP / unknown・的中率・n、unknown の割合、このセッションの最近の判定を表示します。この数字で設計の当否を判定します（`.genius/decisions/hit-rate.md`）。
+
+| 設定 | 既定値 | |
+| --- | --- | --- |
+| `enabled` | `false` | |
+| `minN` | `20` | ルールを止める判断に必要な判定数 |
+| `threshold` | `0.5` | これ未満の的中率でルールを止める |
+
+判定は代理指標です。チェックの失敗が編集と無関係なこともあり、違反が再び出ないのは単にその場面がなかっただけかもしれません。止めたルールも判定は続けるので、的中率が戻れば再び返します。
+
 ## 開発
 
 ```
@@ -344,7 +370,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts` は done-gate のもの、side-effect-ledger・handoff-capsule・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
+mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts` と `mods/hit-rate/hooks/shell.ts` は done-gate のもの、side-effect-ledger・handoff-capsule・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
 
 ## ライセンス
 

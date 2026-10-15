@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, trust label, visual diff, journey trace, token lens",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, trust label, visual diff, journey trace, token lens, hit rate",
   "owner": {
     "name": "simota"
   },
@@ -68,7 +68,7 @@
     {
       "name": "loopback",
       "source": "./mods/loopback",
-      "description": "Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default"
+      "description": "Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person, skipping rules hit-rate found mostly wrong; off by default"
     },
     {
       "name": "zukan",
@@ -149,6 +149,11 @@
       "name": "token-lens",
       "source": "./mods/token-lens",
       "description": "Checks a page element's actual colours, spacing and type against the project's registered design tokens (CSS custom properties, SCSS variables, tokens JSON): /token-lens <selector>, or the text selected in the browser, lists each value as a token or an off-token value with the nearest token"
+    },
+    {
+      "name": "hit-rate",
+      "source": "./mods/hit-rate",
+      "description": "Gives each finding of done-gate, assertion-guard, self-audit and zukan a later verdict from what the session did next (a failing check, a reverted edit, a rule not repeated, a recalled fix reused), keeps each rule's precision across sessions, and names the rules loopback stops feeding; /hit-rate; off by default"
     }
   ]
 }

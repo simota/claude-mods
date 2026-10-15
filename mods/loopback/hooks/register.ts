@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { LoopbackLast, LoopbackPending } from '../types'
-import { addOutcome, collect, contextOf, fresh, fromStore, rateLine, settle, summaryOf } from './findings'
+import { addOutcome, collect, contextOf, fresh, fromStore, gate, rateLine, settle, summaryOf } from './findings'
 
 const STORE_KEY = 'outcomes'
 
@@ -15,6 +15,8 @@ const auditLatest = { plugin: 'self-audit', key: 'latest' } as const
 const auditViolations = { plugin: 'self-audit', key: 'violations' } as const
 const unverified = { plugin: 'done-gate', key: 'isFlagged' } as const
 const denials = { plugin: 'sandbox-lens', key: 'denials' } as const
+// Rules hit-rate found too often wrong; empty while hit-rate is off or not installed.
+const muted = { plugin: 'hit-rate', key: 'muted' } as const
 
 // $.store has no versioned write: this module's writes run one after another. Across
 // sessions the total is read back, and when another session wrote over it in between, this
@@ -48,11 +50,12 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    const [latest, violations, isFlagged, held] = await Promise.all([
+    const [latest, violations, isFlagged, held, silenced] = await Promise.all([
       $.state.get(auditLatest),
       $.state.get(auditViolations),
       $.state.get(unverified),
       $.state.get(denials),
+      $.state.get(muted),
     ])
     const selfAudit = { latest: latest.value, violations: violations.value }
 
@@ -62,7 +65,7 @@ export const register: Register = (on, options) => {
       await update($, pending, () => settled.pending)
     }
 
-    const found = collect({ selfAudit, isUnverified: isFlagged.value === true, denials: held.value })
+    const found = gate(collect({ selfAudit, isUnverified: isFlagged.value === true, denials: held.value }), silenced.value)
     const picked = fresh(found, await read($, fed))
     if (picked.feed.length === 0) {
       await update($, fed, () => picked.fed)
@@ -94,7 +97,11 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'loopback' }, async $ => {
     const shown = await read($, last)
-    const rate = rateLine(fromStore(await $.store.get(STORE_KEY)))
+    const silenced = (await $.state.get(muted)).value ?? []
+    const rate = [
+      rateLine(fromStore(await $.store.get(STORE_KEY))),
+      ...(silenced.length === 0 ? [] : [`hit-rate により返していないルール: ${silenced.join(', ')}`]),
+    ].join('\n')
     const state = isEnabled ? '有効' : '無効（/plugin configure loopback で有効化）'
     if (shown === null) return { text: [`loopback: ${state}`, 'このセッションではまだ何も返していません。', rate].join('\n') }
     return {

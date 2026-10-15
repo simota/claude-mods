@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 status=0
 for pair in \
   'mods/done-gate/hooks/shell.ts mods/zukan/hooks/shell.ts' \
+  'mods/done-gate/hooks/shell.ts mods/hit-rate/hooks/shell.ts' \
   'mods/zukan/hooks/mask.ts mods/side-effect-ledger/hooks/mask.ts' \
   'mods/zukan/hooks/mask.ts mods/handoff-capsule/hooks/mask.ts' \
   'mods/zukan/hooks/mask.ts mods/artifact-shelf/hooks/mask.ts'; do

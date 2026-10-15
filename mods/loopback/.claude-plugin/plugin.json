@@ -1,7 +1,7 @@
 {
   "name": "loopback",
-  "version": "0.1.1",
-  "description": "Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default",
+  "version": "0.2.0",
+  "description": "Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person, skipping rules hit-rate found mostly wrong; off by default",
   "author": {
     "name": "simota"
   },
@@ -9,7 +9,8 @@
   "dependencies": [
     "self-audit",
     "done-gate",
-    "sandbox-lens"
+    "sandbox-lens",
+    "hit-rate"
   ],
   "userConfig": {
     "enabled": {
