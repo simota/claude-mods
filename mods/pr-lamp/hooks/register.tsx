@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PrSnapshot, PrThread } from '../types'
+import type { PostedWords } from './lamp'
 import {
   bodiesPosted,
   cappedFeed,
@@ -11,6 +12,7 @@ import {
   jobOf,
   logEntry,
   MAX_LOGS,
+  POSTED_FOR_MS,
   paneLines,
   pinOf,
   PR_FIELDS,
@@ -29,7 +31,7 @@ const problem = atom({ plugin: 'pr-lamp', key: 'problem' } as const, null as str
 const feed = atom({ plugin: 'pr-lamp', key: 'feed' } as const, [] as string[])
 const pinned = atom({ plugin: 'pr-lamp', key: 'pinned' } as const, null as string | null)
 const feedFor = atom({ plugin: 'pr-lamp', key: 'feedFor' } as const, null as string | null)
-const posted = atom({ plugin: 'pr-lamp', key: 'posted' } as const, [] as string[])
+const posted = atom({ plugin: 'pr-lamp', key: 'posted' } as const, [] as PostedWords[])
 const mine = atom({ plugin: 'pr-lamp', key: 'mine' } as const, [] as string[])
 
 // Commands after which the pull request is worth asking about at once.
@@ -112,10 +114,14 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
     const query = ['-f', `query=${THREADS_QUERY}`, '-F', `owner=${where.owner}`, '-F', `name=${where.name}`, '-F', `number=${pr.number}`]
     const asked = await run($, ['gh', 'api', 'graphql', ...query])
     if (asked.ok) {
-      const known = { posted: [...(await read($, posted))], mine: [...(await read($, mine))] }
+      const now = await $.clock.now()
+      const known = { posted: (await read($, posted)).filter(words => now - words.at < POSTED_FOR_MS), mine: [...(await read($, mine))] }
+      const claimed = new Set(known.posted)
       threads = threadsOf(json(asked.stdout), known)
-      await update($, posted, () => known.posted)
-      await update($, mine, () => known.mine.slice(-500))
+      for (const words of known.posted) claimed.delete(words)
+      // Item by item, so words a tool call recorded meanwhile are kept; expired ones go.
+      await update($, posted, all => all.filter(words => !claimed.has(words) && now - words.at < POSTED_FOR_MS))
+      await update($, mine, all => [...new Set([...all, ...known.mine])].slice(-500))
     }
   }
   // Threads that could not be read stay as they were, so they do not come back as new.
@@ -198,7 +204,10 @@ export const register: Register = (on, options) => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError === true) return ran
     const bodies = bodiesPosted(String(e.tool), e as unknown as Record<string, unknown>)
-    if (bodies.length > 0) await update($, posted, all => [...all, ...bodies].slice(-100))
+    if (bodies.length > 0) {
+      const at = await $.clock.now()
+      await update($, posted, all => [...all, ...bodies.map(text => ({ text, at }))].slice(-100))
+    }
     return ran
   }).catch(($, e, next) => next(e))
 

@@ -34,12 +34,15 @@ const thread = (id: string, count: number, body: string, author = 'rev') => ({
 })
 
 // A thread with its latest comments, oldest first; `count` is how many it has in all.
-const talk = (id: string, count: number, comments: { author: string; body: string }[]) => ({
+const talk = (id: string, count: number, comments: { author: string; body: string; at?: string }[]) => ({
   id,
   isResolved: false,
   path: 'src/a.ts',
   line: 12,
-  comments: { totalCount: count, nodes: comments.map((c, k) => ({ id: `${id}-c${count - comments.length + k + 1}`, author: { login: c.author }, body: c.body })) },
+  comments: {
+    totalCount: count,
+    nodes: comments.map((c, k) => ({ id: `${id}-c${count - comments.length + k + 1}`, author: { login: c.author }, body: c.body, createdAt: c.at ?? '2026-10-15T00:10:00Z' })),
+  },
 })
 const threads = (...nodes: unknown[]) => ({ data: { repository: { pullRequest: { reviewThreads: { nodes } } } } })
 
@@ -193,7 +196,8 @@ describe('lamp', () => {
 
   test("the session's own replies are no news; the person's own comments and reviewers' are", () => {
     // What the session posted, as pr-lamp recorded it from its tool calls (fresh for each reading).
-    const posted = () => ({ posted: ['Renamed in abc123.', 'Done.', 'Done again.'], mine: [] as string[] })
+    const POSTED_AT = Date.parse('2026-10-15T00:05:00Z')
+    const posted = () => ({ posted: ['Renamed in abc123.', 'Done.', 'Done again.'].map(text => ({ text, at: POSTED_AT })), mine: [] as string[] })
     const first = { author: 'rev', body: 'rename this' }
     const before = snapshotOf(PR(), threadsOf(threads(talk('t1', 1, [first])), posted()), 'b', 0)!
     const fed = (...comments: { author: string; body: string }[]) =>
@@ -208,7 +212,7 @@ describe('lamp', () => {
   })
 
   test("words the session posted are its reply once: a reviewer writing the same words later is news", () => {
-    const state = { posted: ['Done.'], mine: [] as string[] }
+    const state = { posted: [{ text: 'Done.', at: Date.parse('2026-10-15T00:05:00Z') }], mine: [] as string[] }
     const read = (nodes: { author: string; body: string }[]) => {
       const out = threadsOf(threads(talk('t1', nodes.length, nodes)), state)
       return out
@@ -220,19 +224,35 @@ describe('lamp', () => {
     expect(changeOf(before, snapshotOf(PR(), after, 'b', 1)!).feed.join('\n')).toContain('by @rev on src/a.ts:12: "Done."')
   })
 
+  test('posted words claim only a comment made after the post, in an unresolved thread', () => {
+    const at = Date.parse('2026-10-15T00:05:00Z')
+    const known = { posted: [{ text: 'Done.', at }], mine: [] as string[] }
+    const old = { ...talk('t1', 1, [{ author: 'rev', body: 'Done.', at: '2026-10-14T00:00:00Z' }]) }
+    const resolved = { ...talk('t0', 1, [{ author: 'rev', body: 'Done.' }]), isResolved: true }
+    const reply = talk('t2', 2, [{ author: 'rev', body: 'rename this', at: '2026-10-14T00:00:00Z' }, { author: 'me', body: 'Done.' }])
+    const out = threadsOf(threads(resolved, old, reply), known)
+    expect(known.mine).toEqual(['t2-c2'])
+    expect(out.find(one => one.key.startsWith('t1:'))?.body).toBe('Done.')
+    expect(out.find(one => one.key.startsWith('t2:'))?.author).toBe('rev')
+  })
+
   test('bodiesPosted reads a pull request comment the session posts, and nothing else', () => {
     const bash = (command: string) => bodiesPosted('Bash', { command })
-    expect(bash('gh pr comment 3 -b "ok" && git checkout -b feat')).toEqual(['ok'])
-    expect(bash('gh pr comment 3 --body "a \\"b\\" c"')).toEqual(['a "b" c'])
-    expect(bash('gh pr comment 3 -b "line1\\nline2"')).toEqual(['line1\\nline2'])
+    // A thread reply only: a conversation comment or a review body never shows in a thread.
+    expect(bash('gh pr comment 3 -b "Thanks, fixed."')).toEqual([])
+    expect(bash('gh pr review 3 --comment -b "LGTM"')).toEqual([])
+    expect(bash('gh api repos/o/r/pulls/3/comments/77/replies -f body="ok" && git checkout -b feat')).toEqual(['ok'])
+    expect(bash('gh api repos/o/r/pulls/3/comments -f body="a \\"b\\" c" -F in_reply_to=77')).toEqual(['a "b" c'])
+    expect(bash('gh api repos/o/r/pulls/3/comments -f body="line1\\nline2"')).toEqual(['line1\\nline2'])
     expect(bash('gh api repos/o/r/pulls/3/comments -F body=@reply.md')).toEqual([])
+    expect(bash('gh api repos/o/r/issues/3/comments -f body="ok"')).toEqual([])
     expect(bodiesPosted('mcp__github__add_reply_to_pull_request_comment', { body: 'Fixed.' })).toEqual(['Fixed.'])
     expect(bodiesPosted('mcp__linear__create_comment', { body: 'Fixed.' })).toEqual([])
     expect(bodiesPosted('mcp__github__request_copilot_review', { body: 'x' })).toEqual([])
   })
 
   test('many session replies in a row, or a deleted comment, do not bring an old comment back', () => {
-    const posted = { posted: ['Done.', 'Done.', 'Done.', 'Done.', 'Done again.'], mine: [] as string[] }
+    const posted = { posted: ['Done.', 'Done.', 'Done.', 'Done.', 'Done again.'].map(text => ({ text, at: Date.parse('2026-10-15T00:05:00Z') })), mine: [] as string[] }
     const r1 = { author: 'rev', body: 'rename this' }
     const s = { author: 'me', body: 'Done.' }
     const base = threadsOf(threads(talk('t1', 2, [r1, { author: 'rev', body: 'and the docs' }])), posted)
@@ -308,7 +328,7 @@ describe('pr-lamp in a session', () => {
     await $.session.start(START)
     await clock.settle()
     await $.tool.call({ tool: 'mcp__github__add_reply_to_pull_request_comment', body: 'Renamed in abc123.' } as never)
-    await $.tool.call({ tool: 'Bash', command: 'gh pr comment 42 --body "Fixed the docs too."' })
+    await $.tool.call({ tool: 'Bash', command: 'gh api repos/me/app/pulls/42/comments/5/replies -f body="Fixed the docs too."' })
     gh.threads = [
       talk('t1', 2, [{ author: 'rev', body: 'rename this' }, { author: 'me', body: 'Renamed in abc123.' }]),
       talk('t2', 1, [{ author: 'me', body: 'Fixed the docs too.' }]),
