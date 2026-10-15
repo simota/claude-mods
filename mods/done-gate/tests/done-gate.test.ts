@@ -126,6 +126,9 @@ test('a check whose exit status is not the command’s does not verify', async (
     'npm test &',
     'npm test | tee log.txt',
     '(npm test) | tail',
+    // find -exec … \; and script without -e exit 0 though the check fails.
+    "find . -maxdepth 0 -exec npm test \\;",
+    "script -qc 'npm test' /dev/null",
   ]) {
     await startTurn($)
     await edit($)
@@ -226,6 +229,8 @@ test('real checks verify, whatever runs them', async ($, on) => {
     'CI=1 make test',
     'npx prettier --check .',
     'yarn lint',
+    'find . -maxdepth 0 -exec npm test {} +',
+    "script -eqc 'npm test' /dev/null",
   ]) {
     await startTurn($)
     await edit($)
@@ -412,6 +417,15 @@ test('hooks switched off through config in the environment, quoting, env -S or a
     'ionice -c3 git commit -n -m x',
     'find . -maxdepth 0 -exec git commit -n -m x \\;',
     "cat <<'EOF' | bash\ngit commit -n -m x\nEOF",
+    "find . -maxdepth 0 -exec sh -c 'git commit -n -m a' \\;",
+    "find . -maxdepth 0 -exec bash -c 'git commit --no-verify -m a' {} +",
+    "su root -c 'git commit -n -m x'",
+    "su - me -c 'git commit -n -m x'",
+    "script -q /dev/null -c 'git commit -n -m x'",
+    "script --command 'git commit -n -m x' /dev/null",
+    "fish --command='git commit -n -m x'",
+    'chronic git commit -n -m x',
+    'setsid git commit -n -m x',
   ]) {
     const ran = await bash($, command)
     expect(ran.deny).toContain('--no-verify')

@@ -290,7 +290,10 @@ export function parse(command: string): Parsed {
       i += 1
       continue
     }
-    if (ch === '(' || ch === ')' || ((ch === '{' || ch === '}') && word === undefined)) {
+    // `{` and `}` are a group's edges only as words of their own (`{ a; }`), so find's `{}` is a word.
+    const isBrace =
+      word === undefined && ((ch === '{' && /\s/.test(command[i + 1] ?? '\n')) || (ch === '}' && /^(?:$|[\s;&|)])/.test(command[i + 1] ?? '')))
+    if (ch === '(' || ch === ')' || isBrace) {
       // A subshell or group edge, glued to a word or not: what is inside runs as commands.
       endCommand('')
       i += 1
@@ -348,7 +351,12 @@ const WRAPPERS: Record<string, Set<string>> = {
   caffeinate: new Set(['-t', '-w']),
   ionice: new Set(['-c', '-n', '-p', '-t', '--class', '--classdata']),
   busybox: new Set([]),
+  chronic: new Set([]),
+  setsid: new Set([]),
 }
+
+/** Words joined back into a command line with each one quoted, so re-reading it keeps them whole. */
+const quoteWords = (words: readonly string[]) => words.map(word => `'${word.replace(/'/g, `'\\''`)}'`).join(' ')
 // timeout takes options, then a duration, then the command.
 const TIMEOUT_VALUES = new Set(['-s', '--signal', '-k', '--kill-after'])
 // Runners whose next word is the program they run; 2 = the second word must be run/exec.
@@ -417,7 +425,17 @@ export function innerText(words: readonly string[]): string | undefined {
     const at = run.args.findIndex(arg => /^-(?:exec|execdir|ok|okdir)$/.test(arg))
     if (at === -1) return undefined
     const end = run.args.findIndex((arg, k) => k > at && (arg === ';' || arg === '+'))
-    return run.args.slice(at + 1, end === -1 ? undefined : end).join(' ')
+    return quoteWords(run.args.slice(at + 1, end === -1 ? undefined : end))
+  }
+  if (run.name === 'su' || run.name === 'script' || run.name === 'fish') {
+    // Their command text comes with -c or --command anywhere, after a user or a log file.
+    for (let k = 0; k < run.args.length; k++) {
+      const arg = run.args[k] as string
+      const glued = /^--command=(.*)$/.exec(arg)
+      if (glued !== null) return glued[1]
+      if (arg === '--command' || /^-[A-Za-z]*c[A-Za-z]*$/.test(arg)) return run.args[k + 1]
+    }
+    return undefined
   }
   if (SHELLS.has(run.name)) {
     for (let k = 0; k < run.args.length; k++) {
@@ -547,8 +565,18 @@ function isCheckProgram(words: readonly string[]): boolean {
   }
 }
 
+/** Whether a command that runs another passes on its exit status: `find -exec … \;` and `script` without -e exit 0 though it fails. */
+function passesStatus(words: readonly string[]): boolean {
+  const run = program(words)
+  if (run === undefined) return true
+  if (run.name === 'find') return run.args.includes('+')
+  if (run.name === 'script') return run.args.some(arg => arg === '--return' || /^-[A-Za-z]*e[A-Za-z]*$/.test(arg))
+  return true
+}
+
 function isCheckCommand(simple: Simple, depth: number): boolean {
   if (isCheckProgram(simple.words)) return true
+  if (!passesStatus(simple.words)) return false
   const inner = innerText(simple.words)
   return inner !== undefined && depth < MAX_DEPTH && verifies(inner, depth + 1)
 }
