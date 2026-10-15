@@ -424,6 +424,7 @@ test('hooks switched off through config in the environment, quoting, env -S or a
     "script -q /dev/null -c 'git commit -n -m x'",
     "script --command 'git commit -n -m x' /dev/null",
     "fish --command='git commit -n -m x'",
+    "find . -maxdepth 0 -exec true \\; -exec sh -c 'git commit -n -m e' \\;",
     'chronic git commit -n -m x',
     'setsid git commit -n -m x',
   ]) {

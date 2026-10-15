@@ -421,11 +421,15 @@ export function innerText(words: readonly string[]): string | undefined {
   if (run === undefined) return undefined
   if (run.name === 'eval') return run.args.join(' ')
   if (run.name === 'find') {
-    // `find … -exec git commit -n \;`: the words up to `;` or `+` run as a command.
-    const at = run.args.findIndex(arg => /^-(?:exec|execdir|ok|okdir)$/.test(arg))
-    if (at === -1) return undefined
-    const end = run.args.findIndex((arg, k) => k > at && (arg === ';' || arg === '+'))
-    return quoteWords(run.args.slice(at + 1, end === -1 ? undefined : end))
+    // `find … -exec git commit -n \;`: the words up to `;` or `+` run as a command, for every -exec.
+    const runs: string[] = []
+    for (let k = 0; k < run.args.length; k++) {
+      if (!/^-(?:exec|execdir|ok|okdir)$/.test(run.args[k] as string)) continue
+      const end = run.args.findIndex((arg, n) => n > k && (arg === ';' || arg === '+'))
+      runs.push(quoteWords(run.args.slice(k + 1, end === -1 ? undefined : end)))
+      k = end === -1 ? run.args.length : end
+    }
+    return runs.length === 0 ? undefined : runs.join(' ; ')
   }
   if (run.name === 'su' || run.name === 'script' || run.name === 'fish') {
     // Their command text comes with -c or --command anywhere, after a user or a log file.
