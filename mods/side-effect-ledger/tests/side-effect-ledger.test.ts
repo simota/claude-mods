@@ -18,34 +18,61 @@ describe('ledger', () => {
   })
 
   test('writes the undo of a push from what it printed', () => {
-    const [one] = classifyCommand('cd app && git push origin main', '   1a2b3c4..5d6e7f8  main -> main')
+    const [one] = classifyCommand('git push origin main', 'To github.com:me/app.git\n   1a2b3c4..5d6e7f8  main -> main')
     expect(one).toMatchObject({ kind: 'push', label: 'git push origin main', reversibility: 'easy', undo: 'git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main' })
-    expect(classifyCommand('git push -u origin feat/x', ' * [new branch]      feat/x -> feat/x')[0]?.undo).toBe('git push origin --delete feat/x')
+    expect(classifyCommand('git push -u origin feat/x', 'To github.com:me/app.git\n * [new branch]      feat/x -> feat/x')[0]?.undo).toBe('git push origin --delete feat/x')
   })
 
-  test('two pushes in one command each undo only what they moved, on their own remote', () => {
-    const output = ['To github.com:me/app.git', '   1a2b3c4..5d6e7f8  main -> main', 'To github.com:up/app.git', '   0f0f0f0..5d6e7f8  main -> main'].join('\n')
-    const [mine, theirs] = classifyCommand('git push origin main && git push upstream main', output)
-    expect(mine?.undo).toBe('git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
-    expect(theirs?.undo).toBe('git push --force-with-lease=main:5d6e7f8 upstream 0f0f0f0:main')
-    // One push printed nothing (up to date): which block is whose is unknown, so neither undo names a sha.
-    const unsure = classifyCommand('git push origin main && git push upstream main', ['Everything up-to-date', 'To github.com:up/app.git', '   0f0f0f0..5d6e7f8  main -> main'].join('\n'))
-    expect(unsure.map(one => one.undo).join(' ')).not.toContain('0f0f0f0')
+  test('a sha to force back is given only when the output pairs with the one push surely', () => {
+    const moved = 'To github.com:me/app.git\n   1a2b3c4..5d6e7f8  main -> main'
+    // Two pushes: blocks cannot be told apart (a remote may have two push URLs), so no sha.
+    const two = classifyCommand('git push origin main && git push upstream main', `${moved}\nTo github.com:up/app.git\n   0f0f0f0..5d6e7f8  main -> main`)
+    expect(two.map(one => one.undo).join(' ')).not.toMatch(/1a2b3c4|0f0f0f0/)
+    // A fetch line before the push is not a ref the push moved.
+    const pulled = classifyCommand('git pull --rebase && git push', `From github.com:me/app\n   1111111..2222222  main -> origin/main\n${moved}`)
+    expect(pulled[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 github.com:me/app.git 1a2b3c4:main')
+    // Two push URLs print two blocks for one push: unsure, so no sha.
+    expect(classifyCommand('git push origin main', `${moved}\n${moved.replace('me/app', 'me/mirror')}`)[0]?.undo).not.toContain('1a2b3c4')
   })
 
-  test('a push behind git options is still a push, and an option value is not the remote', () => {
-    const moved = '   1a2b3c4..5d6e7f8  main -> main'
-    expect(classifyCommand('git -C app push origin main', moved)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
+  test('a push behind git options or cd undoes in the same repository; option values and redirects are not the remote', () => {
+    const moved = 'To github.com:me/app.git\n   1a2b3c4..5d6e7f8  main -> main'
+    expect(classifyCommand('git -C app push origin main', moved)[0]?.undo).toBe('git -C app push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
+    expect(classifyCommand('cd app && git push origin feat', 'To github.com:me/app.git\n * [new branch]      feat -> feat')[0]?.undo).toBe('git -C app push origin --delete feat')
     expect(classifyCommand('git -c core.sshCommand=ssh push origin main', moved)[0]?.kind).toBe('push')
     expect(classifyCommand('git push -o ci.skip origin main', moved)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
+    expect(classifyCommand('git push 2>&1 | tail -5', moved)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 github.com:me/app.git 1a2b3c4:main')
     // No remote named: the one git printed is the one pushed to, not necessarily origin.
-    expect(classifyCommand('git push', `To github.com:fork/app.git\n${moved}`)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 github.com:fork/app.git 1a2b3c4:main')
+    expect(classifyCommand('git push', moved.replace('me/app', 'fork/app'))[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 github.com:fork/app.git 1a2b3c4:main')
+  })
+
+  test('undos never delete what existed before, and dry runs and reads are not recorded', () => {
+    const undo = (command: string, output = '') => classifyCommand(command, output)[0]?.undo
+    expect(undo('gh pr create --base main --head develop', 'https://github.com/me/app/pull/12')).toBe('gh pr close https://github.com/me/app/pull/12')
+    expect(undo('gh release create --notes-start-tag v0.9 -R o/r --title "Big one" v1.0 dist/app.tgz')).toBe(
+      'gh release delete v1.0 -R o/r（タグも消すなら --cleanup-tag。release より前からあったタグなら付けない）',
+    )
+    expect(undo('helm uninstall web -n prod')).toBe('同じ chart と values で helm install web <chart> -n prod（--keep-history 付きで消したなら helm rollback）')
+    const none = (command: string, output = '') => expect(classifyCommand(command, output)).toEqual([])
+    none('git push --dry-run origin main', 'To github.com:me/app.git\n   1a2b3c4..5d6e7f8  main -> main')
+    none('git push -n origin main')
+    none('npm publish --dry-run', '+ my-lib@1.2.3')
+    none('kubectl create deploy x --image=y --dry-run=client -o yaml')
+    none('kubectl rollout status deploy/web')
+    none('terraform state list')
+    none('wrangler pages dev ./dist')
+    expect(classifyCommand('kubectl apply -f k.yaml --dry-run=none', '')[0]?.kind).toBe('infra')
+    expect(undo('vercel deploy')).not.toContain('rollback')
+    expect(undo('vercel --prod')).toContain('rollback')
+    expect(undo('helm install web ./chart -n prod')).toBe('helm uninstall web -n prod')
+    expect(undo('helm upgrade --install web ./chart --namespace prod')).toBe('helm history web --namespace prod → helm rollback web <revision> --namespace prod（初回 install なら helm uninstall web --namespace prod）')
+    expect(classifyCommand('helm uninstall web', '')[0]?.reversibility).toBe('hard')
   })
 
   test('knows GitHub, publishing, deploys and infrastructure', () => {
     const kinds = (command: string, output = '') => classifyCommand(command, output).map(one => `${one.kind}:${one.label}`)
     expect(kinds('gh pr create --fill', 'https://github.com/me/app/pull/42\n')).toEqual(['github:gh pr create → #42'])
-    expect(classifyCommand('gh pr create --fill', 'https://github.com/me/app/pull/42')[0]?.undo).toBe('gh pr close 42 --delete-branch')
+    expect(classifyCommand('gh pr create --fill', 'https://github.com/me/app/pull/42')[0]?.undo).toBe('gh pr close https://github.com/me/app/pull/42')
     expect(kinds('npm publish', '+ my-lib@1.2.3')).toEqual(['publish:npm publish → my-lib@1.2.3'])
     expect(kinds('NODE_ENV=production vercel --prod')).toEqual(['deploy:vercel --prod'])
     expect(kinds('kubectl apply -f k8s/')).toEqual(['infra:kubectl apply -f k8s/'])
