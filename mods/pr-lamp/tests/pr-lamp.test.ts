@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { cappedFeed, changeOf, contextOf, logEntry, logTail, pinOf, remaining, snapshotOf, statusOf, threadsOf } from '../hooks/lamp'
+import { bodiesPosted, cappedFeed, changeOf, contextOf, logEntry, logTail, pinOf, remaining, snapshotOf, statusOf, threadsOf } from '../hooks/lamp'
 
 // `pr` answers for the checked-out branch, `named` for a number or branch given to gh, `mine`
 // lists the person's open pull requests.
@@ -163,9 +163,12 @@ describe('lamp', () => {
   })
 
   test('names the pull request a command works on, beside the checkout', () => {
-    expect(pinOf('gh pr diff 2 --name-only', '')).toBe('2')
+    // Looking at another pull request does not move the lamp off the one worked on.
+    expect(pinOf('gh pr diff 2 --name-only', '')).toBeUndefined()
+    expect(pinOf('gh pr view 12', '')).toBeUndefined()
+    expect(pinOf('gh pr checks 12', '')).toBeUndefined()
     expect(pinOf('gh pr review #7 --approve', '')).toBe('7')
-    expect(pinOf('gh pr view https://github.com/me/app/pull/9 --json title', '')).toBe('https://github.com/me/app/pull/9')
+    expect(pinOf('gh pr comment https://github.com/me/app/pull/9 -b hi', '')).toBe('https://github.com/me/app/pull/9')
     expect(pinOf('gh pr create --fill', 'Creating pull request\nhttps://github.com/me/app/pull/12\n')).toBe('https://github.com/me/app/pull/12')
     expect(pinOf('git push -u origin review/second-pass', '')).toBe('review/second-pass')
     expect(pinOf('cd w && git push origin HEAD:refs/heads/fix/x && echo ok', '')).toBe('fix/x')
@@ -189,12 +192,12 @@ describe('lamp', () => {
   })
 
   test("the session's own replies are no news; the person's own comments and reviewers' are", () => {
-    // What the session posted, as pr-lamp recorded it from its tool calls.
-    const posted = ['Renamed in abc123.', 'Done.', 'Done again.']
+    // What the session posted, as pr-lamp recorded it from its tool calls (fresh for each reading).
+    const posted = () => ({ posted: ['Renamed in abc123.', 'Done.', 'Done again.'], mine: [] as string[] })
     const first = { author: 'rev', body: 'rename this' }
-    const before = snapshotOf(PR(), threadsOf(threads(talk('t1', 1, [first])), posted), 'b', 0)!
+    const before = snapshotOf(PR(), threadsOf(threads(talk('t1', 1, [first])), posted()), 'b', 0)!
     const fed = (...comments: { author: string; body: string }[]) =>
-      changeOf(before, snapshotOf(PR(), threadsOf(threads(talk('t1', comments.length, comments)), posted), 'b', 1)!).feed.join('\n')
+      changeOf(before, snapshotOf(PR(), threadsOf(threads(talk('t1', comments.length, comments)), posted()), 'b', 1)!).feed.join('\n')
     expect(fed(first, { author: 'me', body: 'Renamed in abc123.' })).toBe('')
     // The person reviewing their own pull request for Claude to act on.
     expect(fed(first, { author: 'me', body: 'Also handle the empty case.' })).toContain('by @me on src/a.ts:12: "Also handle the empty case."')
@@ -204,8 +207,32 @@ describe('lamp', () => {
     expect(fed(first, { author: 'rev', body: '> Done.\nNot quite: the docs too.' })).toContain('Not quite')
   })
 
+  test("words the session posted are its reply once: a reviewer writing the same words later is news", () => {
+    const state = { posted: ['Done.'], mine: [] as string[] }
+    const read = (nodes: { author: string; body: string }[]) => {
+      const out = threadsOf(threads(talk('t1', nodes.length, nodes)), state)
+      return out
+    }
+    const before = snapshotOf(PR(), read([{ author: 'rev', body: 'rename this' }, { author: 'me', body: 'Done.' }]), 'b', 0)!
+    expect(state.posted).toEqual([])
+    expect(state.mine).toEqual(['t1-c2'])
+    const after = read([{ author: 'rev', body: 'rename this' }, { author: 'me', body: 'Done.' }, { author: 'rev', body: 'Done.' }])
+    expect(changeOf(before, snapshotOf(PR(), after, 'b', 1)!).feed.join('\n')).toContain('by @rev on src/a.ts:12: "Done."')
+  })
+
+  test('bodiesPosted reads a pull request comment the session posts, and nothing else', () => {
+    const bash = (command: string) => bodiesPosted('Bash', { command })
+    expect(bash('gh pr comment 3 -b "ok" && git checkout -b feat')).toEqual(['ok'])
+    expect(bash('gh pr comment 3 --body "a \\"b\\" c"')).toEqual(['a "b" c'])
+    expect(bash('gh pr comment 3 -b "line1\\nline2"')).toEqual(['line1\\nline2'])
+    expect(bash('gh api repos/o/r/pulls/3/comments -F body=@reply.md')).toEqual([])
+    expect(bodiesPosted('mcp__github__add_reply_to_pull_request_comment', { body: 'Fixed.' })).toEqual(['Fixed.'])
+    expect(bodiesPosted('mcp__linear__create_comment', { body: 'Fixed.' })).toEqual([])
+    expect(bodiesPosted('mcp__github__request_copilot_review', { body: 'x' })).toEqual([])
+  })
+
   test('many session replies in a row, or a deleted comment, do not bring an old comment back', () => {
-    const posted = ['Done.', 'Done again.']
+    const posted = { posted: ['Done.', 'Done.', 'Done.', 'Done.', 'Done again.'], mine: [] as string[] }
     const r1 = { author: 'rev', body: 'rename this' }
     const s = { author: 'me', body: 'Done.' }
     const base = threadsOf(threads(talk('t1', 2, [r1, { author: 'rev', body: 'and the docs' }])), posted)
