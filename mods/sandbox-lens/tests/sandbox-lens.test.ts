@@ -162,6 +162,14 @@ describe('merge', () => {
 })
 
 describe('exampleOf', () => {
+  test('masks other credential headers, run-together names and more token shapes', () => {
+    expect(exampleOf(`curl -H "X-API-Key: abcdef123456" https://x.io`)).toBe(`curl -H "X-API-Key: ***" https://x.io`)
+    expect(exampleOf('PGPASSWORD=hunter2 psql -h db')).toBe('PGPASSWORD=*** psql -h db')
+    expect(exampleOf('npm publish --accessToken=abc123')).toBe('npm publish --accessToken=***')
+    expect(exampleOf('curl -u x glpat-abcdefghij1234567890')).toBe('curl -u x glpat-***')
+    expect(exampleOf(`curl -H "Content-Type: application/json" https://x.io`)).toBe(`curl -H "Content-Type: application/json" https://x.io`)
+  })
+
   test('masks credentials in the example command', () => {
     expect(exampleOf('curl -H "Authorization: Bearer sk-abc123" https://x.io')).toBe(
       'curl -H "Authorization: Bearer ***" https://x.io',

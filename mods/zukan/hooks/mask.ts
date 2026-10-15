@@ -8,7 +8,11 @@ const SECRET_WORDS = new Set([
   'key', 'apikey', 'token', 'secret', 'password', 'passwd', 'pass', 'pwd',
   'auth', 'cookie', 'session', 'credential', 'credentials',
 ])
-const isSecretName = (name: string) => name.toLowerCase().split(/[_-]/).some(part => SECRET_WORDS.has(part))
+// Endings that mark a name run together with no separator (`PGPASSWORD`, `APIKey`).
+const SECRET_ENDINGS = ['password', 'passwd', 'token', 'secret', 'apikey']
+const isSecretName = (name: string) =>
+  name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[_-]/).some(part => SECRET_WORDS.has(part)) ||
+  SECRET_ENDINGS.some(end => name.toLowerCase().replace(/[_-]/g, '').endsWith(end))
 
 // A value: quoted whole, or up to whitespace or a shell separator.
 const VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s&;|'"]+)`
@@ -19,12 +23,16 @@ type Mask = [RegExp, string | Replacer]
 // Credentials a command line may carry, each kept to its name.
 const SECRETS: Mask[] = [
   // URL userinfo: user:password@ keeps the user, a token alone@ goes whole; host and path stay.
-  [/(\b[a-z][\w+.-]*:\/\/)([^/\s:@'"]+):([^/\s@'"]+)@/gi, '$1$2:***@'],
-  [/(\b[a-z][\w+.-]*:\/\/)([^/\s:@'"*]+)@/gi, '$1***@'],
+  // The scheme is bounded, as the NAME=value name below is, to keep a long hyphenated run linear.
+  [/(\b[a-z][\w+.-]{0,31}:\/\/)([^/\s:@'"]+):([^/\s@'"]+)@/gi, '$1$2:***@'],
+  [/(\b[a-z][\w+.-]{0,31}:\/\/)([^/\s:@'"*]+)@/gi, '$1***@'],
   // Headers: Authorization keeps its scheme, Cookie loses every pair.
   [/(authorization:\s*)(?:(bearer|basic|token)\s+)?[^\s'"]+/gi, (_, head = '', scheme = '') => `${head}${scheme ? `${scheme} ` : ''}***`],
   [/(\bcookie:\s*)[^\s'";]+(?:;\s*[^\s'";]+)*;?/gi, '$1***'],
   [/\b(bearer)\s+(?!\*\*\*)[\w.~+/=-]+/gi, '$1 ***'],
+  // Any other header a request sends whose name reads as a credential (-H "X-API-Key: x"); only
+  // as -H/--header, so an error line such as `Unexpected token: '<'` is left as it is.
+  [/(\s(?:-H|--header)(?:=|\s+)["']?)([\w-]+)(:\s*)[^\s'"]+/g, (whole, head = '', name = '', colon = '') => (isSecretName(name) ? `${head}${name}${colon}***` : whole)],
   // -u user:pass, -uuser:pass, --user=user:pass, -u "user:pass"
   [/(\s(?:-u|--user)(?:=|\s+)?)(["']?)([^\s:'"]+):([^\s'"]+)/g, '$1$2$3:***'],
   // --password x, --token=x, --client-secret "x"
@@ -33,16 +41,24 @@ const SECRETS: Mask[] = [
     '$1***',
   ],
   // NAME=value where the name reads as a credential, quoted values too (env assignments, query strings).
+  // The name is bounded so a long run such as `a-a-a-…` is scanned in linear time, not once per hyphen.
   [
-    new RegExp(String.raw`\b([A-Za-z][\w-]*)=(${VALUE})`, 'g'),
+    new RegExp(String.raw`\b([A-Za-z][\w-]{0,127})=(${VALUE})`, 'g'),
     (whole, name = '') => (isSecretName(name) ? `${name}=***` : whole),
   ],
+  // "name": "value" (JSON in an output line) where the name reads as a credential.
+  [/("([\w-]+)"\s*:\s*)"[^"]*"/g, (whole, head = '', name = '') => (isSecretName(name) ? `${head}"***"` : whole)],
   // Bare tokens with a known shape.
   [/\b(sk-(?:ant-)?)[\w-]{16,}/g, '$1***'],
   [/\b(gh[pousr]_)[A-Za-z0-9]{10,}/g, '$1***'],
   [/\b(github_pat_)\w{10,}/g, '$1***'],
   [/\b(xox[abprs]-)[\w-]{8,}/g, '$1***'],
   [/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA***'],
+  [/\b(glpat-)[\w-]{20,}/g, '$1***'],
+  [/\b(npm_)[A-Za-z0-9]{36}\b/g, '$1***'],
+  [/\b((?:sk|rk)_(?:live|test)_)[A-Za-z0-9]{10,}/g, '$1***'],
+  [/\bAIza[\w-]{35}\b/g, 'AIza***'],
+  [/\beyJ[\w-]{8,}\.eyJ[\w-]{8,}\.[\w-]*/g, 'eyJ***'],
 ]
 
 // Programs whose -p takes a password: attached (mysql -pX) or as the next word (sshpass -p X, docker login -p X).

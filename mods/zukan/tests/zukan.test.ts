@@ -2,6 +2,7 @@ import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { errorLine, isCheck, keyOf, normalise, programOf, reconcile, sight, step, toastOf } from '../hooks/book'
+import { maskedOf } from '../hooks/mask'
 
 const SSH_PUSH = [
   'Received disconnect from UNKNOWN port 65535:1: This proxy requires authentication, and this client did not offer an authentication method, so the connection was refused.',
@@ -10,6 +11,43 @@ const SSH_PUSH = [
 ].join('\n')
 
 type Run = { text: string; isError: boolean }
+
+describe('maskedOf', () => {
+  test('masks credentials in headers, names and token shapes the first version let through', () => {
+    const masked: [string, string][] = [
+      [`curl -H "X-API-Key: abcdef1234567890" https://api.x`, `curl -H "X-API-Key: ***" https://api.x`],
+      [`curl --header 'PRIVATE-TOKEN: glpat-abcdefghij1234567890' https://gl`, `curl --header 'PRIVATE-TOKEN: ***' https://gl`],
+      [`PGPASSWORD=hunter2 psql -h db`, `PGPASSWORD=*** psql -h db`],
+      [`node app.js --accessToken=abc123 clientSecret=zzz9 APIKey=k1`, `node app.js --accessToken=*** clientSecret=*** APIKey=***`],
+      [`stripe login sk_live_abcdefghijklmnop1234`, `stripe login sk_live_***`],
+      [`echo npm_abcdefghijklmnopqrstuvwxyz0123456789`, `echo npm_***`],
+      [`echo glpat-abcdefghij1234567890`, `echo glpat-***`],
+      [`key=1 AIzaSyA1234567890abcdefghijklmnopqrstuv`, `key=*** AIza***`],
+      [`curl -d eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl`, `curl -d eyJ***`],
+      [`error: {"api_key": "abcd1234efgh", "id": "x"}`, `error: {"api_key": "***", "id": "x"}`],
+    ]
+    for (const [given, want] of masked) expect(maskedOf(given)).toBe(want)
+  })
+
+  test('a long hyphenated run is masked in linear time, and a long name still loses its value', () => {
+    // Quadratic before: 80k characters took seconds, holding up the Bash call's hook.
+    const run = 'a-'.repeat(160_000)
+    const started = performance.now()
+    expect(maskedOf(run)).toBe(run)
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(maskedOf(`${'x'.repeat(200)}-MY_TOKEN=abc`)).toBe(`${'x'.repeat(200)}-MY_TOKEN=***`)
+  })
+
+  test('leaves alone what only looks like a credential name', () => {
+    const kept = [
+      `SyntaxError: Unexpected token: '<'`,
+      `curl -H "Content-Type: application/json" https://x`,
+      `MAX_TOKENS=100 keyboardLayout=us tokenizer=bert`,
+      `{"tokens": 12, "id": "abc"}`,
+    ]
+    for (const given of kept) expect(maskedOf(given)).toBe(given)
+  })
+})
 
 const START = { cwd: '/Users/someone/repos/app', surface: 'terminal', isInteractive: true } as const
 const RUN = { command: 'zukan', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as const
