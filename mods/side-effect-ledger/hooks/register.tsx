@@ -56,6 +56,18 @@ async function setState($: EngineInterface, id: string, undoState: LedgerEntry['
   $.ui.status(statusOf(list, await $.session.id()))
 }
 
+/**
+ * The undo of a call that failed. A single call that failed changed nothing to undo, and its output
+ * may name what was there before (a PR that already existed). A push names only the refs it printed
+ * as moved. Infrastructure, and a chain, may have applied a part before failing: the undo stays,
+ * marked as such.
+ */
+function failedUndo(one: Classified, isOk: boolean, isChain: boolean): string {
+  if (isOk || one.kind === 'push') return one.undo
+  if (one.kind === 'infra' || isChain) return `途中まで反映された可能性: ${one.undo}`
+  return '失敗したため取り消すものはない（途中まで反映されていないかは確認）'
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'ledger', description: 'push・公開・デプロイ・外部 API 更新など Git 差分に出ない操作の台帳（結果と取り消し方法の確認状況）' })
@@ -84,10 +96,7 @@ export const register: Register = on => {
     const fresh: LedgerEntry[] = found.map((one, i) => ({
       ...one,
       label: maskedOf(one.label),
-      // A failed call changed nothing to undo, and its output may name what was there before (a
-      // PR that already existed). A push may have moved some refs before others were rejected:
-      // its undo names only the refs it printed as moved.
-      undo: isOk || one.kind === 'push' ? maskedOf(one.undo) : '失敗したため取り消すものはない（途中まで反映されていないかは確認）',
+      undo: maskedOf(failedUndo(one, isOk, found.length > 1 || /&&|;|\n/.test(String(input.command ?? '')))),
       id: `${e.tool_use_id ?? at}:${i}`,
       at,
       source: source.replace(/\s+/g, ' ').slice(0, 300),

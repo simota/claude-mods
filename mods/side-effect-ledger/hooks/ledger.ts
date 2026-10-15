@@ -54,6 +54,10 @@ function gitPush(argv: string[], output: string, isElsewhere: boolean): Classifi
   // remote where the undo is run: the URL git printed means the same one anywhere.
   const remoteName = isElsewhere ? (remote ?? '<リモートURL>') : (positional[0] ?? remote ?? 'origin')
   const label = `git ${argv.slice(1).join(' ')}`
+  // No ref printed as moved and the push refused: there is nothing to put back.
+  if (refs.length === 0 && /\[(?:remote )?rejected\]|error: failed to push/.test(output)) {
+    return { kind: 'push', label, undo: 'push は拒否され、何も動いていない', reversibility: 'easy' }
+  }
   if (refs.length === 0) return { kind: 'push', label, undo: `押し出したコミットを ${remoteName} の以前の位置へ戻す: git push --force-with-lease ${remoteName} <以前のsha>:<ブランチ>（以前の sha は push の出力か git reflog で確認）`, reversibility: 'manual' }
   const undo = refs
     .map(one =>
@@ -174,7 +178,7 @@ const HELM_VALUES = new Set(['-f', '--values', '--set', '--set-string', '--set-f
 
 /** helm's release and the options that say where it lives. */
 function helmArgs(args: readonly string[]): { release: string; where: string } {
-  const { first, kept } = firstPositional(args, HELM_FLAGS, HELM_VALUES, /^(?:-n|--namespace|--kube-context)$/)
+  const { first, kept } = firstPositional(args, HELM_FLAGS, HELM_VALUES, /^(?:-n|--namespace|--kube-context|--kubeconfig)$/)
   return { release: first ?? '<release>', where: kept.length === 0 ? '' : ` ${kept.join(' ')}` }
 }
 
@@ -224,6 +228,7 @@ export function classifyArgv(given: string[], output: string, isElsewhere = fals
     // A production deploy is rolled back, never removed; only a preview is removed, by the URL
     // vercel printed as the preview's.
     if (/--prod\b|--target(?:=|\s+)production\b/.test(rest)) return { kind: 'deploy', label: `vercel ${rest}`.trim(), undo: 'vercel rollback（または以前のデプロイを vercel promote）', reversibility: 'easy' }
+    if (/--target(?:=|\s+)(?!preview\b)\S/.test(rest)) return { kind: 'deploy', label: `vercel ${rest}`.trim(), undo: 'Vercel ダッシュボードでその環境の以前のデプロイを promote（デプロイは削除しない）', reversibility: 'manual' }
     const preview = output.match(/Preview:\s*(https:\/\/[\w.-]+\.vercel\.app)\b/)?.[1]
     return { kind: 'deploy', label: `vercel ${rest}`.trim(), undo: `vercel remove ${preview ?? '<プレビューURL>'}（プレビューのみ、本番は変わっていない）`, reversibility: 'easy' }
   }
@@ -252,6 +257,9 @@ export function classifyArgv(given: string[], output: string, isElsewhere = fals
   return undefined
 }
 
+// Environment that says which cluster, namespace or repository a command acts on.
+const WHERE_ENV = /^(?:KUBECONFIG|HELM_(?:NAMESPACE|KUBECONTEXT|KUBEAPISERVER|KUBETOKEN|DRIVER)|GH_REPO|GH_HOST)=/
+
 /**
  * Every outside-reaching part of a Bash command; env prefixes, redirections and subshell
  * parentheses taken off. A push is given a sha to force back only when it is the command's one
@@ -264,21 +272,26 @@ export function classifyCommand(command: string, output: string): Classified[] {
   const parts = command.split(/&&|\|\||;|\n|\|/).map(part => {
     if (/^\s*\(/.test(part)) isElsewhere = true
     const argv = withoutRedirects(words(part.replace(/^\s*\(+/, '').replace(/\)+\s*$/, '')))
+    const where: string[] = []
     while (argv.length > 0 && (/^\w+=/.test(argv[0] as string) || argv[0] === 'sudo' || argv[0] === 'env' || argv[0] === 'command')) {
-      if (/^GIT_(?:DIR|WORK_TREE)=/.test(argv[0] as string)) isElsewhere = true
-      argv.shift()
+      const word = argv.shift() as string
+      if (/^GIT_(?:DIR|WORK_TREE)=/.test(word)) isElsewhere = true
+      if (WHERE_ENV.test(word)) where.push(word)
     }
     if (/^(?:cd|pushd|popd)$/.test(argv[0] ?? '')) isElsewhere = true
-    return argv
+    return { argv, where }
   })
-  const pushes = parts.filter(argv => isGitPush(withoutGitOptions(argv).argv)).length
+  const pushes = parts.filter(({ argv }) => isGitPush(withoutGitOptions(argv).argv)).length
   const blocks = pushBlocks(output)
   const pushOutput = pushes === 1 && blocks.length === 1 ? (blocks[0] as string) : ''
   const found: Classified[] = []
-  for (const argv of parts) {
+  for (const { argv, where } of parts) {
     if (/^(?:cd|pushd|popd)$/.test(argv[0] ?? '')) continue
     const one = classifyArgv(argv, isGitPush(withoutGitOptions(argv).argv) ? pushOutput : output, isElsewhere)
-    if (one !== undefined) found.push(one)
+    if (one === undefined) continue
+    // The undo of a command its environment pointed elsewhere (KUBECONFIG, GH_REPO) goes there too.
+    const program = (argv[0] ?? '').replace(/^.*\//, '')
+    found.push(where.length > 0 && one.undo.startsWith(`${program} `) ? { ...one, undo: `${where.join(' ')} ${one.undo}` } : one)
   }
   return found
 }
