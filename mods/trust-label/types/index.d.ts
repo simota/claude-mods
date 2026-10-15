@@ -1,4 +1,4 @@
-export type TrustKind = 'web' | 'search' | 'issue' | 'log' | 'browser' | 'service' | 'download'
+export type TrustKind = 'web' | 'search' | 'issue' | 'log' | 'browser' | 'service' | 'download' | 'dependency'
 
 /** A candidate instruction found in external text: what kind, and the words around it. */
 export type TrustSignal = { rule: string; excerpt: string }
