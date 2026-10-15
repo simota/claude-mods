@@ -77,7 +77,8 @@ describe('ledger', () => {
     expect(undo('helm install --replace web nginx -n prod', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall web -n prod')
     expect(undo('helm install --some-new-flag web nginx -n prod', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall <release> -n prod')
     expect(undo('helm install web nginx --set a=b -f v.yaml', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall web')
-    expect(undo('gh release create --unknown-flag v1.0', 'https://github.com/o/r/releases/tag/v1.0')).toMatch(/^gh release delete <タグ>/)
+    // The tag cannot be told, so the release URL cannot be matched to it: nothing is deleted.
+    expect(undo('gh release create --unknown-flag v1.0', 'https://github.com/o/r/releases/tag/v1.0')).toContain('gh release list で確認')
     // A production deploy is never undone by removing it.
     expect(undo('vercel deploy --target=production', 'https://proj.vercel.app')).toContain('rollback')
     expect(undo('vercel deploy --target production', 'https://proj.vercel.app')).toContain('rollback')
@@ -91,7 +92,16 @@ describe('ledger', () => {
     expect(undo('helm install web ./chart -n prod || true', 'Error: INSTALLATION FAILED: cannot re-use a name that is still in use')).toContain('helm status web -n prod')
     expect(undo('gh release create v1.0 || true', 'HTTP 422: Validation Failed (tag_name already exists)')).not.toContain('gh release delete')
     expect(undo('gh repo create o/x --private || true', 'GraphQL: Name already exists on this account')).not.toContain('gh repo delete')
-    expect(undo('gh issue view 3 && gh issue create -t a', 'https://github.com/o/r/issues/3\nhttps://github.com/o/r/issues/4')).toBe('gh issue close https://github.com/o/r/issues/4（削除は gh issue delete）')
+    // Two commands that print the same kind of evidence: whose it is cannot be told, so nothing is closed or deleted.
+    expect(undo('gh issue view 3 && gh issue create -t a', 'https://github.com/o/r/issues/3\nhttps://github.com/o/r/issues/4')).not.toContain('gh issue close')
+    expect(classifyCommand('gh pr view 3; gh pr create --fill', 'https://github.com/o/r/pull/3\nhttps://github.com/o/r/pull/9').map(one => one.undo).join(' ')).not.toContain('gh pr close')
+    expect(undo('gh release view v1.0; gh release create v1.0 || true', 'https://github.com/o/r/releases/tag/v1.0\nrelease with tag v1.0 already exists')).not.toContain('gh release delete')
+    expect(classifyCommand('gh release create v1.0 || gh release edit v1.0 --notes x', 'https://github.com/o/r/releases/tag/v1.0').map(one => one.undo).join(' ')).not.toContain('gh release delete')
+    // A release URL for another tag is not this one's.
+    expect(undo('gh release create v1.1', 'https://github.com/o/r/releases/tag/v1.0')).not.toContain('gh release delete')
+    // git push prints none of that evidence: the usual push-then-PR keeps its close.
+    expect(classifyCommand('git push -u origin feat && gh pr create --fill', 'remote:   https://github.com/o/r/pull/new/feat\nTo github.com:o/r.git\n * [new branch]      feat -> feat\nhttps://github.com/o/r/pull/9')[1]?.undo).toBe('gh pr close https://github.com/o/r/pull/9')
+    expect(undo('gh repo create --public foo', '✓ Created repository me/foo on GitHub')).toBe('gh repo delete me/foo（delete_repo 権限が必要）')
     expect(undo('vercel deploy --target=staging', 'https://proj-staging.vercel.app')).not.toContain('remove')
     // Where the release or repository lives rides along: another cluster's or repository's is not touched.
     expect(undo('helm install web ./chart --kubeconfig ~/.kube/prod', 'NAME: web\nSTATUS: deployed')).toBe('helm uninstall web --kubeconfig ~/.kube/prod')

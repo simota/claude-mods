@@ -108,8 +108,9 @@ function releaseArgs(args: readonly string[]): { tag?: string; repo: string[] } 
 
 function github(argv: string[], output: string): Classified | undefined {
   const [, area = '', action = ''] = argv
-  // A numbered PR or issue only: GitHub's hint after a push (`…/pull/new/<branch>`) is not one.
-  const url = output.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull\/\d+|issues\/\d+|releases\/tag\/[\w.%-]+)/)?.[0]
+  // A numbered PR or issue only: GitHub's hint after a push (`…/pull/new/<branch>`) is not one. The
+  // last, as gh prints what it made last.
+  const url = [...output.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull\/\d+|issues\/\d+|releases\/tag\/[\w.%-]+)/g)].at(-1)?.[0]
   const number = url?.match(/\/(?:pull|issues)\/(\d+)/)?.[1]
   const tail = number !== undefined ? ` → #${number}` : url !== undefined ? ` → ${url}` : ''
   const label = `gh ${area} ${action}${tail}`
@@ -124,7 +125,7 @@ function github(argv: string[], output: string): Classified | undefined {
   if (area === 'pr' && /^(?:comment|review|edit|close|ready|reopen)$/.test(action)) return { kind: 'github', label, undo: `gh pr ${action === 'close' ? 'reopen' : 'view --web'} ${argv[3] ?? ''}（コメント・レビューは GitHub 上で削除/編集）`.trim(), reversibility: 'manual' }
   if (area === 'issue' && action === 'create') {
     // gh prints the new issue's URL last; an earlier one in a chain (gh issue view) is another issue.
-    const made = [...output.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/g)].at(-1)?.[0]
+    const made = url?.includes('/issues/') === true ? url : undefined
     if (made === undefined) return { kind: 'github', label, undo: 'issue が作られたかは gh issue list で確認', reversibility: 'manual' }
     return { kind: 'github', label, undo: `gh issue close ${made}（削除は gh issue delete）`, reversibility: 'easy' }
   }
@@ -132,7 +133,8 @@ function github(argv: string[], output: string): Classified | undefined {
   if (area === 'release' && action === 'create') {
     const { tag, repo } = releaseArgs(argv.slice(3))
     const target = [tag ?? '<タグ>', ...repo].join(' ')
-    if (!/\/releases\/tag\//.test(output)) return { kind: 'publish', label: `gh release create ${tag ?? ''}`.trim(), undo: 'release が作られたかは gh release list で確認（既にあった release は消さない）', reversibility: 'manual' }
+    const isMade = tag !== undefined && !/already exists/i.test(output) && url?.endsWith(`/releases/tag/${encodeURIComponent(tag)}`) === true
+    if (!isMade) return { kind: 'publish', label: `gh release create ${tag ?? ''}`.trim(), undo: 'release が作られたかは gh release list で確認（既にあった release は消さない）', reversibility: 'manual' }
     return {
       kind: 'publish',
       label: `gh release create ${tag ?? ''}`.trim(),
@@ -141,8 +143,9 @@ function github(argv: string[], output: string): Classified | undefined {
     }
   }
   if (area === 'repo' && action === 'create') {
-    if (!/Created repository/i.test(output)) return { kind: 'github', label, undo: 'リポジトリが作られたかは gh repo view で確認（既にあったリポジトリは消さない）', reversibility: 'manual' }
-    return { kind: 'github', label, undo: `gh repo delete ${argv[3] ?? '<owner/repo>'}（delete_repo 権限が必要）`, reversibility: 'manual' }
+    const made = output.match(/Created repository ([\w.-]+\/[\w.-]+)/)?.[1]
+    if (made === undefined) return { kind: 'github', label, undo: 'リポジトリが作られたかは gh repo view で確認（既にあったリポジトリは消さない）', reversibility: 'manual' }
+    return { kind: 'github', label, undo: `gh repo delete ${made}（delete_repo 権限が必要）`, reversibility: 'manual' }
   }
   if (area === 'repo' && action === 'delete') return { kind: 'github', label, undo: '削除したリポジトリは 90 日以内なら Settings から復元を依頼できる場合あり', reversibility: 'hard' }
   if (area === 'workflow' && action === 'run') return { kind: 'deploy', label, undo: '起動したワークフローは gh run cancel <run-id>。実行済みの副作用はワークフロー次第', reversibility: 'manual' }
@@ -332,15 +335,21 @@ export function classifyCommand(command: string, output: string): Classified[] {
     return { argv, where }
   })
   const pushes = parts.filter(({ argv }) => isGitPush(withoutGitOptions(argv).argv)).length
+  // gh and helm print the evidence a close, delete or uninstall is given on (a PR URL, `STATUS:
+  // deployed`); with two of them in one command, whose it is cannot be told, so neither sees it.
+  // git prints none of it, so `git push && gh pr create` keeps it.
+  const isShared = parts.filter(({ argv }) => /^(?:gh|helm)$/.test((argv[0] ?? '').replace(/^.*\//, ''))).length > 1
   const blocks = pushBlocks(output)
   const pushOutput = pushes === 1 && blocks.length === 1 ? (blocks[0] as string) : ''
   const found: Classified[] = []
   for (const { argv, where } of parts) {
     if (/^(?:cd|pushd|popd)$/.test(argv[0] ?? '')) continue
-    const one = classifyArgv(argv, isGitPush(withoutGitOptions(argv).argv) ? pushOutput : output, isElsewhere)
+    const program = (argv[0] ?? '').replace(/^.*\//, '')
+    const seen = isGitPush(withoutGitOptions(argv).argv) ? pushOutput : isShared && /^(?:gh|helm)$/.test(program) ? '' : output
+    const one = classifyArgv(argv, seen, isElsewhere)
     if (one === undefined) continue
     // The undo of a command its environment pointed elsewhere (KUBECONFIG, GH_REPO) goes there too.
-    found.push(where.length > 0 && /^(?:helm|gh|kubectl)$/.test((argv[0] ?? '').replace(/^.*\//, '')) ? { ...one, undo: withWhere(one.undo, where) } : one)
+    found.push(where.length > 0 && /^(?:helm|gh|kubectl)$/.test(program) ? { ...one, undo: withWhere(one.undo, where) } : one)
   }
   return found
 }
