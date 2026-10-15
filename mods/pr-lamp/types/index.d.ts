@@ -8,7 +8,7 @@ export type PrCheck = {
 
 /** One unresolved review thread. */
 export type PrThread = {
-  /** The thread and its count of comments other than the session's replies: a new one makes a new key. */
+  /** The thread and its latest comment that is not the session's reply: a new one makes a new key. */
   key: string
   path: string
   line: number | null
@@ -55,6 +55,8 @@ declare module 'claude-code' {
       feed: string[]
       /** The URL of the pull request the feed is about; it is not handed over under another's. */
       feedFor: string | null
+      /** The words of the comments the session posted (cut as compared), so they are not its news. */
+      posted: string[]
     }
   }
 }

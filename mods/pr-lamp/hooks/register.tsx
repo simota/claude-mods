@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PrSnapshot, PrThread } from '../types'
 import {
+  bodiesPosted,
   cappedFeed,
   changeOf,
   contextOf,
@@ -28,6 +29,7 @@ const problem = atom({ plugin: 'pr-lamp', key: 'problem' } as const, null as str
 const feed = atom({ plugin: 'pr-lamp', key: 'feed' } as const, [] as string[])
 const pinned = atom({ plugin: 'pr-lamp', key: 'pinned' } as const, null as string | null)
 const feedFor = atom({ plugin: 'pr-lamp', key: 'feedFor' } as const, null as string | null)
+const posted = atom({ plugin: 'pr-lamp', key: 'posted' } as const, [] as string[])
 
 // Commands after which the pull request is worth asking about at once.
 const MOVES = /\b(?:git\s+(?:push|checkout|switch|pull|merge|rebase)|gh\s+pr\s+(?:create|ready|merge|close|reopen|checkout|review|comment|edit))\b/
@@ -108,13 +110,18 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
   if (where !== undefined && typeof pr?.number === 'number') {
     const query = ['-f', `query=${THREADS_QUERY}`, '-F', `owner=${where.owner}`, '-F', `name=${where.name}`, '-F', `number=${pr.number}`]
     const asked = await run($, ['gh', 'api', 'graphql', ...query])
-    if (asked.ok) threads = threadsOf(json(asked.stdout))
+    if (asked.ok) threads = threadsOf(json(asked.stdout), await read($, posted))
   }
   // Threads that could not be read stay as they were, so they do not come back as new.
   const areThreadsRead = threads !== undefined || (isSame(prev) && prev.areThreadsRead !== false)
   const next = snapshotOf(pr, threads ?? (isSame(prev) ? prev.threads : []), branch, await $.clock.now(), areThreadsRead)
   if (next === null) return nothing($, 'gh の答えを読めませんでした')
 
+  // Another pull request now: what waited for the one before is stale, not news for this one.
+  if (prev !== null && !isSame(prev)) {
+    await update($, feed, () => [])
+    await update($, feedFor, () => null)
+  }
   await update($, snapshot, () => next)
   await update($, problem, () => null)
   $.ui.status(statusOf(next))
@@ -180,6 +187,15 @@ export const register: Register = (on, options) => {
     return ran
   }).catch(($, e, next) => next(e))
 
+  // The session's own comments on a pull request, so they do not come back to it as a reviewer's news.
+  on('tool.call', async ($, e, next) => {
+    const ran = await next(e)
+    if (ran.deny !== undefined || ran.isError === true) return ran
+    const bodies = bodiesPosted(String(e.tool), e as unknown as Record<string, unknown>)
+    if (bodies.length > 0) await update($, posted, all => [...all, ...bodies].slice(-100))
+    return ran
+  }).catch(($, e, next) => next(e))
+
   on('prompt.submit', async ($, e, next) => {
     // Only what the person typed at an idle prompt, as loopback does.
     if (!isFeeding || e.origin.kind !== 'composer' || e.command !== undefined || e.isMeta || e.turnId !== undefined) return next(e)
@@ -191,7 +207,8 @@ export const register: Register = (on, options) => {
     // holding an ambiguous prompt) leaves the feed for the next one. What arrived meanwhile stays.
     const ran = await next({ ...e, context: [...(e.context ?? []), contextOf(s, waiting)] })
     // The prompt has entered: nothing here may throw into the .catch below, which would send it again.
-    if (ran.drop === undefined) await update($, feed, all => all.slice(waiting.length)).catch(() => undefined)
+    // By the items handed over, not their count: a poll meanwhile may have capped and reordered the feed.
+    if (ran.drop === undefined) await update($, feed, all => all.filter(item => !waiting.includes(item))).catch(() => undefined)
     return ran
   }).catch(($, e, next) => next(e))
 

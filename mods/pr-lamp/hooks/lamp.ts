@@ -7,7 +7,7 @@ export const PR_FIELDS =
   'number,title,url,state,isDraft,headRefName,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,additions,deletions,changedFiles'
 
 export const THREADS_QUERY =
-  'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(last:5){totalCount nodes{author{login} body}}}}}}}'
+  'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(last:5){totalCount nodes{id author{login} body}}}}}}}'
 
 /** Polling while a check runs, and otherwise. */
 export const FAST_MS = 60_000
@@ -20,22 +20,45 @@ export const MAX_LOGS = 3
 export const MAX_FEED_ITEMS = 30
 export const MAX_FEED_CHARS = 40_000
 
-/** The feed waiting for a prompt, cut to the newest that fit, with how many were left out. */
+const LEFT_OUT = /^(\d+) earlier change\(s\) left out here; see \/pr\.$/
+
+/** The feed waiting for a prompt, cut to the newest that fit, with how many were left out (an earlier notice counted in, not itself). */
 export function cappedFeed(all: readonly string[]): string[] {
+  const earlier = all.reduce((sum, one) => sum + Number(LEFT_OUT.exec(one)?.[1] ?? 0), 0)
+  const items = all.filter(one => !LEFT_OUT.test(one))
   const kept: string[] = []
   let size = 0
-  for (let k = all.length - 1; k >= 0 && kept.length < MAX_FEED_ITEMS - 1; k--) {
-    const one = all[k] as string
+  for (let k = items.length - 1; k >= 0 && kept.length < MAX_FEED_ITEMS - 1; k--) {
+    const one = items[k] as string
     if (size + one.length > MAX_FEED_CHARS - 200) break
     kept.unshift(one)
     size += one.length
   }
-  const dropped = all.length - kept.length
+  const dropped = earlier + items.length - kept.length
   return dropped === 0 ? kept : [`${dropped} earlier change(s) left out here; see /pr.`, ...kept]
 }
 
-// The footer the session signs its GitHub replies with: those are its own, not a reviewer's.
-const SESSION_REPLY = /Generated (?:by|with) \[Claude Code\]\(https:\/\/claude\.(?:ai|com)\/code/
+/** A comment's words as compared with what the session posted. */
+const asPosted = (body: string): string => clip(plain(body), 200)
+
+/**
+ * The bodies of comments a tool call of the session posted on a pull request: an MCP tool that
+ * comments, replies or reviews (its `body`), or `gh pr comment|review --body …` / `gh api … -f body=…`.
+ */
+export function bodiesPosted(tool: string, input: Record<string, unknown>): string[] {
+  if (tool.startsWith('mcp__')) {
+    return /comment|reply|review/i.test(tool) && typeof input.body === 'string' && input.body.trim() !== '' ? [asPosted(input.body)] : []
+  }
+  if (tool !== 'Bash' || typeof input.command !== 'string') return []
+  const command = input.command
+  if (!/\bgh\s+(?:pr\s+(?:comment|review)|api)\b/.test(command)) return []
+  const value = String.raw`("(?:[^"\\]|\\.)*"|'[^']*'|\S+)`
+  const found = [
+    ...command.matchAll(new RegExp(String.raw`(?:--body|-b)(?:=|\s+)${value}`, 'g')),
+    ...command.matchAll(new RegExp(String.raw`(?:-f|-F|--field|--raw-field)\s+body=${value}`, 'g')),
+  ]
+  return found.map(m => (m[1] ?? '').replace(/^"([\s\S]*)"$/, (_, inner: string) => inner.replace(/\\(.)/g, '$1')).replace(/^'([\s\S]*)'$/, '$1')).filter(one => one.trim() !== '').map(asPosted)
+}
 
 const clip = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim()
@@ -91,22 +114,25 @@ const plain = (body: string): string =>
     .replace(/<[^>]+>/g, '')
     .replace(/\*\*|__/g, '')
 
+const SESSION_ONLY = 'session'
+
 type ThreadNode = {
   id?: string
   isResolved?: boolean
   path?: string
   line?: number | null
-  comments?: { totalCount?: number; nodes?: { author?: { login?: string } | null; body?: string }[] }
+  comments?: { totalCount?: number; nodes?: { id?: string; author?: { login?: string } | null; body?: string }[] }
 }
 
 /**
  * The unresolved threads out of `gh api graphql`'s answer to THREADS_QUERY. The session's own
- * replies (signed with the Claude Code footer) are no news: a thread's key counts the other
- * comments only, and its latest comment is the latest one not the session's, so a reviewer's
- * comment followed by the session's reply within one poll is still news. The person's own
- * comments (no footer) are news like a reviewer's.
+ * replies (the comments whose words it posted, `posted`) are no news: a thread's key is the id of
+ * its latest comment that is not one, and that comment is the one shown, so a reviewer's comment
+ * followed by the session's reply within one poll is still news, and a reply or a deletion brings
+ * no old comment back. The person's own comments are news like a reviewer's.
  */
-export function threadsOf(json: unknown): PrThread[] {
+export function threadsOf(json: unknown, posted: readonly string[] = []): PrThread[] {
+  const mine = new Set(posted)
   const nodes = (json as { data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: ThreadNode[] } } } } })?.data
     ?.repository?.pullRequest?.reviewThreads?.nodes
   if (!Array.isArray(nodes)) return []
@@ -114,11 +140,12 @@ export function threadsOf(json: unknown): PrThread[] {
     .filter(node => node.isResolved === false && typeof node.id === 'string')
     .map(node => {
       const comments = node.comments?.nodes ?? []
-      const isSession = (one: (typeof comments)[number]) => SESSION_REPLY.test(one.body ?? '')
-      const latest = comments.filter(one => !isSession(one)).at(-1) ?? comments.at(-1)
-      const replies = comments.filter(isSession).length
+      const others = comments.filter(one => !mine.has(asPosted(one.body ?? '')))
+      const latest = others.at(-1) ?? comments.at(-1)
+      // Only the session's replies in sight: no comment of anyone else's to be news.
+      const id = others.length === 0 ? SESSION_ONLY : (latest?.id ?? String(node.comments?.totalCount ?? 0))
       return {
-        key: `${node.id}:${(node.comments?.totalCount ?? 0) - replies}`,
+        key: `${node.id}:${id}`,
         path: node.path ?? '?',
         line: node.line ?? null,
         author: latest?.author?.login ?? '?',
@@ -269,7 +296,7 @@ export function changeOf(prev: PrSnapshot, next: PrSnapshot): Change {
 
   const seen = new Set(prev.threads.map(t => t.key))
   // Threads not read before (gh failed at first sight) are a baseline once read, not news.
-  const fresh = prev.areThreadsRead === false ? [] : next.threads.filter(t => !seen.has(t.key))
+  const fresh = prev.areThreadsRead === false ? [] : next.threads.filter(t => !seen.has(t.key) && !t.key.endsWith(`:${SESSION_ONLY}`))
   if (fresh.length > 0) {
     const who = [...new Set(fresh.map(t => `@${t.author}`))].join(' ')
     change.toasts.push(`💬 新しいレビューコメント ${fresh.length}件 (${clip(who, 40)})`)
