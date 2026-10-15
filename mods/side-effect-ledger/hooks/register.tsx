@@ -57,14 +57,13 @@ async function setState($: EngineInterface, id: string, undoState: LedgerEntry['
 }
 
 /**
- * The undo of a call that failed. A single call that failed changed nothing to undo, and its output
- * may name what was there before (a PR that already existed). A push names only the refs it printed
- * as moved. Infrastructure, and a chain, may have applied a part before failing: the undo stays,
- * marked as such.
+ * The undo of a call that failed. Its output may name what was there before (a PR that already
+ * existed, in a chain too), so nothing is undone by default. A push names only the refs it printed
+ * as moved. Infrastructure may have applied a part before failing: its undo stays, marked as such.
  */
-function failedUndo(one: Classified, isOk: boolean, isChain: boolean): string {
+function failedUndo(one: Classified, isOk: boolean): string {
   if (isOk || one.kind === 'push') return one.undo
-  if (one.kind === 'infra' || isChain) return `途中まで反映された可能性: ${one.undo}`
+  if (one.kind === 'infra') return `途中まで反映された可能性: ${one.undo}`
   return '失敗したため取り消すものはない（途中まで反映されていないかは確認）'
 }
 
@@ -96,7 +95,7 @@ export const register: Register = on => {
     const fresh: LedgerEntry[] = found.map((one, i) => ({
       ...one,
       label: maskedOf(one.label),
-      undo: maskedOf(failedUndo(one, isOk, found.length > 1 || /&&|;|\n/.test(String(input.command ?? '')))),
+      undo: maskedOf(failedUndo(one, isOk)),
       id: `${e.tool_use_id ?? at}:${i}`,
       at,
       source: source.replace(/\s+/g, ' ').slice(0, 300),

@@ -86,8 +86,13 @@ describe('ledger', () => {
     expect(undo('vercel deploy --target=staging', 'https://proj-staging.vercel.app')).not.toContain('remove')
     // Where the release or repository lives rides along: another cluster's or repository's is not touched.
     expect(undo('helm install web ./chart --kubeconfig ~/.kube/prod')).toBe('helm uninstall web --kubeconfig ~/.kube/prod')
-    expect(undo('KUBECONFIG=~/.kube/prod HELM_NAMESPACE=prod helm install web ./chart')).toBe('KUBECONFIG=~/.kube/prod HELM_NAMESPACE=prod helm uninstall web')
-    expect(undo('GH_REPO=o/other gh release create v1.0')).toMatch(/^GH_REPO=o\/other gh release delete v1\.0/)
+    // Environment that pointed the command elsewhere is named for every command of the undo; a token is not replayed.
+    expect(undo('KUBECONFIG=~/.kube/prod HELM_NAMESPACE=prod HELM_KUBETOKEN=t helm upgrade --install web ./chart')).toBe(
+      'helm history web → helm rollback web <revision>（初回 install なら helm uninstall web）（どれも KUBECONFIG=~/.kube/prod HELM_NAMESPACE=prod を付けて実行）',
+    )
+    expect(undo('GH_REPO=o/other gh release create v1.0')).toMatch(/^gh release delete v1\.0.*（どれも GH_REPO=o\/other を付けて実行）$/)
+    // kubectl's options before the subcommand do not hide the write, and say where it went.
+    expect(undo('kubectl --context prod -n app apply -f x.yaml')).toBe('kubectl rollout undo <deployment>、または以前のマニフェストを kubectl apply（どれも --context prod -n app を付けて実行）')
     expect(undo('NODE_ENV=production vercel --prod')).not.toContain('NODE_ENV')
     // A push rejected whole moved nothing.
     expect(undo('git push origin main', 'To github.com:me/app.git\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs')).toBe('push は拒否され、何も動いていない')
@@ -167,6 +172,7 @@ function world(on: On): World {
     const command = (e as unknown as { command?: string }).command
     if (command === 'git push origin main') return { result: {}, text: PUSH }
     if (command === 'npm publish') return { result: {}, text: 'npm error 403 Forbidden', isError: true }
+    if (command === 'git push -u origin feat && gh pr create --fill') return { result: {}, text: 'To github.com:o/r.git\n * [new branch]      feat -> feat\na pull request for branch "feat" into branch "main" already exists:\nhttps://github.com/o/r/pull/7', isError: true }
     if (command === 'terraform apply -auto-approve') return { result: {}, text: 'aws_s3_bucket.a: Creation complete\nError: creating b: AccessDenied', isError: true }
     if (command === 'gh pr create --fill') return { result: {}, text: 'a pull request for branch "x" into branch "main" already exists:\nhttps://github.com/o/r/pull/7', isError: true }
     return { result: {}, text: 'ok' }
@@ -212,7 +218,10 @@ describe('side-effect-ledger in a session', () => {
     const [entry] = w.kept['ledger:/w'] as { undo: string; isOk: boolean }[]
     expect(entry?.isOk).toBe(false)
     expect(entry?.undo).not.toContain('gh pr close')
-    // A failure partway may have applied the first part: its undo stays, with the caveat.
+    // In a chain too: the PR that already existed is not closed.
+    await $.tool.call({ tool: 'Bash', command: 'git push -u origin feat && gh pr create --fill' })
+    expect(JSON.stringify(w.kept['ledger:/w'])).not.toContain('gh pr close')
+    // Infrastructure that failed partway may have applied a part: its undo stays, with the caveat.
     await $.tool.call({ tool: 'Bash', command: 'terraform apply -auto-approve' })
     const [applied] = w.kept['ledger:/w'] as { undo: string }[]
     expect(applied?.undo).toMatch(/^途中まで反映された可能性: .*terraform apply/)

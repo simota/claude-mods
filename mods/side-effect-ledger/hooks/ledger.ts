@@ -192,6 +192,24 @@ function helm(sub: string, args: readonly string[]): Classified {
   return { kind: 'infra', label, undo: back, reversibility: 'easy' }
 }
 
+const KUBECTL_WHERE = /^(?:--context|-n|--namespace|--kubeconfig|--cluster|-s|--server)$/
+
+/** kubectl with its options before the subcommand read past (`kubectl --context prod apply`); where it acted rides on the undo. */
+function kubectl(args: readonly string[]): Classified | undefined {
+  const where: string[] = []
+  let i = 0
+  // kubectl's options before the subcommand take a value, but for the odd boolean, which is skipped with it.
+  while (i < args.length && (args[i] as string).startsWith('-')) i += (args[i] as string).includes('=') ? 1 : 2
+  const [sub = '', third = ''] = args.slice(i)
+  for (let j = 0; j < args.length; j++) {
+    const word = args[j] as string
+    if (KUBECTL_WHERE.test(word.split('=')[0] as string)) where.push(...(word.includes('=') ? [word] : [word, args[j + 1] ?? '']))
+  }
+  if (!(/^(?:apply|create|delete|replace|patch|scale|set|edit|label|annotate)$/.test(sub) || (sub === 'rollout' && /^(?:undo|restart|pause|resume)$/.test(third)))) return undefined
+  const undo = sub === 'delete' ? '削除したリソースは以前のマニフェストで kubectl apply し直す' : 'kubectl rollout undo <deployment>、または以前のマニフェストを kubectl apply'
+  return { kind: 'infra', label: `kubectl ${args.join(' ')}`, undo: withWhere(undo, where), reversibility: sub === 'delete' ? 'hard' : 'manual' }
+}
+
 /** Whether the command only shows what it would do. */
 const isDryRun = (argv: readonly string[]): boolean =>
   argv.some(word => word === '--dry-run' || (word.startsWith('--dry-run=') && word !== '--dry-run=none')) ||
@@ -218,9 +236,7 @@ export function classifyArgv(given: string[], output: string, isElsewhere = fals
   if (name === 'docker' && (sub === 'push' || (sub === 'buildx' && /--push\b/.test(rest)) || (sub === 'image' && third === 'push'))) {
     return { kind: 'publish', label: `docker ${rest}`, undo: 'レジストリ側でタグを削除し、以前のダイジェストを付け直す', reversibility: 'manual' }
   }
-  if (name === 'kubectl' && (/^(?:apply|create|delete|replace|patch|scale|set|edit|label|annotate)$/.test(sub) || (sub === 'rollout' && /^(?:undo|restart|pause|resume)$/.test(third)))) {
-    return { kind: 'infra', label: `kubectl ${rest}`, undo: sub === 'delete' ? '削除したリソースは以前のマニフェストで kubectl apply し直す' : 'kubectl rollout undo <deployment>、または以前のマニフェストを kubectl apply', reversibility: sub === 'delete' ? 'hard' : 'manual' }
-  }
+  if (name === 'kubectl') return kubectl(argv.slice(1))
   if (name === 'helm' && /^(?:install|upgrade|uninstall|rollback|delete)$/.test(sub)) return helm(sub, argv.slice(2))
   if (name === 'terraform' && (/^(?:apply|destroy|import)$/.test(sub) || (sub === 'state' && /^(?:rm|mv|push|replace-provider)$/.test(third)))) return { kind: 'infra', label: `terraform ${rest}`, undo: '以前の設定に戻して terraform apply（state のバックアップは terraform.tfstate.backup）', reversibility: sub === 'destroy' ? 'hard' : 'manual' }
   if ((name === 'pulumi' && /^(?:up|destroy)$/.test(sub)) || (name === 'cdk' && /^(?:deploy|destroy)$/.test(sub))) return { kind: 'infra', label: `${name} ${rest}`, undo: '以前のコードに戻して再デプロイ（pulumi stack history / cdk diff で差を確認）', reversibility: 'manual' }
@@ -258,7 +274,11 @@ export function classifyArgv(given: string[], output: string, isElsewhere = fals
 }
 
 // Environment that says which cluster, namespace or repository a command acts on.
-const WHERE_ENV = /^(?:KUBECONFIG|HELM_(?:NAMESPACE|KUBECONTEXT|KUBEAPISERVER|KUBETOKEN|DRIVER)|GH_REPO|GH_HOST)=/
+// A token is not among them: masked, it could not be replayed anyway.
+const WHERE_ENV = /^(?:KUBECONFIG|HELM_(?:NAMESPACE|KUBECONTEXT|KUBEAPISERVER|DRIVER)|GH_REPO|GH_HOST)=/
+
+/** The undo with where its command acted named for every command in it (an undo may name several). */
+export const withWhere = (undo: string, where: readonly string[]): string => (where.length === 0 ? undo : `${undo}（どれも ${where.join(' ')} を付けて実行）`)
 
 /**
  * Every outside-reaching part of a Bash command; env prefixes, redirections and subshell
@@ -290,8 +310,7 @@ export function classifyCommand(command: string, output: string): Classified[] {
     const one = classifyArgv(argv, isGitPush(withoutGitOptions(argv).argv) ? pushOutput : output, isElsewhere)
     if (one === undefined) continue
     // The undo of a command its environment pointed elsewhere (KUBECONFIG, GH_REPO) goes there too.
-    const program = (argv[0] ?? '').replace(/^.*\//, '')
-    found.push(where.length > 0 && one.undo.startsWith(`${program} `) ? { ...one, undo: `${where.join(' ')} ${one.undo}` } : one)
+    found.push(where.length > 0 && /^(?:helm|gh|kubectl)$/.test((argv[0] ?? '').replace(/^.*\//, '')) ? { ...one, undo: withWhere(one.undo, where) } : one)
   }
   return found
 }
