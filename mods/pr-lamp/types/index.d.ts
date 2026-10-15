@@ -55,8 +55,8 @@ declare module 'claude-code' {
       feed: string[]
       /** The URL of the pull request the feed is about; it is not handed over under another's. */
       feedFor: string | null
-      /** The words of comments the session posted and not yet found on a thread (cut as compared). */
-      posted: string[]
+      /** The words of thread comments the session posted and not yet found (cut as compared), with when; let go after 30 minutes. */
+      posted: { text: string; at: number }[]
       /** The ids of comments found to be the session's: never its news. */
       mine: string[]
     }

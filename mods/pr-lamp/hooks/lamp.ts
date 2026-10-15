@@ -7,7 +7,7 @@ export const PR_FIELDS =
   'number,title,url,state,isDraft,headRefName,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,additions,deletions,changedFiles'
 
 export const THREADS_QUERY =
-  'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(last:5){totalCount nodes{id author{login} body}}}}}}}'
+  'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(last:5){totalCount nodes{id author{login} body createdAt}}}}}}}'
 
 /** Polling while a check runs, and otherwise. */
 export const FAST_MS = 60_000
@@ -42,13 +42,14 @@ export function cappedFeed(all: readonly string[]): string[] {
 const asPosted = (body: string): string => clip(plain(body), 200)
 
 /**
- * The bodies of comments a tool call of the session posted on a pull request: an MCP tool that
- * comments, replies or reviews (its `body`), or `gh pr comment|review --body …` / `gh api … -f body=…`.
+ * The words of the review-thread comments a tool call of the session posted: an MCP tool that
+ * replies to or adds a review comment (its `body`), or `gh api …/pulls/N/comments[/M/replies] -f body=…`.
+ * A conversation comment or a review's body (`gh pr comment`, `gh pr review -b`) never shows in a
+ * thread, so it is not recorded: kept, it would claim a reviewer's comment with the same words later.
  */
 export function bodiesPosted(tool: string, input: Record<string, unknown>): string[] {
   if (tool.startsWith('mcp__')) {
-    // A comment or reply on a pull request's review threads; not a review request, not another service's comment.
-    const isThreadPost = /comment|reply/i.test(tool) && /pull|review|_pr_/i.test(tool)
+    const isThreadPost = /reply|review_comment|comment_to_pending_review|pull_request_comment/i.test(tool) && !/issue/i.test(tool)
     return isThreadPost && typeof input.body === 'string' && input.body.trim() !== '' ? [asPosted(input.body)] : []
   }
   if (tool !== 'Bash' || typeof input.command !== 'string') return []
@@ -58,11 +59,8 @@ export function bodiesPosted(tool: string, input: Record<string, unknown>): stri
   // Only the gh command's own words: `gh pr comment -b ok && git checkout -b feat` posted `ok`.
   return input.command
     .split(/&&|\|\||[;|\n]/)
-    .filter(part => /\bgh\s+(?:pr\s+(?:comment|review)|api)\b/.test(part))
-    .flatMap(part => [
-      ...part.matchAll(new RegExp(String.raw`(?:--body|-b)(?:=|\s+)${value}`, 'g')),
-      ...part.matchAll(new RegExp(String.raw`(?:-f|-F|--field|--raw-field)\s+body=${value}`, 'g')),
-    ])
+    .filter(part => /\bgh\s+api\b.*\/pulls\/\d+\/comments\b/.test(part))
+    .flatMap(part => [...part.matchAll(new RegExp(String.raw`(?:-f|-F|--field|--raw-field)\s+body=${value}`, 'g'))])
     .map(m => unquote(m[1] ?? ''))
     .filter(one => one.trim() !== '' && !one.startsWith('@')) // `-F body=@file`: the file's words are not seen
     .map(asPosted)
@@ -129,11 +127,17 @@ type ThreadNode = {
   isResolved?: boolean
   path?: string
   line?: number | null
-  comments?: { totalCount?: number; nodes?: { id?: string; author?: { login?: string } | null; body?: string }[] }
+  comments?: { totalCount?: number; nodes?: { id?: string; author?: { login?: string } | null; body?: string; createdAt?: string }[] }
 }
 
+/** Words the session posted, with when (ms), waiting to be found on a thread. */
+export type PostedWords = { text: string; at: number }
 /** What pr-lamp knows of the session's comments: words posted not yet found, and comments found to be its. */
-export type Posted = { posted: string[]; mine: string[] }
+export type Posted = { posted: PostedWords[]; mine: string[] }
+/** Words not found on a thread by then were posted elsewhere, and are let go. */
+export const POSTED_FOR_MS = 30 * 60_000
+// GitHub's clock and ours may differ a little.
+const SKEW_MS = 60_000
 
 /**
  * The unresolved threads out of `gh api graphql`'s answer to THREADS_QUERY. The session's own
@@ -147,11 +151,14 @@ export type Posted = { posted: string[]; mine: string[] }
 export function threadsOf(json: unknown, known: Posted = { posted: [], mine: [] }): PrThread[] {
   const nodesOf = (json as { data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: ThreadNode[] } } } } })?.data
     ?.repository?.pullRequest?.reviewThreads?.nodes
-  // Claim first, newest comment first, so each posted text is one comment.
+  // Claim first, newest comment first, so each posted text is one comment: only in an unresolved
+  // thread, and only a comment made after the words were posted (an older one is someone else's).
   for (const node of Array.isArray(nodesOf) ? nodesOf : []) {
+    if (node.isResolved !== false) continue
     for (const one of [...(node.comments?.nodes ?? [])].reverse()) {
       if (one.id === undefined || known.mine.includes(one.id)) continue
-      const at = known.posted.indexOf(asPosted(one.body ?? ''))
+      const made = Date.parse(one.createdAt ?? '')
+      const at = known.posted.findIndex(words => words.text === asPosted(one.body ?? '') && (Number.isNaN(made) || made >= words.at - SKEW_MS))
       if (at === -1) continue
       known.posted.splice(at, 1)
       known.mine.push(one.id)
