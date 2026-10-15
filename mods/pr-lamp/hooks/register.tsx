@@ -116,11 +116,19 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
     if (asked.ok) {
       const now = await $.clock.now()
       const known = { posted: (await read($, posted)).filter(words => now - words.at < POSTED_FOR_MS), mine: [...(await read($, mine))] }
-      const claimed = new Set(known.posted)
+      const before = [...known.posted]
       threads = threadsOf(json(asked.stdout), known)
-      for (const words of known.posted) claimed.delete(words)
-      // Item by item, so words a tool call recorded meanwhile are kept; expired ones go.
-      await update($, posted, all => all.filter(words => !claimed.has(words) && now - words.at < POSTED_FOR_MS))
+      // The words claimed, by value (the store may hand back copies): each taken off once, so
+      // words a tool call recorded meanwhile are kept; expired ones go.
+      const claimed = before.filter(words => !known.posted.includes(words))
+      await update($, posted, all => {
+        const left = all.filter(words => now - words.at < POSTED_FOR_MS)
+        for (const words of claimed) {
+          const at = left.findIndex(one => one.text === words.text && one.at === words.at)
+          if (at !== -1) left.splice(at, 1)
+        }
+        return left
+      })
       await update($, mine, all => [...new Set([...all, ...known.mine])].slice(-500))
     }
   }
