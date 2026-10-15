@@ -23,6 +23,25 @@ describe('ledger', () => {
     expect(classifyCommand('git push -u origin feat/x', ' * [new branch]      feat/x -> feat/x')[0]?.undo).toBe('git push origin --delete feat/x')
   })
 
+  test('two pushes in one command each undo only what they moved, on their own remote', () => {
+    const output = ['To github.com:me/app.git', '   1a2b3c4..5d6e7f8  main -> main', 'To github.com:up/app.git', '   0f0f0f0..5d6e7f8  main -> main'].join('\n')
+    const [mine, theirs] = classifyCommand('git push origin main && git push upstream main', output)
+    expect(mine?.undo).toBe('git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
+    expect(theirs?.undo).toBe('git push --force-with-lease=main:5d6e7f8 upstream 0f0f0f0:main')
+    // One push printed nothing (up to date): which block is whose is unknown, so neither undo names a sha.
+    const unsure = classifyCommand('git push origin main && git push upstream main', ['Everything up-to-date', 'To github.com:up/app.git', '   0f0f0f0..5d6e7f8  main -> main'].join('\n'))
+    expect(unsure.map(one => one.undo).join(' ')).not.toContain('0f0f0f0')
+  })
+
+  test('a push behind git options is still a push, and an option value is not the remote', () => {
+    const moved = '   1a2b3c4..5d6e7f8  main -> main'
+    expect(classifyCommand('git -C app push origin main', moved)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
+    expect(classifyCommand('git -c core.sshCommand=ssh push origin main', moved)[0]?.kind).toBe('push')
+    expect(classifyCommand('git push -o ci.skip origin main', moved)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main')
+    // No remote named: the one git printed is the one pushed to, not necessarily origin.
+    expect(classifyCommand('git push', `To github.com:fork/app.git\n${moved}`)[0]?.undo).toBe('git push --force-with-lease=main:5d6e7f8 github.com:fork/app.git 1a2b3c4:main')
+  })
+
   test('knows GitHub, publishing, deploys and infrastructure', () => {
     const kinds = (command: string, output = '') => classifyCommand(command, output).map(one => `${one.kind}:${one.label}`)
     expect(kinds('gh pr create --fill', 'https://github.com/me/app/pull/42\n')).toEqual(['github:gh pr create → #42'])

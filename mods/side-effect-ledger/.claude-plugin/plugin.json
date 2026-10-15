@@ -1,6 +1,6 @@
 {
   "name": "side-effect-ledger",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A ledger of what a git diff never shows: pushes, publishes, deploys, pull requests, releases, API writes and messages sent, each with its outcome, how it would be undone, and whether that undo has been checked; /ledger",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"

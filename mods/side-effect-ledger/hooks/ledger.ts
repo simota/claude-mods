@@ -30,10 +30,22 @@ export function pushRefs(output: string): { remote?: string; refs: { old?: strin
   return { ...(remote === undefined ? {} : { remote }), refs }
 }
 
+/** What `git push` printed, one block per remote it pushed to (each from its `To <remote>` line). */
+export const pushBlocks = (output: string): string[] => output.split(/^(?=To \S)/m).filter(block => block.startsWith('To '))
+
+// git push options whose value is the next word, so it is not taken for the remote.
+const PUSH_VALUE_OPTIONS = new Set(['-o', '--push-option', '--receive-pack', '--exec', '--repo'])
+
 function gitPush(argv: string[], output: string): Classified {
-  const positional = argv.slice(2).filter(word => !word.startsWith('-'))
-  const remoteName = positional[0] ?? 'origin'
-  const { refs } = pushRefs(output)
+  const positional: string[] = []
+  for (let i = 2; i < argv.length; i++) {
+    const word = argv[i] as string
+    if (PUSH_VALUE_OPTIONS.has(word)) i++
+    else if (!word.startsWith('-')) positional.push(word)
+  }
+  const { remote, refs } = pushRefs(output)
+  // With no remote named, git pushed to the branch's upstream: the remote it printed, not necessarily origin.
+  const remoteName = positional[0] ?? remote ?? 'origin'
   const label = `git ${argv.slice(1).join(' ')}`
   if (refs.length === 0) return { kind: 'push', label, undo: `押し出したコミットを ${remoteName} の以前の位置へ戻す: git push --force-with-lease ${remoteName} <以前のsha>:<ブランチ>（以前の sha は git reflog で確認）`, reversibility: 'manual' }
   const undo = refs
@@ -73,8 +85,22 @@ function github(argv: string[], output: string): Classified | undefined {
   return undefined
 }
 
+// git options before the subcommand whose value is the next word (`git -C app push`).
+const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
+
+/** The git command with the options before its subcommand taken off: `git -C app push` is `git push`. */
+function withoutGitOptions(argv: string[]): string[] {
+  if ((argv[0] ?? '').replace(/^.*\//, '') !== 'git') return argv
+  let i = 1
+  while (i < argv.length && (argv[i] as string).startsWith('-')) i += GIT_VALUE_OPTIONS.has(argv[i] as string) ? 2 : 1
+  return [argv[0] as string, ...argv.slice(i)]
+}
+
+const isGitPush = (argv: readonly string[]) => (argv[0] ?? '').replace(/^.*\//, '') === 'git' && argv[1] === 'push'
+
 /** What one shell command (no pipes or chains) reaches outside, or undefined. */
-export function classifyArgv(argv: string[], output: string): Classified | undefined {
+export function classifyArgv(given: string[], output: string): Classified | undefined {
+  const argv = withoutGitOptions(given)
   const [program = '', sub = '', third = ''] = argv
   const name = program.replace(/^.*\//, '')
   const rest = argv.slice(1).join(' ')
@@ -125,14 +151,27 @@ export function classifyArgv(argv: string[], output: string): Classified | undef
   return undefined
 }
 
-/** Every outside-reaching part of a Bash command; `cd x &&` and env prefixes taken off. */
+/**
+ * Every outside-reaching part of a Bash command; `cd x &&` and env prefixes taken off. Several
+ * pushes in one command each get their own `To` block of the output, in order; when the blocks
+ * do not match the pushes one to one (one was up to date or failed), no push is given a sha to
+ * force back, since it could be another remote's.
+ */
 export function classifyCommand(command: string, output: string): Classified[] {
-  const found: Classified[] = []
-  for (const part of command.split(/&&|\|\||;|\n|\|/)) {
+  const parts = command.split(/&&|\|\||;|\n|\|/).map(part => {
     const argv = words(part)
     while (argv.length > 0 && (/^\w+=/.test(argv[0] as string) || argv[0] === 'sudo' || argv[0] === 'env' || argv[0] === 'command')) argv.shift()
+    return withoutGitOptions(argv)
+  })
+  const pushes = parts.filter(isGitPush).length
+  const blocks = pushBlocks(output)
+  let pushed = 0
+  const found: Classified[] = []
+  for (const argv of parts) {
     if (argv[0] === 'cd') continue
-    const one = classifyArgv(argv, output)
+    const seen = !isGitPush(argv) || pushes === 1 ? output : blocks.length === pushes ? (blocks[pushed] ?? '') : ''
+    if (isGitPush(argv)) pushed++
+    const one = classifyArgv(argv, seen)
     if (one !== undefined) found.push(one)
   }
   return found
