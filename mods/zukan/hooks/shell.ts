@@ -328,7 +328,9 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 const PREFIX_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', 'time', 'fi', 'done', 'esac'])
 // Words that open a clause which is not a command (`for x in a b`, `case x in`).
 const CLAUSE_KEYWORDS = new Set(['for', 'case', 'select', 'function'])
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'su', 'script'])
+// Shell options whose value is the next word (`bash -o pipefail -c …`).
+const SHELL_VALUES = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file'])
 
 // Wrappers that run the command after them, with the options of each that take a value.
 const WRAPPERS: Record<string, Set<string>> = {
@@ -344,6 +346,8 @@ const WRAPPERS: Record<string, Set<string>> = {
   xargs: new Set(['-I', '-L', '-n', '-P', '-s', '-d', '-E', '-a', '--max-args', '--max-procs', '--delimiter', '--arg-file', '--replace', '--max-lines']),
   xcrun: new Set(['--sdk', '--toolchain']),
   caffeinate: new Set(['-t', '-w']),
+  ionice: new Set(['-c', '-n', '-p', '-t', '--class', '--classdata']),
+  busybox: new Set([]),
 }
 // timeout takes options, then a duration, then the command.
 const TIMEOUT_VALUES = new Set(['-s', '--signal', '-k', '--kill-after'])
@@ -399,21 +403,29 @@ export function innerText(words: readonly string[]): string | undefined {
   if (at !== -1 && (at === 0 || words.slice(0, at).every(word => ASSIGNMENT.test(word) || PREFIX_KEYWORDS.has(word) || WRAPPERS[base(word)] !== undefined))) {
     for (let k = at + 1; k < words.length && (words[k] as string).startsWith('-'); k++) {
       const option = words[k] as string
-      const glued = /^(?:--split-string=|-S)(.+)$/.exec(option)
+      const glued = /^(?:--split-string=|-[A-RT-Za-z]*S)(.+)$/.exec(option)
       if (glued !== null) return [glued[1], ...words.slice(k + 1)].join(' ')
-      if (option === '-S' || option === '--split-string') return words.slice(k + 1).join(' ')
+      if (option === '--split-string' || /^-[A-RT-Za-z]*S$/.test(option)) return words.slice(k + 1).join(' ')
       if (WRAPPERS.env?.has(option) === true) k += 1
     }
   }
   const run = program(words)
   if (run === undefined) return undefined
   if (run.name === 'eval') return run.args.join(' ')
+  if (run.name === 'find') {
+    // `find … -exec git commit -n \;`: the words up to `;` or `+` run as a command.
+    const at = run.args.findIndex(arg => /^-(?:exec|execdir|ok|okdir)$/.test(arg))
+    if (at === -1) return undefined
+    const end = run.args.findIndex((arg, k) => k > at && (arg === ';' || arg === '+'))
+    return run.args.slice(at + 1, end === -1 ? undefined : end).join(' ')
+  }
   if (SHELLS.has(run.name)) {
     for (let k = 0; k < run.args.length; k++) {
       const arg = run.args[k] as string
       // The text is the first word after -c that is not an option (`bash -c -- '…'`).
       if (/^-[A-Za-z]*c[A-Za-z]*$/.test(arg)) return run.args.slice(k + 1).find((one, n, rest) => !one.startsWith('-') || rest[n - 1] === '--')
-      if (!arg.startsWith('-')) return undefined // a script file
+      if (SHELL_VALUES.has(arg)) k += 1
+      else if (!arg.startsWith('-') && !arg.startsWith('+')) return undefined // a script file
     }
   }
   return undefined
@@ -424,7 +436,13 @@ function readsScriptFromStdin(words: readonly string[]): boolean {
   const run = program(words)
   if (run === undefined || !SHELLS.has(run.name)) return false
   if (run.args.some(arg => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg))) return false
-  return run.args.includes('-s') || run.args.every(arg => arg.startsWith('-'))
+  if (run.args.includes('-s')) return true
+  for (let k = 0; k < run.args.length; k++) {
+    const arg = run.args[k] as string
+    if (SHELL_VALUES.has(arg)) k += 1
+    else if (!arg.startsWith('-') && !arg.startsWith('+')) return false // a script file
+  }
+  return true
 }
 
 /** The text a shell reads on its stdin: a here-string, a heredoc's body, or what echo/printf piped into it. */
@@ -432,8 +450,14 @@ function stdinOf(one: Simple, before: Simple | undefined): string[] {
   const texts = one.redirects.flatMap(redirect => (redirect.op === '<<<' ? [redirect.target ?? ''] : redirect.body !== undefined ? [redirect.body] : []))
   const piped = before !== undefined && (before.after === '|' || before.after === '|&') ? program(before.words) : undefined
   if (piped !== undefined && (piped.name === 'echo' || piped.name === 'printf')) {
-    const text = piped.args.filter(arg => !/^-[neE]+$/.test(arg)).join(' ')
+    // Only echo's leading options are options: `echo git commit -n` prints the -n.
+    const lead = piped.name === 'echo' ? piped.args.findIndex(arg => !/^-[neE]+$/.test(arg)) : 0
+    const text = piped.args.slice(lead === -1 ? piped.args.length : lead).join(' ')
     texts.push(piped.name === 'printf' ? text.replace(/\\n/g, '\n') : text)
+  }
+  // `cat <<EOF | bash`: the heredoc cat prints is the script.
+  if (piped !== undefined && piped.name === 'cat' && before !== undefined) {
+    for (const redirect of before.redirects) if (redirect.body !== undefined) texts.push(redirect.body)
   }
   return texts
 }
@@ -564,6 +588,17 @@ const SUB_VALUE_OPTIONS = new Set([
   '--cleanup', '--pathspec-from-file', '-X', '--strategy-option', '-s', '--strategy', '-o', '--push-option',
   '--exec', '--onto', '--format', '--pretty', '--trailer', '--since', '--until',
 ])
+// In these subcommands some of the options above are flags with no value (`git commit -s` signs
+// off, `-S` signs, `-e` edits), so the word after them is read as an option of its own.
+const SUB_FLAGS: Record<string, Set<string>> = {
+  commit: new Set(['-s', '-S', '-e', '-o']),
+  merge: new Set(['-S', '-e']),
+  rebase: new Set(['-S']),
+  'cherry-pick': new Set(['-s', '-S', '-e']),
+  revert: new Set(['-s', '-S', '-e']),
+  am: new Set(['-s', '-S']),
+}
+
 // `git commit` short options whose value is the rest of the cluster, or the next word when last.
 const COMMIT_VALUE_SHORTS = new Set(['m', 'F', 'C', 'c', 't'])
 // `git commit` short options whose optional value can only be glued (-uno, -Skey).
@@ -621,7 +656,7 @@ function bypassesHooks(simple: Simple): boolean {
       if (takesNext) j += 1
       continue
     }
-    if (SUB_VALUE_OPTIONS.has(arg)) {
+    if (SUB_VALUE_OPTIONS.has(arg) && SUB_FLAGS[sub]?.has(arg) !== true) {
       j += 1
       continue
     }

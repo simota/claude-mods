@@ -1,6 +1,6 @@
 {
   "name": "hit-rate",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Gives each finding of done-gate, assertion-guard, self-audit and zukan a later verdict from what the session did next, keeps each rule's precision across sessions, and names the rules loopback should stop feeding; off by default",
   "author": {
     "name": "simota"
