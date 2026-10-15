@@ -1,15 +1,15 @@
 {
   "name": "prompt-coach",
-  "version": "0.2.0",
-  "description": "Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; off by default",
+  "version": "0.3.0",
+  "description": "Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; on by default",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",
   "userConfig": {
     "enabled": {
       "type": "boolean",
       "title": "Enabled",
-      "description": "Judge each typed prompt before it is sent; off by default",
-      "default": false
+      "description": "Judge each typed prompt before it is sent; on by default",
+      "default": true
     },
     "model": {
       "type": "string",

@@ -35,7 +35,7 @@ const release = async ($: EngineInterface): Promise<string | undefined> => {
 }
 
 export const register: Register = (on, options) => {
-  const isEnabled = options.enabled === true
+  const isEnabled = options.enabled !== false
   const model = typeof options.model === 'string' && options.model !== '' ? options.model : DEFAULT_MODEL
   const timeoutMs = clampTimeout(options.timeoutMs)
 

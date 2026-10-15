@@ -63,7 +63,7 @@
     {
       "name": "prompt-coach",
       "source": "./mods/prompt-coach",
-      "description": "Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers to send it as is or add one; off by default"
+      "description": "Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers to send it as is or add one; on by default"
     },
     {
       "name": "loopback",

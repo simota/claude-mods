@@ -112,7 +112,14 @@ describe('judge helpers', () => {
   })
 })
 
-test('off by default: nothing is judged', async ($, on) => {
+test('on by default: an ambiguous prompt is held back', async ($, on) => {
+  const calls = engine(on)
+  const result = await typed($, VAGUE)
+  expect(result.drop).toContain('曖昧')
+  expect(calls.judged.length).toBe(1)
+})
+
+test('turned off: nothing is judged', { options: { enabled: false } }, async ($, on) => {
   const calls = engine(on)
   const result = await typed($, VAGUE)
   expect(result.drop).toBeUndefined()

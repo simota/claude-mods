@@ -17,7 +17,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `self-audit` | After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt |
 | `context-diet` | Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved |
 | `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
-| `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; off by default |
+| `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; on by default |
 | `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person; off by default |
 | `zukan` | Error book: catches the errors Bash commands hit across sessions and repos, records what got past each one, and when one comes back tells Claude and the person how it was fixed last time |
 | `pr-lamp` | The current branch's pull request as a lamp: checks, review, unresolved threads and what is left before a merge, in the status line and a `/pr` pane; red checks and new review comments go to Claude beside the next prompt |
@@ -157,7 +157,7 @@ Off by default. When on, the skill listing is trimmed to what the project kind n
 
 ### prompt-coach
 
-Off by default. When on, a typed prompt that looks ambiguous (no done-condition and an unclear target, or only evaluative words like いい感じ) is held back, and a band shows what is missing with up to three guesses at what it meant (judged along the lines of the `clarify` skill: the likeliest reading first, each a different deliverable with a checkable done-condition):
+On by default (`enabled: false` turns it off). A typed prompt that looks ambiguous (no done-condition and an unclear target, or only evaluative words like いい感じ) is held back, and a band shows what is missing with up to three guesses at what it meant (judged along the lines of the `clarify` skill: the likeliest reading first, each a different deliverable with a checkable done-condition):
 
 - `a` / `b` / `d`: a guess goes into the prompt to edit and send (not held again)
 - `s: このまま送る` sends it unchanged
@@ -170,7 +170,7 @@ Slash commands, prompts under 12 or over 1500 characters, prompts with any attac
 
 | Option | Default | |
 | --- | --- | --- |
-| `enabled` | `false` | |
+| `enabled` | `true` | |
 | `model` | `claude-haiku-5-5` | Judging model (alias or id) |
 | `timeoutMs` | `3000` | 500 to 3000 |
 
