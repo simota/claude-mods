@@ -339,6 +339,20 @@ describe('pr-lamp in a session', () => {
     expect(seen.contexts.flat().filter(Boolean)).toEqual([])
   })
 
+  test('words once claimed through the store do not claim a reviewer writing them later', async ($, on) => {
+    const gh: Gh = { pr: PR(), threads: [talk('t1', 1, [{ author: 'rev', body: 'rename this' }])], log: LOG }
+    const seen = world(on, gh)
+    const clock = mock.clock(on, { now: 0 })
+    await $.session.start(START)
+    await clock.settle()
+    await $.tool.call({ tool: 'mcp__github__add_reply_to_pull_request_comment', body: 'Done.' } as never)
+    gh.threads = [talk('t1', 2, [{ author: 'rev', body: 'rename this' }, { author: 'me', body: 'Done.' }])]
+    await clock.advance(60_000)
+    gh.threads = [...gh.threads, talk('t2', 1, [{ author: 'rev', body: 'Done.' }])]
+    await clock.advance(60_000)
+    expect(seen.toasts.join(' ')).toContain('新しいレビューコメント 1件 (@rev)')
+  })
+
   test("what was waiting for one pull request is not handed over under another's name", async ($, on) => {
     const gh: Gh = { pr: PR(), threads: [], log: LOG }
     const seen = world(on, gh)
