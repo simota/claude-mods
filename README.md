@@ -345,11 +345,11 @@ Off by default. When on, each finding gets a verdict later, from what the sessio
 | Rule | True (tp) | False (fp) |
 | --- | --- | --- |
 | `done-gate:unverified` | the first test, lint, typecheck or build after the flag fails | it passes first time |
-| `assertion-guard:<kind>` | a later edit undoes the weakening (the old line back, the new one gone, counted against duplicates) | the person marked it checked and it still stands a whole turn later |
+| `assertion-guard:<kind>` | a later edit undoes the weakening (the old line back, the new one gone, counted against duplicates); an edit that weakened two ways is scored per kind | the person marked it checked and it still stands a whole turn later |
 | `self-audit:R1`…`R5` | the next audited reply no longer breaks the rule | it breaks it again |
 | `zukan:recall` | the recalled fix is what got past the error | another command did |
 
-What nothing decides counts as unknown: a done-gate band taken down with 閉じる, an error zukan stops waiting on, anything still open at session end. The counts are kept across sessions. A rule with at least `minN` true-or-false verdicts and a precision below `threshold` is named in `muted`, and loopback does not feed it; its detector still draws its band.
+What nothing decides counts as unknown: a done-gate band taken down with 閉じる, an error zukan stops waiting on, anything still open at session end. The same error failing again, from another command, is still the same recall. The counts are kept across sessions. A rule with at least `minN` true-or-false verdicts and a precision below `threshold` is named in `muted`, and loopback does not feed it; its detector still draws its band.
 
 - `/hit-rate` lists every rule with TP / FP / unknown, precision and n, the share of unknown verdicts, and this session's latest verdicts. The design is judged by these numbers (`.genius/decisions/hit-rate.md`).
 
@@ -357,7 +357,7 @@ What nothing decides counts as unknown: a done-gate band taken down with 閉じ�
 | --- | --- | --- |
 | `enabled` | `false` | |
 | `minN` | `20` | verdicts a rule needs before it can be muted |
-| `threshold` | `0.5` | precision below which a rule is muted |
+| `threshold` | `0.5` | precision below which a rule is muted, from 0 to 1; another value (such as `50`) is ignored for the default and named in `/hit-rate` |
 
 The verdicts are proxies: a failing check may fail for reasons the edits did not cause, and a rule that does not recur may simply not have come up. A muted rule is no longer fed but keeps being scored, so it can come back.
 
