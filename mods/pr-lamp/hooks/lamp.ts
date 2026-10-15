@@ -47,17 +47,25 @@ const asPosted = (body: string): string => clip(plain(body), 200)
  */
 export function bodiesPosted(tool: string, input: Record<string, unknown>): string[] {
   if (tool.startsWith('mcp__')) {
-    return /comment|reply|review/i.test(tool) && typeof input.body === 'string' && input.body.trim() !== '' ? [asPosted(input.body)] : []
+    // A comment or reply on a pull request's review threads; not a review request, not another service's comment.
+    const isThreadPost = /comment|reply/i.test(tool) && /pull|review|_pr_/i.test(tool)
+    return isThreadPost && typeof input.body === 'string' && input.body.trim() !== '' ? [asPosted(input.body)] : []
   }
   if (tool !== 'Bash' || typeof input.command !== 'string') return []
-  const command = input.command
-  if (!/\bgh\s+(?:pr\s+(?:comment|review)|api)\b/.test(command)) return []
-  const value = String.raw`("(?:[^"\\]|\\.)*"|'[^']*'|\S+)`
-  const found = [
-    ...command.matchAll(new RegExp(String.raw`(?:--body|-b)(?:=|\s+)${value}`, 'g')),
-    ...command.matchAll(new RegExp(String.raw`(?:-f|-F|--field|--raw-field)\s+body=${value}`, 'g')),
-  ]
-  return found.map(m => (m[1] ?? '').replace(/^"([\s\S]*)"$/, (_, inner: string) => inner.replace(/\\(.)/g, '$1')).replace(/^'([\s\S]*)'$/, '$1')).filter(one => one.trim() !== '').map(asPosted)
+  const value = String.raw`("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|]+)`
+  const unquote = (word: string) =>
+    word.startsWith('"') ? word.slice(1, -1).replace(/\\(["\\$`])/g, '$1') : word.startsWith("'") ? word.slice(1, -1) : word
+  // Only the gh command's own words: `gh pr comment -b ok && git checkout -b feat` posted `ok`.
+  return input.command
+    .split(/&&|\|\||[;|\n]/)
+    .filter(part => /\bgh\s+(?:pr\s+(?:comment|review)|api)\b/.test(part))
+    .flatMap(part => [
+      ...part.matchAll(new RegExp(String.raw`(?:--body|-b)(?:=|\s+)${value}`, 'g')),
+      ...part.matchAll(new RegExp(String.raw`(?:-f|-F|--field|--raw-field)\s+body=${value}`, 'g')),
+    ])
+    .map(m => unquote(m[1] ?? ''))
+    .filter(one => one.trim() !== '' && !one.startsWith('@')) // `-F body=@file`: the file's words are not seen
+    .map(asPosted)
 }
 
 const clip = (text: string, max: number): string => {
@@ -124,15 +132,32 @@ type ThreadNode = {
   comments?: { totalCount?: number; nodes?: { id?: string; author?: { login?: string } | null; body?: string }[] }
 }
 
+/** What pr-lamp knows of the session's comments: words posted not yet found, and comments found to be its. */
+export type Posted = { posted: string[]; mine: string[] }
+
 /**
  * The unresolved threads out of `gh api graphql`'s answer to THREADS_QUERY. The session's own
- * replies (the comments whose words it posted, `posted`) are no news: a thread's key is the id of
- * its latest comment that is not one, and that comment is the one shown, so a reviewer's comment
- * followed by the session's reply within one poll is still news, and a reply or a deletion brings
- * no old comment back. The person's own comments are news like a reviewer's.
+ * replies are no news: words it posted are matched once, to the newest comment carrying them, and
+ * that comment's id is the session's from then on, so a reviewer writing the same words later is
+ * news. A thread's key is the id of its latest comment that is not the session's, and that comment
+ * is the one shown, so a reviewer's comment followed by the session's reply within one poll is
+ * still news, and a reply or a deletion brings no old comment back. The person's own comments are
+ * news like a reviewer's. `known` is updated in place.
  */
-export function threadsOf(json: unknown, posted: readonly string[] = []): PrThread[] {
-  const mine = new Set(posted)
+export function threadsOf(json: unknown, known: Posted = { posted: [], mine: [] }): PrThread[] {
+  const nodesOf = (json as { data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: ThreadNode[] } } } } })?.data
+    ?.repository?.pullRequest?.reviewThreads?.nodes
+  // Claim first, newest comment first, so each posted text is one comment.
+  for (const node of Array.isArray(nodesOf) ? nodesOf : []) {
+    for (const one of [...(node.comments?.nodes ?? [])].reverse()) {
+      if (one.id === undefined || known.mine.includes(one.id)) continue
+      const at = known.posted.indexOf(asPosted(one.body ?? ''))
+      if (at === -1) continue
+      known.posted.splice(at, 1)
+      known.mine.push(one.id)
+    }
+  }
+  const mine = new Set(known.mine)
   const nodes = (json as { data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: ThreadNode[] } } } } })?.data
     ?.repository?.pullRequest?.reviewThreads?.nodes
   if (!Array.isArray(nodes)) return []
@@ -140,7 +165,7 @@ export function threadsOf(json: unknown, posted: readonly string[] = []): PrThre
     .filter(node => node.isResolved === false && typeof node.id === 'string')
     .map(node => {
       const comments = node.comments?.nodes ?? []
-      const others = comments.filter(one => !mine.has(asPosted(one.body ?? '')))
+      const others = comments.filter(one => one.id === undefined || !mine.has(one.id))
       const latest = others.at(-1) ?? comments.at(-1)
       // Only the session's replies in sight: no comment of anyone else's to be news.
       const id = others.length === 0 ? SESSION_ONLY : (latest?.id ?? String(node.comments?.totalCount ?? 0))
@@ -181,7 +206,8 @@ export function snapshotOf(json: unknown, threads: PrThread[], branch: string, a
 }
 
 const PR_URL = /https:\/\/[^\s/]+\/[^\s/]+\/[^\s/]+\/pull\/\d+/
-const PR_VERBS = 'view|checkout|diff|checks|review|comment|merge|ready|edit|close|reopen'
+// Verbs that work on a pull request; looking at one (view, diff, checks) does not move the lamp.
+const PR_VERBS = 'checkout|review|comment|merge|ready|edit|close|reopen'
 
 /**
  * The pull request a command of the session works on, when it names one that need not be

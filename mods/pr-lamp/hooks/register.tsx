@@ -30,6 +30,7 @@ const feed = atom({ plugin: 'pr-lamp', key: 'feed' } as const, [] as string[])
 const pinned = atom({ plugin: 'pr-lamp', key: 'pinned' } as const, null as string | null)
 const feedFor = atom({ plugin: 'pr-lamp', key: 'feedFor' } as const, null as string | null)
 const posted = atom({ plugin: 'pr-lamp', key: 'posted' } as const, [] as string[])
+const mine = atom({ plugin: 'pr-lamp', key: 'mine' } as const, [] as string[])
 
 // Commands after which the pull request is worth asking about at once.
 const MOVES = /\b(?:git\s+(?:push|checkout|switch|pull|merge|rebase)|gh\s+pr\s+(?:create|ready|merge|close|reopen|checkout|review|comment|edit))\b/
@@ -110,7 +111,12 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
   if (where !== undefined && typeof pr?.number === 'number') {
     const query = ['-f', `query=${THREADS_QUERY}`, '-F', `owner=${where.owner}`, '-F', `name=${where.name}`, '-F', `number=${pr.number}`]
     const asked = await run($, ['gh', 'api', 'graphql', ...query])
-    if (asked.ok) threads = threadsOf(json(asked.stdout), await read($, posted))
+    if (asked.ok) {
+      const known = { posted: [...(await read($, posted))], mine: [...(await read($, mine))] }
+      threads = threadsOf(json(asked.stdout), known)
+      await update($, posted, () => known.posted)
+      await update($, mine, () => known.mine.slice(-500))
+    }
   }
   // Threads that could not be read stay as they were, so they do not come back as new.
   const areThreadsRead = threads !== undefined || (isSame(prev) && prev.areThreadsRead !== false)
@@ -208,7 +214,17 @@ export const register: Register = (on, options) => {
     const ran = await next({ ...e, context: [...(e.context ?? []), contextOf(s, waiting)] })
     // The prompt has entered: nothing here may throw into the .catch below, which would send it again.
     // By the items handed over, not their count: a poll meanwhile may have capped and reordered the feed.
-    if (ran.drop === undefined) await update($, feed, all => all.filter(item => !waiting.includes(item))).catch(() => undefined)
+    if (ran.drop === undefined) {
+      await update($, feed, all => {
+        // Each item handed over once, so a same-worded one that arrived meanwhile stays.
+        const left = [...all]
+        for (const item of waiting) {
+          const at = left.indexOf(item)
+          if (at !== -1) left.splice(at, 1)
+        }
+        return left
+      }).catch(() => undefined)
+    }
     return ran
   }).catch(($, e, next) => next(e))
 
