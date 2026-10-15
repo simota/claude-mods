@@ -1,6 +1,6 @@
 {
   "name": "zukan",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Error book: catches the errors Bash commands hit across sessions and repos, records what got past each one, and when one comes back tells Claude and the person how it was fixed last time",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"
