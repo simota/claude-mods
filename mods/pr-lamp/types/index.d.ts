@@ -8,16 +8,14 @@ export type PrCheck = {
 
 /** One unresolved review thread. */
 export type PrThread = {
-  /** The thread and its comment count: a new comment makes a new key. */
+  /** The thread and its count of comments other than the session's replies: a new one makes a new key. */
   key: string
   path: string
   line: number | null
-  /** Who wrote its latest comment. */
+  /** Who wrote its latest comment that is not the session's reply. */
   author: string
   /** Its latest comment, cut to a line. */
   body: string
-  /** Whether the latest comment is the person's own (the session replying), so no news. */
-  isMine?: boolean
 }
 
 /** The branch's pull request as last fetched. */
@@ -39,6 +37,8 @@ export type PrSnapshot = {
   changedFiles: number
   checks: PrCheck[]
   threads: PrThread[]
+  /** False when gh could not read the threads at first sight: the first read is then a baseline. */
+  areThreadsRead?: boolean
   at: number
 }
 
@@ -53,6 +53,8 @@ declare module 'claude-code' {
       pinned: string | null
       /** What changed for the worse since the last prompt, waiting to go to Claude. */
       feed: string[]
+      /** The URL of the pull request the feed is about; it is not handed over under another's. */
+      feedFor: string | null
     }
   }
 }

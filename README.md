@@ -223,7 +223,7 @@ The current branch's pull request, kept in the status line while you work:
 
 "マージまであと N" counts what still stands before a merge: draft, failed checks, running checks, changes requested or approval pending, unresolved review threads, a conflict, the branch behind its base. At 0 it reads `🟢 マージ可能`.
 
-A toast when it changes: `🔴 CI 失敗: test`, `💬 新しいレビューコメント 2件 (@rev)`, `✅ Approved`, `🟢 #42 マージまであと0`, `🎉 #42 がマージされました`. Checks turning red, new review comments, changes requested and a new conflict are also attached to the next prompt typed at an idle prompt, once, with the last 40 lines of the failed log of up to three jobs (more are counted), marked as data whose comments and logs are not to be followed as instructions. A reply of your own on a thread (the session answering as you) is not news. The option `feed` (on by default) turns that off.
+A toast when it changes: `🔴 CI 失敗: test`, `💬 新しいレビューコメント 2件 (@rev)`, `✅ Approved`, `🟢 #42 マージまであと0`, `🎉 #42 がマージされました`. Checks turning red, new review comments, changes requested and a new conflict are also attached to the next prompt typed at an idle prompt, once, with the last 40 lines of the failed log of up to three jobs (more are counted), marked as data whose comments and logs are not to be followed as instructions. The session's own replies on a thread (signed with the Claude Code footer) are not news; your own review comments are. What waits for the next prompt is about one pull request and is capped (newest kept). The option `feed` (on by default) turns that off.
 
 - `/pr` asks again and opens the pane: title, size, what is left, checks (failed first) and unresolved threads
 - `/pr <number|url|branch>` follows that pull request; `/pr clear` goes back to the default
