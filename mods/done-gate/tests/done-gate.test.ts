@@ -395,6 +395,23 @@ test('hooks switched off through config in the environment, quoting, env -S or a
     'bash <<EOF\ngit commit -n -m x\nEOF',
     "bash -s <<'EOF'\ncd repo && git push --no-verify\nEOF",
     "bash -c -- 'git commit -n -m x'",
+    // Flags of commit that the generic list took to carry a value.
+    'git commit -s -n -m x',
+    'git commit -s --no-verify -m x',
+    'git commit -S --no-verify -m x',
+    'git commit -e --no-verify',
+    'git merge -e --no-verify feature',
+    'git rebase -S --no-verify main',
+    'echo git commit -n -m y | bash',
+    "bash -o pipefail -c 'git commit -n -m x'",
+    "env -iS 'git commit -n -m x'",
+    "fish -c 'git commit -n -m x'",
+    "busybox sh -c 'git commit -n -m x'",
+    "su -c 'git commit -n -m x' me",
+    "script -qc 'git commit -n -m x' /dev/null",
+    'ionice -c3 git commit -n -m x',
+    'find . -maxdepth 0 -exec git commit -n -m x \\;',
+    "cat <<'EOF' | bash\ngit commit -n -m x\nEOF",
   ]) {
     const ran = await bash($, command)
     expect(ran.deny).toContain('--no-verify')
@@ -408,6 +425,10 @@ test('hooks switched off through config in the environment, quoting, env -S or a
     'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=x git commit -m x',
     "bash script.sh <<< 'git commit -n'",
     'skip=1 git commit -m x',
+    'git merge -s ours feature',
+    'git log -S --no-verify',
+    'echo -n hello | bash -c cat',
+    "find . -name '*.md' -exec grep -n verify {} +",
   ]
   for (const command of commands) expect((await bash($, command)).deny).toBeUndefined()
   expect(bottom.ran.length).toBe(commands.length)
