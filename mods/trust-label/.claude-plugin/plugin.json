@@ -1,6 +1,6 @@
 {
   "name": "trust-label",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Labels text that came from outside (web pages, search results, issues and PRs, logs, browser pages, MCP services) with where it came from, beside the tool's result, and flags candidate instructions hidden in it; a heuristic, never a judgement that a text is safe; /trust",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

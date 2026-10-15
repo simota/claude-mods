@@ -37,7 +37,8 @@ export const register: Register = (on, options) => {
     if (source === undefined) return next(e)
 
     const ran = await next(e)
-    if (ran.deny !== undefined || ran.isError === true) return ran
+    // A failed call's output reaches Claude too (a fetch that exited non-zero still printed the page).
+    if (ran.deny !== undefined) return ran
     const signals = signalsOf(ran.text ?? '')
     const entry: TrustSource = { id: e.tool_use_id ?? String(await $.clock.now()), at: await $.clock.now(), kind: source.kind, origin: source.origin, tool, signals }
     const list = await update($, sources, all => [...all, entry].slice(-KEEP))
