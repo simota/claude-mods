@@ -1,0 +1,27 @@
+{
+  "name": "mutation-tap",
+  "version": "0.1.0",
+  "description": "/mutate runs a mutation test limited to the lines changed since HEAD: each small change to the code (a flipped comparison, && for ||, a constant) is run against the tests, and the ones the tests did not catch are listed",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "maxMutants": {
+      "type": "number",
+      "title": "Max mutants",
+      "description": "How many mutants one /mutate runs at most, spread over the changed lines",
+      "default": 20
+    },
+    "timeoutSec": {
+      "type": "number",
+      "title": "Test timeout (s)",
+      "description": "Seconds one test run may take before it is stopped; a mutant that runs past it counts as caught (timeout)",
+      "default": 300
+    },
+    "testCommand": {
+      "type": "string",
+      "title": "Test command",
+      "description": "The command that runs the tests, from the repository root; empty to guess it from the project (package.json, Makefile, Cargo.toml, go.mod, pyproject.toml, Package.swift)",
+      "default": ""
+    }
+  }
+}
