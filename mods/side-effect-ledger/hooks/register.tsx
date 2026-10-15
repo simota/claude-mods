@@ -57,13 +57,14 @@ async function setState($: EngineInterface, id: string, undoState: LedgerEntry['
 }
 
 /**
- * The undo of a call that failed. Its output may name what was there before (a PR that already
- * existed, in a chain too), so nothing is undone by default. A push names only the refs it printed
- * as moved. Infrastructure may have applied a part before failing: its undo stays, marked as such.
+ * The undo of a call that failed. What it names may be what was there before (a PR that already
+ * existed, a release whose name was in use), so a failed call is given no command to undo it. A
+ * push names only the refs it printed as moved. Infrastructure may have applied a part: it says
+ * so, and to look before undoing anything.
  */
 function failedUndo(one: Classified, isOk: boolean): string {
   if (isOk || one.kind === 'push') return one.undo
-  if (one.kind === 'infra') return `途中まで反映された可能性: ${one.undo}`
+  if (one.kind === 'infra') return '失敗したが途中まで反映された可能性あり: 取り消す前に今の状態を確認（helm status / kubectl get / terraform plan など）'
   return '失敗したため取り消すものはない（途中まで反映されていないかは確認）'
 }
 

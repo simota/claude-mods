@@ -93,6 +93,10 @@ describe('ledger', () => {
     expect(undo('GH_REPO=o/other gh release create v1.0')).toMatch(/^gh release delete v1\.0.*（どれも GH_REPO=o\/other を付けて実行）$/)
     // kubectl's options before the subcommand do not hide the write, and say where it went.
     expect(undo('kubectl --context prod -n app apply -f x.yaml')).toBe('kubectl rollout undo <deployment>、または以前のマニフェストを kubectl apply（どれも --context prod -n app を付けて実行）')
+    expect(classifyCommand('kubectl --insecure-skip-tls-verify apply -f x.yaml', '')[0]?.kind).toBe('infra')
+    expect(classifyCommand('kubectl -v6 delete pod x', '')[0]?.kind).toBe('infra')
+    none('kubectl --context prod get pods')
+    expect(undo('KUBECONFIG=p.yaml kubectl -n app delete pod x')).toBe('削除したリソースは以前のマニフェストで kubectl apply し直す（どれも KUBECONFIG=p.yaml -n app を付けて実行）')
     expect(undo('NODE_ENV=production vercel --prod')).not.toContain('NODE_ENV')
     // A push rejected whole moved nothing.
     expect(undo('git push origin main', 'To github.com:me/app.git\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs')).toBe('push は拒否され、何も動いていない')
@@ -173,6 +177,7 @@ function world(on: On): World {
     if (command === 'git push origin main') return { result: {}, text: PUSH }
     if (command === 'npm publish') return { result: {}, text: 'npm error 403 Forbidden', isError: true }
     if (command === 'git push -u origin feat && gh pr create --fill') return { result: {}, text: 'To github.com:o/r.git\n * [new branch]      feat -> feat\na pull request for branch "feat" into branch "main" already exists:\nhttps://github.com/o/r/pull/7', isError: true }
+    if (command === 'helm install web ./chart -n prod') return { result: {}, text: 'Error: INSTALLATION FAILED: cannot re-use a name that is still in use', isError: true }
     if (command === 'terraform apply -auto-approve') return { result: {}, text: 'aws_s3_bucket.a: Creation complete\nError: creating b: AccessDenied', isError: true }
     if (command === 'gh pr create --fill') return { result: {}, text: 'a pull request for branch "x" into branch "main" already exists:\nhttps://github.com/o/r/pull/7', isError: true }
     return { result: {}, text: 'ok' }
@@ -221,10 +226,13 @@ describe('side-effect-ledger in a session', () => {
     // In a chain too: the PR that already existed is not closed.
     await $.tool.call({ tool: 'Bash', command: 'git push -u origin feat && gh pr create --fill' })
     expect(JSON.stringify(w.kept['ledger:/w'])).not.toContain('gh pr close')
-    // Infrastructure that failed partway may have applied a part: its undo stays, with the caveat.
+    // Nor is a release that already existed uninstalled.
+    await $.tool.call({ tool: 'Bash', command: 'helm install web ./chart -n prod' })
+    expect(JSON.stringify(w.kept['ledger:/w'])).not.toContain('helm uninstall')
+    // Infrastructure that failed partway may have applied a part: it says so, and to look before undoing anything.
     await $.tool.call({ tool: 'Bash', command: 'terraform apply -auto-approve' })
     const [applied] = w.kept['ledger:/w'] as { undo: string }[]
-    expect(applied?.undo).toMatch(/^途中まで反映された可能性: .*terraform apply/)
+    expect(applied?.undo).toBe('失敗したが途中まで反映された可能性あり: 取り消す前に今の状態を確認（helm status / kubectl get / terraform plan など）')
   })
 
   test('keeps no credential a command carried', async ($, on) => {

@@ -193,13 +193,17 @@ function helm(sub: string, args: readonly string[]): Classified {
 }
 
 const KUBECTL_WHERE = /^(?:--context|-n|--namespace|--kubeconfig|--cluster|-s|--server)$/
+// kubectl's options before the subcommand that take no value; the others take the next word.
+const KUBECTL_FLAGS = new Set(['--insecure-skip-tls-verify', '--match-server-version', '--warnings-as-errors', '--disable-compression'])
 
 /** kubectl with its options before the subcommand read past (`kubectl --context prod apply`); where it acted rides on the undo. */
 function kubectl(args: readonly string[]): Classified | undefined {
   const where: string[] = []
   let i = 0
-  // kubectl's options before the subcommand take a value, but for the odd boolean, which is skipped with it.
-  while (i < args.length && (args[i] as string).startsWith('-')) i += (args[i] as string).includes('=') ? 1 : 2
+  while (i < args.length && (args[i] as string).startsWith('-')) {
+    const word = args[i] as string
+    i += word.includes('=') || KUBECTL_FLAGS.has(word) || /^-v\d+$/.test(word) ? 1 : 2
+  }
   const [sub = '', third = ''] = args.slice(i)
   for (let j = 0; j < args.length; j++) {
     const word = args[j] as string
@@ -277,8 +281,15 @@ export function classifyArgv(given: string[], output: string, isElsewhere = fals
 // A token is not among them: masked, it could not be replayed anyway.
 const WHERE_ENV = /^(?:KUBECONFIG|HELM_(?:NAMESPACE|KUBECONTEXT|KUBEAPISERVER|DRIVER)|GH_REPO|GH_HOST)=/
 
-/** The undo with where its command acted named for every command in it (an undo may name several). */
-export const withWhere = (undo: string, where: readonly string[]): string => (where.length === 0 ? undo : `${undo}（どれも ${where.join(' ')} を付けて実行）`)
+const WHERE_NOTE = /（どれも (.+) を付けて実行）$/
+
+/** The undo with where its command acted named for every command in it (an undo may name several); one note, however many sources. */
+export function withWhere(undo: string, where: readonly string[]): string {
+  if (where.length === 0) return undo
+  const noted = undo.match(WHERE_NOTE)
+  const all = noted === null ? where : [...where, noted[1] as string]
+  return `${noted === null ? undo : undo.slice(0, -noted[0].length)}（どれも ${all.join(' ')} を付けて実行）`
+}
 
 /**
  * Every outside-reaching part of a Bash command; env prefixes, redirections and subshell
