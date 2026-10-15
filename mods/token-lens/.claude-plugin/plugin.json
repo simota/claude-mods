@@ -1,0 +1,7 @@
+{
+  "name": "token-lens",
+  "version": "0.1.0",
+  "description": "Checks a page element's actual colours, spacing and type against the project's registered design tokens (CSS custom properties, SCSS variables, tokens JSON): /token-lens <selector>, or the text selected in the browser, lists each value as a token or an off-token value with the nearest token",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts"
+}
