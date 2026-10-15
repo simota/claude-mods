@@ -7,7 +7,7 @@ export const PR_FIELDS =
   'number,title,url,state,isDraft,headRefName,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,additions,deletions,changedFiles'
 
 export const THREADS_QUERY =
-  'query($owner:String!,$name:String!,$number:Int!){viewer{login} repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(last:1){totalCount nodes{author{login} body}}}}}}}'
+  'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(last:5){totalCount nodes{author{login} body}}}}}}}'
 
 /** Polling while a check runs, and otherwise. */
 export const FAST_MS = 60_000
@@ -16,6 +16,26 @@ export const SLOW_MS = 300_000
 export const LOG_LINES = 40
 /** Failed jobs whose logs are fetched and given at once; the rest are named and counted. */
 export const MAX_LOGS = 3
+/** What may wait for the next prompt, newest kept. */
+export const MAX_FEED_ITEMS = 30
+export const MAX_FEED_CHARS = 40_000
+
+/** The feed waiting for a prompt, cut to the newest that fit, with how many were left out. */
+export function cappedFeed(all: readonly string[]): string[] {
+  const kept: string[] = []
+  let size = 0
+  for (let k = all.length - 1; k >= 0 && kept.length < MAX_FEED_ITEMS - 1; k--) {
+    const one = all[k] as string
+    if (size + one.length > MAX_FEED_CHARS - 200) break
+    kept.unshift(one)
+    size += one.length
+  }
+  const dropped = all.length - kept.length
+  return dropped === 0 ? kept : [`${dropped} earlier change(s) left out here; see /pr.`, ...kept]
+}
+
+// The footer the session signs its GitHub replies with: those are its own, not a reviewer's.
+const SESSION_REPLY = /Generated (?:by|with) \[Claude Code\]\(https:\/\/claude\.(?:ai|com)\/code/
 
 const clip = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim()
@@ -79,30 +99,36 @@ type ThreadNode = {
   comments?: { totalCount?: number; nodes?: { author?: { login?: string } | null; body?: string }[] }
 }
 
-/** The unresolved threads out of `gh api graphql`'s answer to THREADS_QUERY. */
+/**
+ * The unresolved threads out of `gh api graphql`'s answer to THREADS_QUERY. The session's own
+ * replies (signed with the Claude Code footer) are no news: a thread's key counts the other
+ * comments only, and its latest comment is the latest one not the session's, so a reviewer's
+ * comment followed by the session's reply within one poll is still news. The person's own
+ * comments (no footer) are news like a reviewer's.
+ */
 export function threadsOf(json: unknown): PrThread[] {
-  const data = (json as { data?: { viewer?: { login?: string }; repository?: { pullRequest?: { reviewThreads?: { nodes?: ThreadNode[] } } } } })?.data
-  const nodes = data?.repository?.pullRequest?.reviewThreads?.nodes
-  const me = data?.viewer?.login
+  const nodes = (json as { data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: ThreadNode[] } } } } })?.data
+    ?.repository?.pullRequest?.reviewThreads?.nodes
   if (!Array.isArray(nodes)) return []
   return nodes
     .filter(node => node.isResolved === false && typeof node.id === 'string')
     .map(node => {
-      const latest = node.comments?.nodes?.at(-1)
+      const comments = node.comments?.nodes ?? []
+      const isSession = (one: (typeof comments)[number]) => SESSION_REPLY.test(one.body ?? '')
+      const latest = comments.filter(one => !isSession(one)).at(-1) ?? comments.at(-1)
+      const replies = comments.filter(isSession).length
       return {
-        key: `${node.id}:${node.comments?.totalCount ?? 0}`,
+        key: `${node.id}:${(node.comments?.totalCount ?? 0) - replies}`,
         path: node.path ?? '?',
         line: node.line ?? null,
         author: latest?.author?.login ?? '?',
         body: clip(plain(latest?.body ?? ''), 200),
-        // The session answers threads as the person: its own reply is not a reviewer's news.
-        isMine: me !== undefined && latest?.author?.login === me,
       }
     })
 }
 
 /** The snapshot out of `gh pr view --json PR_FIELDS`'s answer and the threads. */
-export function snapshotOf(json: unknown, threads: PrThread[], branch: string, at: number): PrSnapshot | null {
+export function snapshotOf(json: unknown, threads: PrThread[], branch: string, at: number, areThreadsRead = true): PrSnapshot | null {
   const pr = json as Record<string, unknown> | null
   if (pr === null || typeof pr !== 'object' || typeof pr.number !== 'number') return null
   const rollup = Array.isArray(pr.statusCheckRollup) ? (pr.statusCheckRollup as RollupItem[]) : []
@@ -122,6 +148,7 @@ export function snapshotOf(json: unknown, threads: PrThread[], branch: string, a
     changedFiles: typeof pr.changedFiles === 'number' ? pr.changedFiles : 0,
     checks: rollup.map(checkOf),
     threads,
+    areThreadsRead,
     at,
   }
 }
@@ -138,15 +165,22 @@ export function pinOf(command: string, output: string): string | undefined {
   const named = new RegExp(String.raw`\bgh\s+pr\s+(?:${PR_VERBS})\s+(?:-\S+\s+)*(#?\d+\b|https:\/\/\S+\/pull\/\d+)`).exec(command)
   if (named?.[1]) return named[1].replace(/^#/, '')
   if (/\bgh\s+pr\s+create\b/.test(command)) return PR_URL.exec(output)?.[0]
-  const push = /\bgit\s+push\b([^;|]*)/.exec(command)
+  const push = /\bgit\s+push\b(.*)/.exec(command)
   if (push === null) return undefined
-  // `git push [options] <remote> <refspec>…`: the last refspec's destination; a redirection
-  // (`2>&1`, `> push.log`) and what it writes to are no refspec, and `&&` ends the command.
-  const words = (push[1] ?? '').split('&&')[0]?.trim().split(/\s+/) ?? []
-  const kept = words.filter((word, k) => word !== '' && !word.startsWith('-') && !/^\d*[<>&]/.test(word) && !/^\d*[<>]+$/.test(words[k - 1] ?? ''))
-  const [, ...refspecs] = kept
+  // `git push [options] <remote> <refspec>…`, up to the command's end (`;`, `&`, `|`, a newline),
+  // quotes taken off; options with a value and redirections (`2>&1`, `> push.log`) are no refspec.
+  const words = (push[1] ?? '').split(/[;&|\n]/)[0]?.trim().split(/\s+/).map(word => word.replace(/^['"]|['"]$/g, '')) ?? []
+  const positional: string[] = []
+  for (let k = 0; k < words.length; k++) {
+    const word = words[k] as string
+    if (word === '--delete' || word === '-d') return undefined // a branch deleted is nothing to follow
+    if (/^(?:-o|--push-option|--repo|--receive-pack|--exec)$/.test(word)) k += 1
+    else if (/^\d*[<>]+$/.test(word)) k += 1
+    else if (word !== '' && !word.startsWith('-') && !/^\d*[<>]/.test(word)) positional.push(word)
+  }
+  const [, ...refspecs] = positional
   const last = refspecs.at(-1)
-  if (last === undefined) return undefined
+  if (last === undefined || last.startsWith(':')) return undefined
   const to = (last.includes(':') ? last.slice(last.indexOf(':') + 1) : last).replace(/^\+/, '').replace(/^refs\/heads\//, '')
   // A name gh would read as one of its options (`--repo=…`) is never followed.
   return to === '' || to === 'HEAD' || to.startsWith('refs/') || to.startsWith('-') ? undefined : to
@@ -234,7 +268,8 @@ export function changeOf(prev: PrSnapshot, next: PrSnapshot): Change {
   }
 
   const seen = new Set(prev.threads.map(t => t.key))
-  const fresh = next.threads.filter(t => !seen.has(t.key) && t.isMine !== true)
+  // Threads not read before (gh failed at first sight) are a baseline once read, not news.
+  const fresh = prev.areThreadsRead === false ? [] : next.threads.filter(t => !seen.has(t.key))
   if (fresh.length > 0) {
     const who = [...new Set(fresh.map(t => `@${t.author}`))].join(' ')
     change.toasts.push(`💬 新しいレビューコメント ${fresh.length}件 (${clip(who, 40)})`)

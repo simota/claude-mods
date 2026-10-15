@@ -3,6 +3,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { PrSnapshot, PrThread } from '../types'
 import {
+  cappedFeed,
   changeOf,
   contextOf,
   FAST_MS,
@@ -26,6 +27,7 @@ const snapshot = atom({ plugin: 'pr-lamp', key: 'snapshot' } as const, null as P
 const problem = atom({ plugin: 'pr-lamp', key: 'problem' } as const, null as string | null)
 const feed = atom({ plugin: 'pr-lamp', key: 'feed' } as const, [] as string[])
 const pinned = atom({ plugin: 'pr-lamp', key: 'pinned' } as const, null as string | null)
+const feedFor = atom({ plugin: 'pr-lamp', key: 'feedFor' } as const, null as string | null)
 
 // Commands after which the pull request is worth asking about at once.
 const MOVES = /\b(?:git\s+(?:push|checkout|switch|pull|merge|rebase)|gh\s+pr\s+(?:create|ready|merge|close|reopen|checkout|review|comment|edit))\b/
@@ -109,7 +111,8 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
     if (asked.ok) threads = threadsOf(json(asked.stdout))
   }
   // Threads that could not be read stay as they were, so they do not come back as new.
-  const next = snapshotOf(pr, threads ?? (isSame(prev) ? prev.threads : []), branch, await $.clock.now())
+  const areThreadsRead = threads !== undefined || (isSame(prev) && prev.areThreadsRead !== false)
+  const next = snapshotOf(pr, threads ?? (isSame(prev) ? prev.threads : []), branch, await $.clock.now(), areThreadsRead)
   if (next === null) return nothing($, 'gh の答えを読めませんでした')
 
   await update($, snapshot, () => next)
@@ -130,7 +133,10 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
       }
       const unread = withJob.length - Math.min(withJob.length, MAX_LOGS)
       if (unread > 0) logs.push(`${unread} more failed check(s) without their logs here: see \`gh pr checks\`.`)
-      await update($, feed, all => [...all, ...change.feed, ...logs])
+      // What waits is about one pull request: a feed about another is dropped, and it is capped.
+      const owner = await read($, feedFor)
+      await update($, feed, all => cappedFeed([...(owner === next.url ? all : []), ...change.feed, ...logs]))
+      await update($, feedFor, () => next.url)
     }
   }
 
@@ -180,6 +186,7 @@ export const register: Register = (on, options) => {
     const waiting = await read($, feed)
     const s = await read($, snapshot)
     if (waiting.length === 0 || s === null) return next(e)
+    if ((await read($, feedFor)) !== s.url) return next(e) // about another pull request than the one shown
     // Taken off only once the prompt entered: a hook beneath that drops it (prompt-coach
     // holding an ambiguous prompt) leaves the feed for the next one. What arrived meanwhile stays.
     const ran = await next({ ...e, context: [...(e.context ?? []), contextOf(s, waiting)] })
