@@ -113,6 +113,8 @@ function commandWords(given: readonly string[]): string[] {
       continue
     }
     if (!RUNNER.test(word)) break
+    // `command -v curl` looks the client up; it does not run it.
+    if (word === 'command' && /^-[vV]$/.test(words[1] ?? '')) return []
     words.shift()
     while ((words[0] ?? '').startsWith('-')) {
       const option = words.shift() as string
@@ -141,6 +143,7 @@ function fetchedUrl(parts: readonly string[][]): string | undefined {
     for (let i = 0; target === undefined && i < args.length; i++) {
       const arg = args[i] as string
       if (CLIENT_VALUES.has(arg)) i++
+      else if (/^\d*[<>]/.test(arg)) continue // a redirection, not what is fetched
       else if (!arg.startsWith('-') && !/^[A-Z]+$/.test(arg)) target = arg
     }
     // No target named (`xargs -n1 curl -s`, `curl -K cfg`): it still fetches, unless asked only for help or its version.
