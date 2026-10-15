@@ -38,11 +38,31 @@ describe('maskedOf', () => {
     expect(maskedOf(`${'x'.repeat(200)}-MY_TOKEN=abc`)).toBe(`${'x'.repeat(200)}-MY_TOKEN=***`)
   })
 
+  test('every shape stays linear on a long adversarial run', () => {
+    for (const piece of ['eyJ-', 'docker ', 'a-', 'sk-', ' -H"a', 'a=']) {
+      const run = piece.repeat(Math.ceil(200_000 / piece.length))
+      const started = performance.now()
+      maskedOf(run)
+      expect(performance.now() - started).toBeLessThan(1_000)
+    }
+  })
+
+  test('a header value is masked whole, also right after -H, and literals inside a value', () => {
+    expect(maskedOf(`curl -H "X-Auth: Token abc123" x`)).toBe(`curl -H "X-Auth: ***" x`)
+    expect(maskedOf(`curl -H"X-API-Key: abc" x`)).toBe(`curl -H"X-API-Key: ***" x`)
+    expect(maskedOf(`curl -HX-API-Key:abc x`)).toBe(`curl -HX-API-Key:*** x`)
+    expect(maskedOf(`kubectl create secret generic s --from-literal=password=hunter2`)).toBe(
+      `kubectl create secret generic s --from-literal=password=***`,
+    )
+  })
+
   test('leaves alone what only looks like a credential name', () => {
     const kept = [
       `SyntaxError: Unexpected token: '<'`,
       `curl -H "Content-Type: application/json" https://x`,
       `MAX_TOKENS=100 keyboardLayout=us tokenizer=bert`,
+      `primaryKey=id sessionId=3 cacheKey=a publicKey=b`,
+      `{"key": "src/a.ts", "sortKey": "x"}`,
       `{"tokens": 12, "id": "abc"}`,
     ]
     for (const given of kept) expect(maskedOf(given)).toBe(given)
