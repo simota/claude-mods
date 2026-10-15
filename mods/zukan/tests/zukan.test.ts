@@ -51,6 +51,8 @@ describe('maskedOf', () => {
     expect(maskedOf(`curl -H "X-Auth: Token abc123" x`)).toBe(`curl -H "X-Auth: ***" x`)
     expect(maskedOf(`curl -H"X-API-Key: abc" x`)).toBe(`curl -H"X-API-Key: ***" x`)
     expect(maskedOf(`curl -HX-API-Key:abc x`)).toBe(`curl -HX-API-Key:*** x`)
+    expect(maskedOf(`curl -H "X-Api-Key: abc'def" x`)).toBe(`curl -H "X-Api-Key: ***" x`)
+    expect(maskedOf(`{"private_key": "-----BEGIN", "access_key": "AK", "pwd": "p"}`)).toBe(`{"private_key": "***", "access_key": "***", "pwd": "***"}`)
     expect(maskedOf(`kubectl create secret generic s --from-literal=password=hunter2`)).toBe(
       `kubectl create secret generic s --from-literal=password=***`,
     )
@@ -62,7 +64,9 @@ describe('maskedOf', () => {
       `curl -H "Content-Type: application/json" https://x`,
       `MAX_TOKENS=100 keyboardLayout=us tokenizer=bert`,
       `primaryKey=id sessionId=3 cacheKey=a publicKey=b`,
-      `{"key": "src/a.ts", "sortKey": "x"}`,
+      `{"key": "src/a.ts", "sortKey": "x", "session": "s1"}`,
+      `grep -H password: config.yml`,
+      `grep -H "secret_key:" settings.py`,
       `{"tokens": 12, "id": "abc"}`,
     ]
     for (const given of kept) expect(maskedOf(given)).toBe(given)
