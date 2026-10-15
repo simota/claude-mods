@@ -1,0 +1,21 @@
+{
+  "name": "perf-delta",
+  "version": "0.1.0",
+  "description": "/perf runs a benchmark command several times and compares it with its baseline (saved earlier, or a git ref run in a temporary worktree): median wall time, peak memory and the spread of the runs, and whether the difference is larger than the noise",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "runs": {
+      "type": "number",
+      "title": "Runs",
+      "description": "Measured runs per side, after one warm-up run",
+      "default": 5
+    },
+    "timeoutSec": {
+      "type": "number",
+      "title": "Timeout (s)",
+      "description": "Seconds one run may take before it is stopped",
+      "default": 300
+    }
+  }
+}
