@@ -56,6 +56,18 @@ async function setState($: EngineInterface, id: string, undoState: LedgerEntry['
   $.ui.status(statusOf(list, await $.session.id()))
 }
 
+/**
+ * The undo of a call that failed. What it names may be what was there before (a PR that already
+ * existed, a release whose name was in use), so a failed call is given no command to undo it. A
+ * push names only the refs it printed as moved. Infrastructure may have applied a part: it says
+ * so, and to look before undoing anything.
+ */
+function failedUndo(one: Classified, isOk: boolean): string {
+  if (isOk || one.kind === 'push') return one.undo
+  if (one.kind === 'infra') return '失敗したが途中まで反映された可能性あり: 取り消す前に今の状態を確認（helm status / kubectl get / terraform plan など）'
+  return '失敗したため取り消すものはない（途中まで反映されていないかは確認）'
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'ledger', description: 'push・公開・デプロイ・外部 API 更新など Git 差分に出ない操作の台帳（結果と取り消し方法の確認状況）' })
@@ -84,7 +96,7 @@ export const register: Register = on => {
     const fresh: LedgerEntry[] = found.map((one, i) => ({
       ...one,
       label: maskedOf(one.label),
-      undo: maskedOf(one.undo),
+      undo: maskedOf(failedUndo(one, isOk)),
       id: `${e.tool_use_id ?? at}:${i}`,
       at,
       source: source.replace(/\s+/g, ' ').slice(0, 300),

@@ -30,12 +30,35 @@ export function pushRefs(output: string): { remote?: string; refs: { old?: strin
   return { ...(remote === undefined ? {} : { remote }), refs }
 }
 
-function gitPush(argv: string[], output: string): Classified {
-  const positional = argv.slice(2).filter(word => !word.startsWith('-'))
-  const remoteName = positional[0] ?? 'origin'
-  const { refs } = pushRefs(output)
+/** What `git push` printed, one block per remote it pushed to (each from its `To <remote>` line). */
+export const pushBlocks = (output: string): string[] =>
+  output
+    .split(/^(?=To \S)/m)
+    .filter(block => block.startsWith('To '))
+    // A fetch after the push (`From …` and its ref lines) is not part of it.
+    .map(block => block.split(/^From \S/m)[0] as string)
+
+// git push options whose value is the next word, so it is not taken for the remote.
+const PUSH_VALUE_OPTIONS = new Set(['-o', '--push-option', '--receive-pack', '--exec', '--repo'])
+
+function gitPush(argv: string[], output: string, isElsewhere: boolean): Classified {
+  const positional: string[] = []
+  for (let i = 2; i < argv.length; i++) {
+    const word = argv[i] as string
+    if (PUSH_VALUE_OPTIONS.has(word)) i++
+    else if (!word.startsWith('-')) positional.push(word)
+  }
+  const { remote, refs } = pushRefs(output)
+  // With no remote named, git pushed to the branch's upstream: the remote it printed, not necessarily
+  // origin. Run in another directory (cd, -C, a subshell), a remote's name may mean another
+  // remote where the undo is run: the URL git printed means the same one anywhere.
+  const remoteName = isElsewhere ? (remote ?? '<リモートURL>') : (positional[0] ?? remote ?? 'origin')
   const label = `git ${argv.slice(1).join(' ')}`
-  if (refs.length === 0) return { kind: 'push', label, undo: `押し出したコミットを ${remoteName} の以前の位置へ戻す: git push --force-with-lease ${remoteName} <以前のsha>:<ブランチ>（以前の sha は git reflog で確認）`, reversibility: 'manual' }
+  // No ref printed as moved and the push refused: there is nothing to put back.
+  if (refs.length === 0 && /\[(?:remote )?rejected\]|error: failed to push/.test(output)) {
+    return { kind: 'push', label, undo: 'push は拒否され、何も動いていない', reversibility: 'easy' }
+  }
+  if (refs.length === 0) return { kind: 'push', label, undo: `押し出したコミットを ${remoteName} の以前の位置へ戻す: git push --force-with-lease ${remoteName} <以前のsha>:<ブランチ>（以前の sha は push の出力か git reflog で確認）`, reversibility: 'manual' }
   const undo = refs
     .map(one =>
       one.isDeleted
@@ -49,22 +72,81 @@ function gitPush(argv: string[], output: string): Classified {
   return { kind: 'push', label: `${label}${forced ? '（強制）' : ''}`, undo, reversibility: forced || refs.some(one => one.isDeleted) ? 'hard' : 'easy' }
 }
 
+/**
+ * The first positional word after options, and the options of `where` with their values. An
+ * option in neither list may or may not take the next word: the positional word cannot be told
+ * once one comes before it, and none is named rather than a wrong one.
+ */
+function firstPositional(args: readonly string[], flags: ReadonlySet<string>, values: ReadonlySet<string>, where: RegExp): { first?: string; kept: string[] } {
+  const kept: string[] = []
+  let isUnsure = false
+  let first: string | undefined
+  for (let i = 0; i < args.length; i++) {
+    const word = args[i] as string
+    if (!word.startsWith('-')) {
+      if (first === undefined && !isUnsure) first = word
+      isUnsure ||= first === undefined
+      continue
+    }
+    const name = word.split('=')[0] as string
+    if (where.test(name)) kept.push(...(word.includes('=') ? [word] : [word, args[i + 1] ?? '']))
+    if (word.includes('=') || flags.has(word)) continue
+    if (values.has(word)) i++
+    else if (first === undefined) isUnsure = true
+  }
+  return { ...(first === undefined ? {} : { first }), kept }
+}
+
+const RELEASE_FLAGS = new Set(['-d', '--draft', '-p', '--prerelease', '--generate-notes', '--latest', '--verify-tag', '--notes-from-tag', '--fail-on-no-commits'])
+const RELEASE_VALUES = new Set(['-t', '--title', '-n', '--notes', '-F', '--notes-file', '--target', '-R', '--repo', '--notes-start-tag', '--discussion-category'])
+
+/** The tag of `gh release create` and its -R. */
+function releaseArgs(args: readonly string[]): { tag?: string; repo: string[] } {
+  const { first, kept } = firstPositional(args, RELEASE_FLAGS, RELEASE_VALUES, /^(?:-R|--repo)$/)
+  return { ...(first === undefined ? {} : { tag: first }), repo: kept }
+}
+
 function github(argv: string[], output: string): Classified | undefined {
   const [, area = '', action = ''] = argv
-  const url = output.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull|issues|releases\/tag)\/[\w.%-]+/)?.[0]
+  // A numbered PR or issue only: GitHub's hint after a push (`…/pull/new/<branch>`) is not one. The
+  // last, as gh prints what it made last.
+  const url = [...output.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull\/\d+|issues\/\d+|releases\/tag\/[\w.%-]+)/g)].at(-1)?.[0]
   const number = url?.match(/\/(?:pull|issues)\/(\d+)/)?.[1]
   const tail = number !== undefined ? ` → #${number}` : url !== undefined ? ` → ${url}` : ''
   const label = `gh ${area} ${action}${tail}`
-  if (area === 'pr' && action === 'create') return { kind: 'github', label, undo: `gh pr close ${number ?? '<番号>'} --delete-branch`, reversibility: 'easy' }
+  // A close or delete only on the output's word that this call made the thing: a failure hidden
+  // behind a pipe or `|| true` exits 0 and prints what already existed. By URL, so a PR made with
+  // -R is closed in its repository; the head branch is left alone (it may predate the PR).
+  if (area === 'pr' && action === 'create') {
+    if (/already exists/i.test(output) || url === undefined) return { kind: 'github', label, undo: 'PR が作られたかは gh pr list で確認（既にあった PR は閉じない）', reversibility: 'manual' }
+    return { kind: 'github', label, undo: `gh pr close ${url}`, reversibility: 'easy' }
+  }
   if (area === 'pr' && action === 'merge') return { kind: 'github', label, undo: 'マージコミットを git revert -m 1 <sha> して push（またはリバート PR を作る）', reversibility: 'manual' }
   if (area === 'pr' && /^(?:comment|review|edit|close|ready|reopen)$/.test(action)) return { kind: 'github', label, undo: `gh pr ${action === 'close' ? 'reopen' : 'view --web'} ${argv[3] ?? ''}（コメント・レビューは GitHub 上で削除/編集）`.trim(), reversibility: 'manual' }
-  if (area === 'issue' && action === 'create') return { kind: 'github', label, undo: `gh issue close ${number ?? '<番号>'}（削除は gh issue delete）`, reversibility: 'easy' }
+  if (area === 'issue' && action === 'create') {
+    // gh prints the new issue's URL last; an earlier one in a chain (gh issue view) is another issue.
+    const made = url?.includes('/issues/') === true ? url : undefined
+    if (made === undefined) return { kind: 'github', label, undo: 'issue が作られたかは gh issue list で確認', reversibility: 'manual' }
+    return { kind: 'github', label, undo: `gh issue close ${made}（削除は gh issue delete）`, reversibility: 'easy' }
+  }
   if (area === 'issue' && /^(?:comment|edit|close|reopen|delete|transfer)$/.test(action)) return { kind: 'github', label, undo: action === 'delete' ? '削除した issue は戻せません' : 'GitHub 上で編集・再オープン', reversibility: action === 'delete' ? 'hard' : 'manual' }
   if (area === 'release' && action === 'create') {
-    const tag = argv.slice(3).find(word => !word.startsWith('-'))
-    return { kind: 'publish', label: `gh release create ${tag ?? ''}`.trim(), undo: `gh release delete ${tag ?? '<タグ>'} --cleanup-tag`, reversibility: 'easy' }
+    const { tag, repo } = releaseArgs(argv.slice(3))
+    const target = [tag ?? '<タグ>', ...repo].join(' ')
+    const isMade = tag !== undefined && !/already exists/i.test(output) && url?.endsWith(`/releases/tag/${encodeURIComponent(tag)}`) === true
+    if (!isMade) return { kind: 'publish', label: `gh release create ${tag ?? ''}`.trim(), undo: 'release が作られたかは gh release list で確認（既にあった release は消さない）', reversibility: 'manual' }
+    return {
+      kind: 'publish',
+      label: `gh release create ${tag ?? ''}`.trim(),
+      undo: `gh release delete ${target}（タグも消すなら --cleanup-tag。release より前からあったタグなら付けない）`,
+      reversibility: 'easy',
+    }
   }
-  if (area === 'repo' && action === 'create') return { kind: 'github', label, undo: `gh repo delete ${argv[3] ?? '<owner/repo>'}（delete_repo 権限が必要）`, reversibility: 'manual' }
+  if (area === 'repo' && action === 'create') {
+    const made = output.match(/Created repository ([\w.-]+\/[\w.-]+)/)?.[1]
+    if (made === undefined) return { kind: 'github', label, undo: 'リポジトリが作られたかは gh repo view で確認（既にあったリポジトリは消さない）', reversibility: 'manual' }
+    return { kind: 'github', label, undo: `gh repo delete ${made}（delete_repo 権限が必要）`, reversibility: 'manual' }
+  }
   if (area === 'repo' && action === 'delete') return { kind: 'github', label, undo: '削除したリポジトリは 90 日以内なら Settings から復元を依頼できる場合あり', reversibility: 'hard' }
   if (area === 'workflow' && action === 'run') return { kind: 'deploy', label, undo: '起動したワークフローは gh run cancel <run-id>。実行済みの副作用はワークフロー次第', reversibility: 'manual' }
   if (area === 'api' && argv.some((word, i) => /^(?:-X|--method)$/.test(word) && /^(?:POST|PUT|PATCH|DELETE)$/i.test(argv[i + 1] ?? ''))) {
@@ -73,12 +155,100 @@ function github(argv: string[], output: string): Classified | undefined {
   return undefined
 }
 
+// git options before the subcommand whose value is the next word (`git -C app push`).
+const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
+
+/**
+ * The git command with the options before its subcommand taken off (`git -C app push` is
+ * `git push`), and those of them that say which repository it ran in.
+ */
+function withoutGitOptions(argv: string[]): { argv: string[]; location: string[] } {
+  if ((argv[0] ?? '').replace(/^.*\//, '') !== 'git') return { argv, location: [] }
+  const location: string[] = []
+  let i = 1
+  while (i < argv.length && (argv[i] as string).startsWith('-')) {
+    const word = argv[i] as string
+    const takesValue = GIT_VALUE_OPTIONS.has(word)
+    if (/^(?:-C|--git-dir|--work-tree)$/.test(word)) location.push(word, argv[i + 1] ?? '')
+    else if (/^(?:--git-dir|--work-tree)=/.test(word)) location.push(word)
+    i += takesValue ? 2 : 1
+  }
+  return { argv: [argv[0] as string, ...argv.slice(i)], location }
+}
+
+/** The words with shell redirections taken off (`2>&1`, `> out.log`, `2>/dev/null`). */
+function withoutRedirects(argv: readonly string[]): string[] {
+  const kept: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i] as string
+    if (/^\d*(?:>>?|<)$/.test(word)) i++
+    else if (!/^\d*(?:>>?|<)/.test(word)) kept.push(word)
+  }
+  return kept
+}
+
+const isGitPush = (argv: readonly string[]) => (argv[0] ?? '').replace(/^.*\//, '') === 'git' && argv[1] === 'push'
+
+const HELM_FLAGS = new Set(['-i', '--install', '--wait', '--wait-for-jobs', '--atomic', '--create-namespace', '--force', '--reuse-values', '--reset-values', '--reset-then-reuse-values', '--debug', '--devel', '--cleanup-on-fail', '--keep-history', '--no-hooks', '--skip-crds', '--dependency-update', '--replace', '--insecure-skip-tls-verify', '--take-ownership', '--plain-http', '--hide-notes', '--render-subchart-notes', '--disable-openapi-validation', '--verify', '--pass-credentials', '--enable-dns', '--skip-schema-validation', '-g', '--generate-name'])
+const HELM_VALUES = new Set(['-f', '--values', '--set', '--set-string', '--set-file', '--set-json', '--set-literal', '--version', '-n', '--namespace', '--kube-context', '--kubeconfig', '--timeout', '--repo', '-o', '--output', '--description', '--post-renderer', '--post-renderer-args', '--username', '--password', '--ca-file', '--cert-file', '--key-file', '--history-max', '--keyring', '--registry-config', '--repository-cache', '--repository-config', '--name-template', '--labels', '--max-history', '--cascade'])
+
+/** helm's release and the options that say where it lives. */
+function helmArgs(args: readonly string[]): { release: string; where: string } {
+  const { first, kept } = firstPositional(args, HELM_FLAGS, HELM_VALUES, /^(?:-n|--namespace|--kube-context|--kubeconfig)$/)
+  return { release: first ?? '<release>', where: kept.length === 0 ? '' : ` ${kept.join(' ')}` }
+}
+
+function helm(sub: string, args: readonly string[], output: string): Classified {
+  const { release, where } = helmArgs(args)
+  const label = `helm ${sub} ${args.join(' ')}`.trim()
+  const back = `helm history ${release}${where} → helm rollback ${release} <revision>${where}`
+  // An uninstall only on helm's word that this call installed the release: a name already in use
+  // fails, and behind `|| true` exits 0.
+  const isInstalled = sub === 'install' ? /^STATUS: deployed/m.test(output) : /does not exist\. Installing it now/.test(output)
+  if (sub === 'install') {
+    if (!isInstalled) return { kind: 'infra', label, undo: `helm status ${release}${where} で状態を確認（入っていたリリースを消さないよう uninstall はしない）`, reversibility: 'manual' }
+    return { kind: 'infra', label, undo: `helm uninstall ${release}${where}`, reversibility: 'easy' }
+  }
+  if (sub === 'uninstall' || sub === 'delete') return { kind: 'infra', label, undo: `同じ chart と values で helm install ${release} <chart>${where}（--keep-history 付きで消したなら helm rollback）`, reversibility: 'hard' }
+  if (sub === 'upgrade' && isInstalled) return { kind: 'infra', label, undo: `helm uninstall ${release}${where}`, reversibility: 'easy' }
+  return { kind: 'infra', label, undo: back, reversibility: 'easy' }
+}
+
+const KUBECTL_WHERE = /^(?:--context|-n|--namespace|--kubeconfig|--cluster|-s|--server)$/
+// kubectl's options before the subcommand that take no value; the others take the next word.
+const KUBECTL_FLAGS = new Set(['--insecure-skip-tls-verify', '--match-server-version', '--warnings-as-errors', '--disable-compression'])
+
+/** kubectl with its options before the subcommand read past (`kubectl --context prod apply`); where it acted rides on the undo. */
+function kubectl(args: readonly string[]): Classified | undefined {
+  const where: string[] = []
+  let i = 0
+  while (i < args.length && (args[i] as string).startsWith('-')) {
+    const word = args[i] as string
+    i += word.includes('=') || KUBECTL_FLAGS.has(word) || /^-v\d+$/.test(word) ? 1 : 2
+  }
+  const [sub = '', third = ''] = args.slice(i)
+  for (let j = 0; j < args.length; j++) {
+    const word = args[j] as string
+    if (KUBECTL_WHERE.test(word.split('=')[0] as string)) where.push(...(word.includes('=') ? [word] : [word, args[j + 1] ?? '']))
+  }
+  if (!(/^(?:apply|create|delete|replace|patch|scale|set|edit|label|annotate)$/.test(sub) || (sub === 'rollout' && /^(?:undo|restart|pause|resume)$/.test(third)))) return undefined
+  const undo = sub === 'delete' ? '削除したリソースは以前のマニフェストで kubectl apply し直す' : 'kubectl rollout undo <deployment>、または以前のマニフェストを kubectl apply'
+  return { kind: 'infra', label: `kubectl ${args.join(' ')}`, undo: withWhere(undo, where), reversibility: sub === 'delete' ? 'hard' : 'manual' }
+}
+
+/** Whether the command only shows what it would do. */
+const isDryRun = (argv: readonly string[]): boolean =>
+  argv.some(word => word === '--dry-run' || (word.startsWith('--dry-run=') && word !== '--dry-run=none')) ||
+  (isGitPush(argv) && argv.slice(2).some(word => /^-[A-Za-z]*n[A-Za-z]*$/.test(word)))
+
 /** What one shell command (no pipes or chains) reaches outside, or undefined. */
-export function classifyArgv(argv: string[], output: string): Classified | undefined {
+export function classifyArgv(given: string[], output: string, isElsewhere = false): Classified | undefined {
+  const { argv, location } = withoutGitOptions(given)
+  if (isDryRun(argv)) return undefined
   const [program = '', sub = '', third = ''] = argv
   const name = program.replace(/^.*\//, '')
   const rest = argv.slice(1).join(' ')
-  if (name === 'git' && sub === 'push') return gitPush(argv, output)
+  if (name === 'git' && sub === 'push') return gitPush(argv, output, isElsewhere || location.length > 0)
   if (name === 'gh') return github(argv, output)
   if (/^(?:npm|pnpm|yarn|bun)$/.test(name) && sub === 'publish') {
     const version = output.match(/\+\s*([@\w./-]+@\d+\.\d+\.\d+[\w.-]*)/)?.[1]
@@ -92,18 +262,22 @@ export function classifyArgv(argv: string[], output: string): Classified | undef
   if (name === 'docker' && (sub === 'push' || (sub === 'buildx' && /--push\b/.test(rest)) || (sub === 'image' && third === 'push'))) {
     return { kind: 'publish', label: `docker ${rest}`, undo: 'レジストリ側でタグを削除し、以前のダイジェストを付け直す', reversibility: 'manual' }
   }
-  if (name === 'kubectl' && /^(?:apply|create|delete|replace|patch|scale|set|edit|rollout|label|annotate)$/.test(sub)) {
-    return { kind: 'infra', label: `kubectl ${rest}`, undo: sub === 'delete' ? '削除したリソースは以前のマニフェストで kubectl apply し直す' : 'kubectl rollout undo <deployment>、または以前のマニフェストを kubectl apply', reversibility: sub === 'delete' ? 'hard' : 'manual' }
-  }
-  if (name === 'helm' && /^(?:install|upgrade|uninstall|rollback|delete)$/.test(sub)) {
-    return { kind: 'infra', label: `helm ${rest}`, undo: sub === 'install' ? `helm uninstall ${third}` : `helm history ${third} → helm rollback ${third} <revision>`, reversibility: 'easy' }
-  }
-  if (name === 'terraform' && /^(?:apply|destroy|import|state)$/.test(sub)) return { kind: 'infra', label: `terraform ${rest}`, undo: '以前の設定に戻して terraform apply（state のバックアップは terraform.tfstate.backup）', reversibility: sub === 'destroy' ? 'hard' : 'manual' }
+  if (name === 'kubectl') return kubectl(argv.slice(1))
+  if (name === 'helm' && /^(?:install|upgrade|uninstall|rollback|delete)$/.test(sub)) return helm(sub, argv.slice(2), output)
+  if (name === 'terraform' && (/^(?:apply|destroy|import)$/.test(sub) || (sub === 'state' && /^(?:rm|mv|push|replace-provider)$/.test(third)))) return { kind: 'infra', label: `terraform ${rest}`, undo: '以前の設定に戻して terraform apply（state のバックアップは terraform.tfstate.backup）', reversibility: sub === 'destroy' ? 'hard' : 'manual' }
   if ((name === 'pulumi' && /^(?:up|destroy)$/.test(sub)) || (name === 'cdk' && /^(?:deploy|destroy)$/.test(sub))) return { kind: 'infra', label: `${name} ${rest}`, undo: '以前のコードに戻して再デプロイ（pulumi stack history / cdk diff で差を確認）', reversibility: 'manual' }
-  if (name === 'vercel' && (sub === '' || sub === 'deploy' || sub.startsWith('--prod') || /--prod\b/.test(rest))) return { kind: 'deploy', label: `vercel ${rest}`.trim(), undo: 'vercel rollback（または以前のデプロイを vercel promote）', reversibility: 'easy' }
+  if (name === 'vercel' && (sub === '' || sub === 'deploy' || (sub.startsWith('-') && !/^(?:-v|--version|-h|--help)$/.test(sub)))) {
+    // A production deploy is rolled back, never removed; only a preview is removed, by the URL
+    // vercel printed as the preview's.
+    if (/--prod\b|--target(?:=|\s+)production\b/.test(rest)) return { kind: 'deploy', label: `vercel ${rest}`.trim(), undo: 'vercel rollback（または以前のデプロイを vercel promote）', reversibility: 'easy' }
+    if (/--target(?:=|\s+)(?!preview\b)\S/.test(rest)) return { kind: 'deploy', label: `vercel ${rest}`.trim(), undo: 'Vercel ダッシュボードでその環境の以前のデプロイを promote（デプロイは削除しない）', reversibility: 'manual' }
+    const preview = output.match(/Preview:\s*(https:\/\/[\w.-]+\.vercel\.app)\b/)?.[1]
+    return { kind: 'deploy', label: `vercel ${rest}`.trim(), undo: `vercel remove ${preview ?? '<プレビューURL>'}（プレビューのみ、本番は変わっていない）`, reversibility: 'easy' }
+  }
   if (name === 'netlify' && sub === 'deploy') return { kind: 'deploy', label: `netlify ${rest}`, undo: 'Netlify の Deploys 画面で以前のデプロイを Publish', reversibility: 'easy' }
   if ((name === 'fly' || name === 'flyctl') && sub === 'deploy') return { kind: 'deploy', label: `${name} deploy`, undo: 'fly releases で以前のイメージを確認し fly deploy --image <以前のイメージ>', reversibility: 'manual' }
-  if (name === 'wrangler' && /^(?:deploy|publish|pages)$/.test(sub)) return { kind: 'deploy', label: `wrangler ${rest}`, undo: 'wrangler rollback（Pages はダッシュボードで以前のデプロイへ）', reversibility: 'easy' }
+  if (name === 'wrangler' && /^(?:deploy|publish)$/.test(sub)) return { kind: 'deploy', label: `wrangler ${rest}`, undo: 'wrangler rollback', reversibility: 'easy' }
+  if (name === 'wrangler' && sub === 'pages' && /^(?:deploy|publish)$/.test(third)) return { kind: 'deploy', label: `wrangler ${rest}`, undo: 'Cloudflare ダッシュボードの Pages で以前のデプロイへロールバック', reversibility: 'easy' }
   if (name === 'firebase' && sub === 'deploy') return { kind: 'deploy', label: `firebase ${rest}`, undo: 'Hosting はコンソールで以前のリリースへロールバック、Functions は以前のコードで再デプロイ', reversibility: 'manual' }
   if (name === 'heroku' && /^(?:releases:rollback|rollback|config:set|ps:scale)$/.test(sub)) return { kind: 'deploy', label: `heroku ${rest}`, undo: 'heroku releases → heroku rollback v<番号>', reversibility: 'easy' }
   if (name === 'gcloud' && /\b(?:deploy|delete|create|update)\b/.test(rest)) return { kind: 'deploy', label: `gcloud ${rest}`, undo: 'Cloud Run は gcloud run services update-traffic --to-revisions=<以前のrevision>=100、その他は以前の設定で再実行', reversibility: 'manual' }
@@ -125,15 +299,57 @@ export function classifyArgv(argv: string[], output: string): Classified | undef
   return undefined
 }
 
-/** Every outside-reaching part of a Bash command; `cd x &&` and env prefixes taken off. */
+// Environment that says which cluster, namespace or repository a command acts on.
+// A token is not among them: masked, it could not be replayed anyway.
+const WHERE_ENV = /^(?:KUBECONFIG|HELM_(?:NAMESPACE|KUBECONTEXT|KUBEAPISERVER|DRIVER)|GH_REPO|GH_HOST)=/
+
+const WHERE_NOTE = /（どれも (.+) を付けて実行）$/
+
+/** The undo with where its command acted named for every command in it (an undo may name several); one note, however many sources. */
+export function withWhere(undo: string, where: readonly string[]): string {
+  if (where.length === 0) return undo
+  const noted = undo.match(WHERE_NOTE)
+  const all = noted === null ? where : [...where, noted[1] as string]
+  return `${noted === null ? undo : undo.slice(0, -noted[0].length)}（どれも ${all.join(' ')} を付けて実行）`
+}
+
+/**
+ * Every outside-reaching part of a Bash command; env prefixes, redirections and subshell
+ * parentheses taken off. A push is given a sha to force back only when it is the command's one
+ * push and git printed one `To` block: with two pushes, or a remote with two push URLs, a block
+ * could be another remote's. A command that may run git elsewhere (cd, pushd, a subshell,
+ * GIT_DIR) names the remote by the URL git printed.
+ */
 export function classifyCommand(command: string, output: string): Classified[] {
+  let isElsewhere = false
+  const parts = command.split(/&&|\|\||;|\n|\|/).map(part => {
+    if (/^\s*\(/.test(part)) isElsewhere = true
+    const argv = withoutRedirects(words(part.replace(/^\s*\(+/, '').replace(/\)+\s*$/, '')))
+    const where: string[] = []
+    while (argv.length > 0 && (/^\w+=/.test(argv[0] as string) || argv[0] === 'sudo' || argv[0] === 'env' || argv[0] === 'command')) {
+      const word = argv.shift() as string
+      if (/^GIT_(?:DIR|WORK_TREE)=/.test(word)) isElsewhere = true
+      if (WHERE_ENV.test(word)) where.push(word)
+    }
+    if (/^(?:cd|pushd|popd)$/.test(argv[0] ?? '')) isElsewhere = true
+    return { argv, where }
+  })
+  const pushes = parts.filter(({ argv }) => isGitPush(withoutGitOptions(argv).argv)).length
+  // gh and helm print the evidence a close, delete or uninstall is given on (a PR URL, `STATUS:
+  // deployed`); with two of them in one command, whose it is cannot be told, so neither sees it.
+  // git prints none of it, so `git push && gh pr create` keeps it.
+  const isShared = parts.filter(({ argv }) => /^(?:gh|helm)$/.test((argv[0] ?? '').replace(/^.*\//, ''))).length > 1
+  const blocks = pushBlocks(output)
+  const pushOutput = pushes === 1 && blocks.length === 1 ? (blocks[0] as string) : ''
   const found: Classified[] = []
-  for (const part of command.split(/&&|\|\||;|\n|\|/)) {
-    const argv = words(part)
-    while (argv.length > 0 && (/^\w+=/.test(argv[0] as string) || argv[0] === 'sudo' || argv[0] === 'env' || argv[0] === 'command')) argv.shift()
-    if (argv[0] === 'cd') continue
-    const one = classifyArgv(argv, output)
-    if (one !== undefined) found.push(one)
+  for (const { argv, where } of parts) {
+    if (/^(?:cd|pushd|popd)$/.test(argv[0] ?? '')) continue
+    const program = (argv[0] ?? '').replace(/^.*\//, '')
+    const seen = isGitPush(withoutGitOptions(argv).argv) ? pushOutput : isShared && /^(?:gh|helm)$/.test(program) ? '' : output
+    const one = classifyArgv(argv, seen, isElsewhere)
+    if (one === undefined) continue
+    // The undo of a command its environment pointed elsewhere (KUBECONFIG, GH_REPO) goes there too.
+    found.push(where.length > 0 && /^(?:helm|gh|kubectl)$/.test(program) ? { ...one, undo: withWhere(one.undo, where) } : one)
   }
   return found
 }
