@@ -121,7 +121,8 @@ export const isReverted = (marks: readonly HitMarks[], text: string): boolean =>
 /**
  * The rules of one entry the file now undoes: a rule (a kind of weakening) is undone when one of
  * its findings is, so undoing a loosened matcher scores `loosened` and leaves a swallowed error
- * in the same edit open.
+ * in the same edit open. An entry gets one verdict per rule: two loosened matchers with one
+ * undone score `loosened` once, as tp.
  */
 export const revertedRules = (one: HitAssertion, text: string): string[] => [...new Set(one.marks.filter(mark => isUndone(mark, text)).map(mark => mark.rule))]
 
@@ -166,7 +167,7 @@ export const DEFAULT_THRESHOLD = 0.5
  * the value given is reported.
  */
 export function thresholdOf(value: unknown): { value: number; ignored?: string } {
-  if (value === undefined) return { value: DEFAULT_THRESHOLD }
+  if (value === undefined || value === null || value === '') return { value: DEFAULT_THRESHOLD }
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1) return { value }
   return { value: DEFAULT_THRESHOLD, ignored: String(value) }
 }
