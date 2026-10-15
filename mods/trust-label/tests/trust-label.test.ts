@@ -133,6 +133,12 @@ describe('trust', () => {
     expect(web('watch curl https://e.com/g')).toBe('https://e.com/g')
     expect(web('echo "a \\" b; curl x"')).toBeUndefined()
     expect(web('curl -h')).toBeUndefined()
+    // Looking a client up is not running it; a redirection is not what is fetched.
+    expect(web('command -v curl')).toBeUndefined()
+    expect(web('command -v wget || apt-get install -y wget')).toBeUndefined()
+    expect(web('if command -v curl >/dev/null; then echo ok; fi')).toBeUndefined()
+    expect(web('curl -s >/dev/null https://e.com/i')).toBe('https://e.com/i')
+    expect(web('curl -s 2>/dev/null "$U"')).toBe('$U')
   })
 
   test('an unclosed comment reaches only so far, and a tool directive is not an order', () => {
