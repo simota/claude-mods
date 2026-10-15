@@ -111,7 +111,7 @@ const SECRET_WORDS = new Set([
 ])
 // Words that mark a credential even inside a camelCase name (`accessToken`, `clientSecret`, `APIKey`),
 // and endings that mark one run together (`PGPASSWORD`). `key` and `session` are left out here:
-// `primaryKey`, `sessionId` and `"key": "src/a.ts"` are ids, not credentials.
+// `primaryKey` and `sessionId` are ids, not credentials.
 const STRONG_WORDS = new Set(['apikey', 'token', 'secret', 'password', 'passwd', 'credential', 'credentials'])
 const SECRET_ENDINGS = ['password', 'passwd', 'token', 'secret', 'apikey']
 const isStrongName = (name: string) =>
@@ -144,9 +144,10 @@ const SECRETS: Mask[] = [
   [/\b(bearer)\s+(?!\*\*\*)[\w.~+/=-]+/gi, '$1 ***'],
   // Any other header a request sends whose name reads as a credential (-H "X-API-Key: x"); only
   // as -H/--header, so an error line such as `Unexpected token: '<'` is left as it is. A quoted
-  // value goes whole (`X-Auth: Token abc`), an unquoted one to the next space.
+  // value goes whole up to its closing quote (`X-Auth: Token abc`); an unquoted header is one shell
+  // word with no space after the colon, so `grep -H password: config.yml` keeps its file name.
   [
-    /((?:^|\s)(?:-H|--header)(?:=|\s*))(?:(["'])([\w-]+)(:\s*)[^'"\n]*|([\w-]+)(:\s*)\S+)/g,
+    /((?:^|\s)(?:-H|--header)(?:=|\s*))(?:(["'])([\w-]+)(:\s*)(?:(?!\2)[^\n])+|([\w-]+)(:)[^\s'"]+)/g,
     (whole, head = '', quote = '', quotedName = '', quotedColon = '', name = '', colon = '') => {
       if (quote !== '') return isSecretName(quotedName) ? `${head}${quote}${quotedName}${quotedColon}***` : whole
       return isSecretName(name) ? `${head}${name}${colon}***` : whole
@@ -163,7 +164,8 @@ const SECRETS: Mask[] = [
   // A value that is itself NAME=value (kubectl --from-literal=password=x) is looked into.
   [NAME_VALUE, maskNameValue],
   // "name": "value" (JSON in an output line) where the name reads as a credential.
-  [/("([\w-]+)"\s*:\s*)"[^"]*"/g, (whole, head = '', name = '') => (isStrongName(name) ? `${head}"***"` : whole)],
+  // A bare "key" or "session" is an id there (a path, an S3 key), not a credential.
+  [/("([\w-]+)"\s*:\s*)"[^"]*"/g, (whole, head = '', name = '') => (isSecretName(name) && !/^(?:key|session)$/i.test(name) ? `${head}"***"` : whole)],
   // Bare tokens with a known shape.
   [/\b(sk-(?:ant-)?)[\w-]{16,}/g, '$1***'],
   [/\b(gh[pousr]_)[A-Za-z0-9]{10,}/g, '$1***'],
