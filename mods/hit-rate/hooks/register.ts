@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { HitAssertion, HitAudit, HitDoneGate, HitRecall, HitTable, HitVerdict } from '../types'
 import { isVerification } from './shell'
-import { addVerdicts, auditStep, fromStore, guardRules, isReverted, isSame, marksOf, mutedOf, recallStep, reportLines } from './verdicts'
+import { addVerdicts, auditStep, DEFAULT_THRESHOLD, fromStore, guardRules, isSame, marksOf, mutedOf, recallStep, reportLines, revertedRules, thresholdOf, withoutRules } from './verdicts'
 
 const STORE_KEY = 'table'
 const LAST_KEPT = 30
@@ -128,21 +128,32 @@ async function sweep($: EngineInterface, gate: Gate): Promise<void> {
   await record($, gate, [...dismissed, ...audited, ...recalled])
 }
 
-/** Settles the open assertion-guard entries on `paths` whose weakening the files now undo. */
+/** Settles the rules of the open assertion-guard entries on `paths` whose weakening the files now undo. */
 async function checkReverts($: EngineInterface, gate: Gate, paths: readonly string[] | 'all'): Promise<void> {
   const open = Object.entries(await read($, assertions)).filter(([, one]) => paths === 'all' || paths.includes(one.path))
-  const undone: string[] = []
+  const undone: [string, string[]][] = []
   for (const [id, one] of open) {
     const text = await $.fs.read(one.path).then(String).catch(() => undefined)
-    if (text !== undefined && isReverted(one.marks, text)) undone.push(id)
+    const rules = text === undefined ? [] : revertedRules(one, text)
+    if (rules.length > 0) undone.push([id, rules])
   }
   if (undone.length === 0) return
-  let claimed: HitAssertion[] = []
+  let claimed: string[] = []
   await update($, assertions, all => {
-    claimed = undone.flatMap(id => (all[id] === undefined ? [] : [all[id]]))
-    return drop(all, undone)
+    claimed = []
+    const next = { ...all }
+    for (const [id, rules] of undone) {
+      const one = all[id]
+      if (one === undefined) continue
+      const settled = rules.filter(rule => one.rules.includes(rule))
+      claimed.push(...settled)
+      const left = withoutRules(one, settled)
+      if (left === null) delete next[id]
+      else next[id] = left
+    }
+    return next
   })
-  await record($, gate, claimed.flatMap(one => one.rules.map(rule => ({ rule, verdict: 'tp' as const, why: '弱めた編集が元に戻された' }))))
+  await record($, gate, claimed.map(rule => ({ rule, verdict: 'tp' as const, why: '弱めた編集が元に戻された' })))
 }
 
 /** At session end, what nothing decided counts as unknown, and the session's holdings are cleared. */
@@ -179,8 +190,8 @@ async function closeSession($: EngineInterface, gate: Gate): Promise<void> {
 export const register: Register = (on, options) => {
   const isEnabled = options.enabled === true
   const minN = typeof options.minN === 'number' && options.minN > 0 ? options.minN : 20
-  const threshold = typeof options.threshold === 'number' ? options.threshold : 0.5
-  const gate: Gate = { minN, threshold }
+  const threshold = thresholdOf(options.threshold)
+  const gate: Gate = { minN, threshold: threshold.value }
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'hit-rate', description: '検出 mod の各ルールの的中率（TP/FP/unknown）と、loopback が返すのをやめたルールを表示' })
@@ -266,8 +277,9 @@ export const register: Register = (on, options) => {
     const now = fromStore(await $.store.get(STORE_KEY))
     return {
       text: [
-        `hit-rate: ${state}（n≥${minN} で precision < ${Math.round(threshold * 100)}% のルールは loopback が返さない）`,
-        ...reportLines(now, mutedOf(now, minN, threshold), await read($, last), minN),
+        `hit-rate: ${state}（n≥${minN} で precision < ${Math.round(gate.threshold * 100)}% のルールは loopback が返さない）`,
+        ...(threshold.ignored === undefined ? [] : [`threshold ${threshold.ignored} は 0〜1 の範囲外のため無視し、既定の ${DEFAULT_THRESHOLD} を使っています。`]),
+        ...reportLines(now, mutedOf(now, minN, gate.threshold), await read($, last), minN),
       ].join('\n'),
     }
   })

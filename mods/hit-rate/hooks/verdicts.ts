@@ -3,7 +3,7 @@
 
 import type { PluginState } from 'claude-code'
 
-import type { HitAudit, HitMark, HitRecall, HitTable, HitVerdict } from '../types'
+import type { HitAssertion, HitAudit, HitMark, HitMarks, HitRecall, HitTable, HitVerdict } from '../types'
 
 type Verdict = Omit<HitVerdict, 'at'>
 
@@ -44,6 +44,7 @@ type ZukanEntries = readonly PluginState['zukan']['entries'][number][] | undefin
 /**
  * A pending error whose entry has a recorded fix is a recall: zukan told Claude that fix. Once
  * the error is got past, the recall held if the command that got past it is the one recalled.
+ * The same error failing again, from the same command or another, is the same recall waiting.
  */
 export function recallStep(
   recalls: Readonly<Record<string, HitRecall>>,
@@ -56,7 +57,7 @@ export function recallStep(
   const byKey = new Map((entries ?? []).map(one => [one.key, one]))
   for (const [program, held] of Object.entries(recalls)) {
     const still = pending?.[program]
-    if (still !== undefined && still.key === held.key && still.failed === held.failed) {
+    if (still !== undefined && still.key === held.key) {
       next[program] = held
       continue
     }
@@ -87,8 +88,10 @@ export const occurrences = (text: string, line: string): number =>
 
 type GuardFinding = PluginState['assertion-guard']['entries'][number]['findings'][number]
 
-/** Each finding's before and after lines, counted in the file as it stands when the finding is opened. */
-export function marksOf(findings: readonly GuardFinding[], text: string): { before?: HitMark; after?: HitMark }[] {
+const guardRule = (finding: GuardFinding): string => `assertion-guard:${finding.kind}`
+
+/** Each finding's rule and its before and after lines, counted in the file as it stands when the finding is opened. */
+export function marksOf(findings: readonly GuardFinding[], text: string): HitMarks[] {
   const mark = (side: HitMark['side'], raw: string | undefined): HitMark | undefined => {
     const line = raw?.trim() ?? ''
     return line === '' ? undefined : { side, line, count: occurrences(text, line) }
@@ -96,25 +99,40 @@ export function marksOf(findings: readonly GuardFinding[], text: string): { befo
   return findings.map(f => {
     const before = mark('before', f.before)
     const after = mark('after', f.after)
-    return { ...(before === undefined ? {} : { before }), ...(after === undefined ? {} : { after }) }
+    return { rule: guardRule(f), ...(before === undefined ? {} : { before }), ...(after === undefined ? {} : { after }) }
   })
 }
 
 /**
- * Whether the file now undoes a weakening: for some finding the old line came back and the
- * new one went (or only the one it has did). Counts, not presence, so a duplicate assertion
- * elsewhere in the file does not look like a revert.
+ * Whether the file now undoes one finding's weakening: the old line came back and the new one
+ * went (or only the one it has did). Counts, not presence, so a duplicate assertion elsewhere
+ * in the file does not look like a revert.
  */
-export function isReverted(marks: readonly { before?: HitMark; after?: HitMark }[], text: string): boolean {
-  return marks.some(({ before, after }) => {
-    if (before === undefined && after === undefined) return false
-    const isBack = before === undefined || occurrences(text, before.line) > before.count
-    const isGone = after === undefined || occurrences(text, after.line) < after.count
-    return isBack && isGone
-  })
+function isUndone({ before, after }: HitMarks, text: string): boolean {
+  if (before === undefined && after === undefined) return false
+  const isBack = before === undefined || occurrences(text, before.line) > before.count
+  const isGone = after === undefined || occurrences(text, after.line) < after.count
+  return isBack && isGone
 }
 
-export const guardRules = (findings: readonly GuardFinding[]): string[] => [...new Set(findings.map(f => `assertion-guard:${f.kind}`))]
+/** Whether the file now undoes the weakening of some finding. */
+export const isReverted = (marks: readonly HitMarks[], text: string): boolean => marks.some(one => isUndone(one, text))
+
+/**
+ * The rules of one entry the file now undoes: a rule (a kind of weakening) is undone when one of
+ * its findings is, so undoing a loosened matcher scores `loosened` and leaves a swallowed error
+ * in the same edit open.
+ */
+export const revertedRules = (one: HitAssertion, text: string): string[] => [...new Set(one.marks.filter(mark => isUndone(mark, text)).map(mark => mark.rule))]
+
+/** The entry with `rules` settled: those rules and their findings gone, or null when nothing is left open. */
+export function withoutRules(one: HitAssertion, rules: readonly string[]): HitAssertion | null {
+  const left = one.rules.filter(rule => !rules.includes(rule))
+  if (left.length === 0) return null
+  return { ...one, rules: left, marks: one.marks.filter(mark => !rules.includes(mark.rule)) }
+}
+
+export const guardRules = (findings: readonly GuardFinding[]): string[] => [...new Set(findings.map(guardRule))]
 
 // ---- the table ------------------------------------------------------------------------------
 
@@ -139,6 +157,19 @@ export function fromStore(value: unknown): HitTable {
 }
 
 export const isSame = (a: HitTable, b: HitTable): boolean => JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort())
+
+export const DEFAULT_THRESHOLD = 0.5
+
+/**
+ * The precision threshold as configured, when it is one (0 to 1). Any other value, such as a
+ * percentage typed as 50, would mute rules that are always right, so the default is used and
+ * the value given is reported.
+ */
+export function thresholdOf(value: unknown): { value: number; ignored?: string } {
+  if (value === undefined) return { value: DEFAULT_THRESHOLD }
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1) return { value }
+  return { value: DEFAULT_THRESHOLD, ignored: String(value) }
+}
 
 /** Rules judged often enough whose precision is below the threshold. */
 export function mutedOf(table: HitTable, minN: number, threshold: number): string[] {

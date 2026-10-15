@@ -91,6 +91,17 @@ describe('verdicts', () => {
     expect(recallStep({}, { git: { key: 'k', failed: 'git push', calls: 0 } }, [{ key: 'k' } as never], 100).recalls).toEqual({})
   })
 
+  test('zukan: the same error failing again from another command keeps the recall waiting', () => {
+    const fix = { command: 'git push -u origin HEAD', isSandboxOff: false, repo: 'r', at: 10 }
+    const opened = recallStep({}, { git: { key: 'k', failed: 'git push', calls: 0 } }, [{ key: 'k', fix } as never], 100)
+    const retried = recallStep(opened.recalls, { git: { key: 'k', failed: 'git push origin main', calls: 0 } }, [{ key: 'k', fix } as never], 110)
+    expect(retried.verdicts).toEqual([])
+    expect(retried.recalls).toEqual(opened.recalls)
+    // Another error of the same program is another episode: the first ends undecided.
+    const other = recallStep(opened.recalls, { git: { key: 'k2', failed: 'git push', calls: 0 } }, [{ key: 'k', fix } as never], 110)
+    expect(other.verdicts.map(v => v.verdict)).toEqual(['unknown'])
+  })
+
   test('assertion-guard: a revert is the old line back and the new one gone, counted against duplicates', () => {
     const findings = [{ kind: 'loosened' as const, path: 'a.test.ts', before: '  expect(x).toBe(1)', after: '  expect(x).toBeTruthy()' }]
     const weakened = 'expect(x).toBe(1)\nexpect(x).toBeTruthy()\n'
@@ -181,6 +192,50 @@ describe('hit-rate', () => {
     await startTurn($)
     await endTurn($)
     expect(await report($)).toContain('assertion-guard:loosened  TP 1 / FP 1')
+  })
+
+  test('an edit that weakened two ways: undoing one kind scores that kind only', ON, async ($, on) => {
+    const d: Detectors = {}
+    const bottom = world(on, d)
+    bottom.files['/p/a.test.ts'] = 'expect(x).toBeTruthy()\ntry { run() } catch {}\n'
+    d.guard = [
+      {
+        id: 'g1',
+        at: 1,
+        path: '/p/a.test.ts',
+        findings: [
+          { kind: 'loosened', path: '/p/a.test.ts', before: 'expect(x).toBe(1)', after: 'expect(x).toBeTruthy()' },
+          { kind: 'swallowed', path: '/p/a.test.ts', after: 'try { run() } catch {}' },
+        ],
+        isReviewed: false,
+      },
+    ]
+    await $.session.start(START)
+    await type($)
+
+    await startTurn($)
+    await $.tool.call({ tool: 'Edit', file_path: '/p/a.test.ts', old_string: 'toBeTruthy()', new_string: 'toBe(1)' })
+    await endTurn($)
+    let text = await report($)
+    expect(text).toContain('assertion-guard:loosened  TP 1 / FP 0')
+    expect(text).not.toContain('assertion-guard:swallowed')
+
+    // The swallowed error still stands after the person checked it: that kind alone is fp.
+    d.guard = d.guard.map(one => ({ ...one, isReviewed: true }))
+    await type($)
+    await startTurn($)
+    await endTurn($)
+    text = await report($)
+    expect(text).toContain('assertion-guard:loosened  TP 1 / FP 0')
+    expect(text).toContain('assertion-guard:swallowed  TP 0 / FP 1')
+  })
+
+  test('a threshold outside 0 to 1 is not used: a rule always right is never muted', { options: { enabled: true, minN: 2, threshold: 50 } }, async ($, on) => {
+    world(on, { isFlagged: true }, { table: { 'done-gate:unverified': { tp: 5, fp: 0, unknown: 0 } } })
+    await $.session.start(START)
+    const text = await report($)
+    expect(text).not.toContain('🔇')
+    expect(text).toContain('threshold 50')
   })
 
   test('a weakening undone through Bash (git restore) is tp, not fp after review', ON, async ($, on) => {

@@ -19,12 +19,16 @@ export type HitDoneGate = 'idle' | 'open' | 'settled'
 /** A line of the edited file and how many times it occurred when the finding was opened. */
 export type HitMark = { side: 'before' | 'after'; line: string; count: number }
 
+/** One finding's rule (`assertion-guard:<kind>`) and its before and after lines. */
+export type HitMarks = { rule: string; before?: HitMark; after?: HitMark }
+
 /** One assertion-guard entry waiting for a revert or a review left standing. */
 export type HitAssertion = {
   path: string
+  /** The rules still open: a rule leaves once its weakening is undone. */
   rules: string[]
-  /** Per finding: its before line and after line, as counted in the file. */
-  marks: { before?: HitMark; after?: HitMark }[]
+  /** Per finding: its rule, and its before line and after line as counted in the file. */
+  marks: HitMarks[]
   /** The turn number when the person was first seen to have reviewed it. */
   reviewedTurn?: number
 }
