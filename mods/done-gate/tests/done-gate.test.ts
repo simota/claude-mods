@@ -378,6 +378,41 @@ test('git run inside groups, keywords, substitutions, nested shells and wrappers
   expect(bottom.ran.length).toBe(0)
 })
 
+test('hooks switched off through config in the environment, quoting, env -S or a shell reading its stdin are denied', async ($, on) => {
+  const bottom = engine(on)
+  for (const command of [
+    'git --config-env=core.hooksPath=HP commit -m x',
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/e git commit -m x',
+    `GIT_CONFIG_PARAMETERS="'core.hooksPath=/tmp/e'" git commit -m x`,
+    "git commit $'--no-verify' -m x",
+    "git commit $'--no-\\x76erify' -m x",
+    'git commit $"--no-verify" -m x',
+    'env -S "git commit -n -m x"',
+    'env --split-string="git commit -n -m x"',
+    "bash <<< 'git commit -n -m x'",
+    "echo 'git commit -n -m x' | sh",
+    "printf 'git commit --no-verify' | bash",
+    'bash <<EOF\ngit commit -n -m x\nEOF',
+    "bash -s <<'EOF'\ncd repo && git push --no-verify\nEOF",
+    "bash -c -- 'git commit -n -m x'",
+  ]) {
+    const ran = await bash($, command)
+    expect(ran.deny).toContain('--no-verify')
+  }
+  expect(bottom.ran.length).toBe(0)
+  // Text that only reaches a file or the screen is not run.
+  const commands = [
+    "cat <<'EOF' | tee notes.md\ngit commit --no-verify\nEOF",
+    "echo 'git commit -n' > notes.txt",
+    "printf 'git commit --no-verify' | grep verify",
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=x git commit -m x',
+    "bash script.sh <<< 'git commit -n'",
+    'skip=1 git commit -m x',
+  ]
+  for (const command of commands) expect((await bash($, command)).deny).toBeUndefined()
+  expect(bottom.ran.length).toBe(commands.length)
+})
+
 test('options whose value merely spells the flag, and comments, run', async ($, on) => {
   const bottom = engine(on)
   const commands = [

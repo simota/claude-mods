@@ -6,7 +6,8 @@
 
 export type Op = '' | '&&' | '||' | ';' | ';;' | '|' | '|&' | '&' | '\n'
 
-export type Redirect = { op: string; target?: string }
+/** A redirection; a heredoc keeps its body, which a shell reading its stdin runs. */
+export type Redirect = { op: string; target?: string; body?: string }
 
 /** One simple command: its words, its redirections, and the operator that follows it. */
 export type Simple = { words: string[]; redirects: Redirect[]; after: Op }
@@ -78,6 +79,42 @@ function quoted(text: string, from: number): { value: string; end: number; neste
   return { value, end: j + 1, nested }
 }
 
+/** The text of an ANSI-C quoted string `$'…'` starting at `from`, escapes decoded as bash does. */
+function ansiC(text: string, from: number): { value: string; end: number } {
+  const simple: Record<string, string> = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' }
+  let value = ''
+  let j = from
+  while (j < text.length && text[j] !== "'") {
+    const ch = text[j] as string
+    if (ch !== '\\' || j + 1 >= text.length) {
+      value += ch
+      j += 1
+      continue
+    }
+    const next = text[j + 1] as string
+    const code = (digits: string, radix: number) => {
+      value += String.fromCodePoint(Number.parseInt(digits, radix))
+      j += 2 + digits.length - (radix === 8 ? 1 : 0)
+    }
+    const hex = /^x([0-9a-fA-F]{1,2})/.exec(text.slice(j + 1))
+    const uni = /^[uU]([0-9a-fA-F]{1,8})/.exec(text.slice(j + 1))
+    const oct = /^([0-7]{1,3})/.exec(text.slice(j + 1))
+    if (simple[next] !== undefined) {
+      value += simple[next]
+      j += 2
+    } else if (hex !== null) code(hex[1] as string, 16)
+    else if (uni !== null && Number.parseInt(uni[1] as string, 16) <= 0x10ffff) code(uni[1] as string, 16)
+    else if (oct !== null) {
+      value += String.fromCharCode(Number.parseInt(oct[1] as string, 8) & 0xff)
+      j += 1 + (oct[1] as string).length
+    } else {
+      value += `\\${next}`
+      j += 2
+    }
+  }
+  return { value, end: j + 1 }
+}
+
 const OPERATOR = /^(&&|\|\||;;|\|&|[;|&\n])/
 // > >> >| >& <& <> < &> &>>, with an fd duplication (2>&1, >&-) taken whole.
 const REDIRECT = /^(&>>?|[<>]&[0-9]+-?|[<>]&-|>>|>\||<>|>&|<&|[<>])/
@@ -89,7 +126,7 @@ export function parse(command: string): Parsed {
   let redirects: Redirect[] = []
   let word: string | undefined
   let pendingRedirect: Redirect | undefined
-  let heredocs: { tag: string; isTabbed: boolean }[] = []
+  let heredocs: { tag: string; isTabbed: boolean; entry: Redirect }[] = []
   let i = 0
 
   const endWord = () => {
@@ -115,13 +152,16 @@ export function parse(command: string): Parsed {
   }
   const skipHeredocBodies = () => {
     for (const doc of heredocs) {
+      const body: string[] = []
       while (i < command.length) {
         const lineEnd = command.indexOf('\n', i)
         const stop = lineEnd === -1 ? command.length : lineEnd
         const line = command.slice(i, stop)
         i = stop + 1
         if ((doc.isTabbed ? line.replace(/^\t+/, '') : line) === doc.tag) break
+        body.push(line)
       }
+      doc.entry.body = body.join('\n')
     }
     heredocs = []
   }
@@ -153,6 +193,18 @@ export function parse(command: string): Parsed {
       nested.push(command.slice(i + 1, stop))
       word = (word ?? '') + command.slice(i, stop + 1)
       i = stop + 1
+      continue
+    }
+    if (ch === '$' && command[i + 1] === "'") {
+      // ANSI-C quoting: `$'--no-\x76erify'` is --no-verify to the shell.
+      const text = ansiC(command, i + 2)
+      word = (word ?? '') + text.value
+      i = text.end
+      continue
+    }
+    if (ch === '$' && command[i + 1] === '"') {
+      // Locale quoting `$"…"` reads as a double-quoted string.
+      i += 1
       continue
     }
     if (ch === '$' && command.startsWith('$((', i)) {
@@ -199,8 +251,9 @@ export function parse(command: string): Parsed {
       while (command[j] === ' ' || command[j] === '\t') j += 1
       const match = /^(['"]?)([A-Za-z0-9_.-]+)\1/.exec(command.slice(j))
       if (match !== null) {
-        heredocs.push({ tag: match[2] as string, isTabbed })
-        redirects.push({ op: isTabbed ? '<<-' : '<<', target: match[2] as string })
+        const entry: Redirect = { op: isTabbed ? '<<-' : '<<', target: match[2] as string }
+        heredocs.push({ tag: match[2] as string, isTabbed, entry })
+        redirects.push(entry)
         i = j + match[0].length
         continue
       }
@@ -250,16 +303,22 @@ export function parse(command: string): Parsed {
   return { commands, nested }
 }
 
-/** Every simple command a command line runs, substitutions and `bash -c` / `eval` text included. */
+/**
+ * Every simple command a command line runs: substitutions, `bash -c` / `eval` / `env -S` text,
+ * and the script a shell reads on its stdin (`bash <<< '…'`, a heredoc, `echo '…' | sh`) included.
+ */
 export function allCommands(command: string, depth = 0): Simple[] {
   if (depth > MAX_DEPTH) return []
   const { commands, nested } = parse(command)
   const out: Simple[] = []
-  for (const one of commands) {
+  commands.forEach((one, k) => {
     out.push(one)
     const inner = innerText(one.words)
     if (inner !== undefined) out.push(...allCommands(inner, depth + 1))
-  }
+    if (readsScriptFromStdin(one.words)) {
+      for (const text of stdinOf(one, commands[k - 1])) out.push(...allCommands(text, depth + 1))
+    }
+  })
   for (const text of nested) out.push(...allCommands(text, depth + 1))
   return out
 }
@@ -333,19 +392,50 @@ export function program(words: readonly string[]): { name: string; args: string[
   return { name: base(name), args: words.slice(k + 1) }
 }
 
-/** The command text a `bash -c "<text>"` or `eval <words>` runs, if the words are one. */
+/** The command text a `bash -c "<text>"`, `eval <words>` or `env -S "<text>"` runs, if the words are one. */
 export function innerText(words: readonly string[]): string | undefined {
+  // env -S splits its value into the command it runs: `env -S "git commit -n"`.
+  const at = words.findIndex(word => base(word) === 'env')
+  if (at !== -1 && (at === 0 || words.slice(0, at).every(word => ASSIGNMENT.test(word) || PREFIX_KEYWORDS.has(word) || WRAPPERS[base(word)] !== undefined))) {
+    for (let k = at + 1; k < words.length && (words[k] as string).startsWith('-'); k++) {
+      const option = words[k] as string
+      const glued = /^(?:--split-string=|-S)(.+)$/.exec(option)
+      if (glued !== null) return [glued[1], ...words.slice(k + 1)].join(' ')
+      if (option === '-S' || option === '--split-string') return words.slice(k + 1).join(' ')
+      if (WRAPPERS.env?.has(option) === true) k += 1
+    }
+  }
   const run = program(words)
   if (run === undefined) return undefined
   if (run.name === 'eval') return run.args.join(' ')
   if (SHELLS.has(run.name)) {
     for (let k = 0; k < run.args.length; k++) {
       const arg = run.args[k] as string
-      if (/^-[A-Za-z]*c[A-Za-z]*$/.test(arg)) return run.args[k + 1]
+      // The text is the first word after -c that is not an option (`bash -c -- '…'`).
+      if (/^-[A-Za-z]*c[A-Za-z]*$/.test(arg)) return run.args.slice(k + 1).find((one, n, rest) => !one.startsWith('-') || rest[n - 1] === '--')
       if (!arg.startsWith('-')) return undefined // a script file
     }
   }
   return undefined
+}
+
+/** Whether a shell runs the script on its stdin: no -c text and no script file, or -s. */
+function readsScriptFromStdin(words: readonly string[]): boolean {
+  const run = program(words)
+  if (run === undefined || !SHELLS.has(run.name)) return false
+  if (run.args.some(arg => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg))) return false
+  return run.args.includes('-s') || run.args.every(arg => arg.startsWith('-'))
+}
+
+/** The text a shell reads on its stdin: a here-string, a heredoc's body, or what echo/printf piped into it. */
+function stdinOf(one: Simple, before: Simple | undefined): string[] {
+  const texts = one.redirects.flatMap(redirect => (redirect.op === '<<<' ? [redirect.target ?? ''] : redirect.body !== undefined ? [redirect.body] : []))
+  const piped = before !== undefined && (before.after === '|' || before.after === '|&') ? program(before.words) : undefined
+  if (piped !== undefined && (piped.name === 'echo' || piped.name === 'printf')) {
+    const text = piped.args.filter(arg => !/^-[neE]+$/.test(arg)).join(' ')
+    texts.push(piped.name === 'printf' ? text.replace(/\\n/g, '\n') : text)
+  }
+  return texts
 }
 
 // ---- verification ---------------------------------------------------------------------
@@ -493,8 +583,11 @@ function clusterHasN(cluster: string): { hasN: boolean; takesNext: boolean } {
   return { hasN: false, takesNext: false }
 }
 
-// Environment assignments that switch off the hook managers git runs (husky, lefthook, pre-commit).
+// Environment assignments that switch off the hook managers git runs (husky, lefthook, pre-commit),
+// or move git's hooks through config given in the environment (GIT_CONFIG_KEY_n, GIT_CONFIG_PARAMETERS).
 const HOOK_OFF_ENV = /^(?:HUSKY=(?:0|false)|HUSKY_SKIP_HOOKS=|LEFTHOOK=(?:0|false)|SKIP=)/
+// Config keys are case-insensitive (core.hooksPath, CORE.HOOKSPATH); the variable names are not.
+const HOOKS_PATH_ENV = /^(?:GIT_CONFIG_KEY_\d+=(?:core\.hookspath)$|GIT_CONFIG_PARAMETERS=.*\bcore\.hookspath=)/i
 
 /** `-c core.hooksPath=…` or `--config-env core.hooksPath=…`: the hooks moved for one command. */
 const movesHooks = (option: string, value: string | undefined) =>
@@ -506,12 +599,13 @@ function bypassesHooks(simple: Simple): boolean {
   const { args } = run
   // The words before git: `HUSKY=0 git commit`, `env SKIP=lint git commit`.
   const before = simple.words.slice(0, simple.words.length - args.length - 1)
-  if (before.some(word => HOOK_OFF_ENV.test(word))) return true
+  if (before.some(word => HOOK_OFF_ENV.test(word) || (HOOKS_PATH_ENV.test(word) && /^GIT_CONFIG_/.test(word)))) return true
 
   let k = 0
   while (k < args.length && (args[k] as string).startsWith('-')) {
     const option = args[k] as string
     if (movesHooks(option, args[k + 1])) return true
+    if (/^--config-env=core\.hookspath=/i.test(option)) return true
     k += GIT_VALUE_OPTIONS.has(option) ? 2 : 1
   }
   const sub = args[k]
