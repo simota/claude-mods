@@ -8,6 +8,7 @@ import {
   FAST_MS,
   jobOf,
   logEntry,
+  MAX_LOGS,
   paneLines,
   pinOf,
   PR_FIELDS,
@@ -120,13 +121,15 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
     const change = changeOf(prev, next)
     if (change.toasts.length > 0) $.ui.toast(change.toasts.join(' · '))
     if (isFeeding && change.feed.length > 0) {
+      // A few logs, so a red run of many jobs does not fill the next prompt; the rest are counted.
       const logs: string[] = []
-      for (const check of change.failed) {
-        const job = jobOf(check.url)
-        if (job === undefined) continue
-        const log = await run($, ['gh', 'run', 'view', '--job', job, '--log-failed'])
+      const withJob = change.failed.filter(check => jobOf(check.url) !== undefined)
+      for (const check of withJob.slice(0, MAX_LOGS)) {
+        const log = await run($, ['gh', 'run', 'view', '--job', jobOf(check.url) as string, '--log-failed'])
         if (log.ok && log.stdout.trim() !== '') logs.push(logEntry(check.name, log.stdout))
       }
+      const unread = withJob.length - Math.min(withJob.length, MAX_LOGS)
+      if (unread > 0) logs.push(`${unread} more failed check(s) without their logs here: see \`gh pr checks\`.`)
       await update($, feed, all => [...all, ...change.feed, ...logs])
     }
   }
@@ -189,7 +192,7 @@ export const register: Register = (on, options) => {
     // `/pr 12`, `/pr <url>` or `/pr <branch>` follows that one; `/pr clear` goes back to the branch's.
     const arg = e.args.trim()
     if (arg === 'clear') await update($, pinned, () => null)
-    else if (arg !== '') await update($, pinned, () => arg.replace(/^#/, ''))
+    else if (arg !== '' && !arg.startsWith('-')) await update($, pinned, () => arg.replace(/^#/, ''))
     await refresh($, false)
     await $.ui.open({ id: PANE, title: 'Pull request' })
     const s = await read($, snapshot)

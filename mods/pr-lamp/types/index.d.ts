@@ -16,6 +16,8 @@ export type PrThread = {
   author: string
   /** Its latest comment, cut to a line. */
   body: string
+  /** Whether the latest comment is the person's own (the session replying), so no news. */
+  isMine?: boolean
 }
 
 /** The branch's pull request as last fetched. */
