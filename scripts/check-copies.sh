@@ -3,7 +3,11 @@
 set -eu
 cd "$(dirname "$0")/.."
 status=0
-for pair in 'mods/done-gate/hooks/shell.ts mods/zukan/hooks/shell.ts'; do
+for pair in \
+  'mods/done-gate/hooks/shell.ts mods/zukan/hooks/shell.ts' \
+  'mods/zukan/hooks/mask.ts mods/side-effect-ledger/hooks/mask.ts' \
+  'mods/zukan/hooks/mask.ts mods/handoff-capsule/hooks/mask.ts' \
+  'mods/zukan/hooks/mask.ts mods/artifact-shelf/hooks/mask.ts'; do
   set -- $pair
   if ! cmp -s "$1" "$2"; then
     echo "check-copies: $2 differs from $1" >&2

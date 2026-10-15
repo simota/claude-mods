@@ -23,6 +23,19 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `zukan` | Error book: catches the errors Bash commands hit across sessions and repos, records what got past each one, and when one comes back tells Claude and the person how it was fixed last time |
 | `pr-lamp` | The current branch's pull request as a lamp: checks, review, unresolved threads and what is left before a merge, in the status line and a `/pr` pane; red checks and new review comments go to Claude beside the next prompt |
 | `fog-map` | Exploration map: the repository as a tree under fog, cleared where Claude read and marked where it edited, made a file or hit an error, with the importers an edit may have broken unseen; `/map` |
+| `assertion-guard` | Catches edits that weaken tests to pass: assertions removed, expectations loosened or rewritten, tests skipped, errors swallowed; asks Claude for the reason beside the edit |
+| `negative-space` | When an edit adds authorization, validation or error handling, lists the refusal and boundary-value tests no test touched this session covers; `/negative-space` |
+| `mutation-tap` | `/mutate` runs a mutation test limited to the lines changed since HEAD and lists the mutants the tests did not catch |
+| `perf-delta` | `/perf` compares a benchmark before and after (a saved baseline, or a git ref in a temporary worktree): median time, peak memory, spread, and whether the change beats the noise |
+| `handoff-capsule` | Before a compaction and at session end, keeps the goal, decisions, open items, commands to reproduce and files touched; the next session picks which parts to bring back |
+| `port-lantern` | The dev servers the session started: URL, port, whether each still listens, and their latest log lines, in the status line and `/ports` |
+| `artifact-shelf` | A shelf of what sessions made (CSV, PDF, HTML, video, patches…), tied to the call and request that made each; `/shelf` searches by kind, word and time |
+| `focus-hud` | One status line: goal, target, what is running and for how long, and what the session waits on; `/focus` |
+| `side-effect-ledger` | A ledger of what a git diff never shows (push, publish, deploy, PRs, API writes, messages) with outcome, how to undo, and whether the undo was checked; `/ledger` |
+| `trust-label` | Labels external text (web, issues, logs, browser pages, services) with its source beside the result and flags candidate injected instructions; a heuristic, never a safety verdict; `/trust` |
+| `visual-diff` | Compares browser screenshots of the same URL and size before and after an edit: side by side, a map of changed cells, regions, and the edits in between; `/vdiff` |
+| `journey-trace` | Records Claude's browser actions and the expected states as a replayable recipe; `/journey md` for a bug report, `/journey e2e` for a Playwright draft |
+| `token-lens` | Checks an element's actual colours, spacing and type against the project's design tokens and lists off-token values with the nearest token; `/token-lens <selector>` |
 
 ## Install
 
@@ -253,6 +266,86 @@ Two warnings, each a likely oversight: a file edited without being read, and a f
 
 The map is the session's, subagents' calls included; files outside the repository are not mapped. Explored is touched files over `git ls-files`, read again after a checkout, pull, `mv` or `rm`. Outside a git repository only the edit count is shown.
 
+### assertion-guard
+
+On each Edit, Write or MultiEdit it diffs the whole file before and after the call, so an assertion moved within the file is no removal. In test files (by name, or a Rust file with a test module anywhere in it) it flags assertions removed or commented out, a strict matcher turned weak (`toEqual` → `toBeDefined`, `assertEqual` → `assertTrue`, `toThrow(X)` → `toThrow()`), the same assertion now expecting another value, and tests skipped or focused (`it.skip`, `@pytest.mark.skip`, `#[ignore]`, `t.Skip`). In any file it flags errors newly swallowed (`catch {}`, `.catch(() => undefined)`, `except: pass`, `|| true`).
+
+Findings ride beside the edit's result, quoted as data, asking Claude to state each change's reason or revert it. A band above the prompt stays until **確認済み**; **理由を尋ねる** puts the question in the prompt. `/assertion-guard` lists the session's findings. Candidates only: a change that legitimately updates a test is flagged too.
+
+### negative-space
+
+Edits to source files that add authorization (`isAdmin`, `permission`, `403`…), input validation (`validate`, `z.string().max(40)`, `if (x > 100)`…) or error handling (`catch`, `raise`, `Err(`…) become triggers. After the turn, a band lists what the tests touched this session (edited or read, matched to the source by file stem) do not yet try: the refusal, the invalid input, the failure, and each bound N as N-1/N/N+1. A case counts as tried only when such a test both tries it (`403`, `invalid`, `toThrow`…) and names what changed: the function the trigger sits in or a name on its line. **Claude に頼む** puts the list in the prompt; **不要** dismisses it. `/negative-space` lists all candidates.
+
+### mutation-tap
+
+`/mutate [test command]` takes the lines changed since HEAD (`git diff -U0`), makes small mutants of them (comparisons flipped, `&&`↔`||`, booleans, `!` dropped, `+`↔`-`, constants +1; strings, comments and imports left alone), and runs the tests once per mutant after a passing baseline, all in a copy of the repository under `$TMPDIR/claude-mutation-tap/` (a copy-on-write clone with `cp -c` on APFS or `cp --reflink` where the file system has it, a plain copy otherwise; dependencies and build output come along). The working tree is never written, so edits, commits and dev servers meanwhile see nothing of it. The copy is removed at the end, or at the next session start after a reload or crash. The pane lists the survivors: mutants the tests did not catch. `/mutate show`, `/mutate stop`.
+
+| Option | Default | |
+| --- | --- | --- |
+| `maxMutants` | `20` | spread across changed lines |
+| `timeoutSec` | `300` | a run past it counts as caught |
+| `testCommand` | `""` | guessed from Makefile, package.json, Cargo.toml, go.mod, pyproject.toml, Package.swift |
+
+The copy takes disk space and time where no clone is possible (a large `node_modules` on a non-APFS disk). Tests run on the host, outside the Bash sandbox.
+
+### perf-delta
+
+- `/perf <command>`: one warm-up and N measured runs; the first time saves a baseline, later runs compare with it
+- `/perf base <command>`: measure and save as the baseline
+- `/perf ref <git-ref> <command>`: run the ref in a temporary `git worktree`, then the working tree (dependencies not in git, such as `node_modules`, are missing there)
+- `/perf show`, `/perf clear [command]`
+
+Time and peak memory come from `/usr/bin/time` (`-l` on macOS, `-v` on GNU). The report gives median, ±stdev, CV and range per side; a difference counts only beyond twice the larger stdev and 1%, and a side with CV over 10% is flagged unsteady.
+
+| Option | Default | |
+| --- | --- | --- |
+| `runs` | `5` | |
+| `timeoutSec` | `300` | |
+
+### handoff-capsule
+
+It follows the session: the person's requests, decision lines and open items from Claude's replies (`#TODO(agent)`, "まだ", the todo list), Bash commands worth rerunning with their last outcome, files edited; credentials in commands masked as zukan does. A capsule is saved before each compaction, at session end, and with `/handoff save` (five per repository). The next session in the repository, or the conversation right after a compaction, shows a band: toggle 目的・決定・未完了・コマンド・ファイル and press **取り込む**; the chosen parts go to Claude beside the next prompt, marked as a record to check against the current state. `/handoff` shows the capsule, `/handoff load` offers the latest again.
+
+### port-lantern
+
+A Bash command run in the background, or a server command (`pnpm dev`, `vite`, `uvicorn`, `rails s`…), is followed: its output file is read every 5 s for local URLs and ports (`--port`, `PORT=` in the command too), and `lsof` says whether a port listens. The status line keeps `🏮 :5173● :8000○`; a toast says when one starts listening or stops. `/ports` opens the pane: URL (press to copy), command, pid, and the latest log lines, errors in red.
+
+### artifact-shelf
+
+Files a call made, with data, document, image, video, audio, patch or archive extensions: a Write's file, a Bash command's `-o`/`--output`/`>`/`tee` targets and converter outputs, and paths a tool's answer names, each checked to have changed during the call. Each is kept with its size, time, the call and the request it answered, per repository across sessions (300). `/shelf [words]` filters by kind (`動画`, `video`), extension (`csv`), time (`今日`, `昨日`, `7d`) and text; the pane filters by kind, and pressing a name copies its path. Files deleted since are marked, not dropped.
+
+### focus-hud
+
+```
+🎯 ログインのバグを直して › Writing tests · 📄 auth.ts · ⚙ Bash pnpm test · ⏳ Bash の終了待ち (12s)
+```
+
+Goal: the latest request's first line, with the todo in progress. Target: the file, page host or program last acted on. Running: the call under way. Waiting: a permission prompt, a question to you, a tool, subagents, the model, or your input. `/focus` gives the same as lines.
+
+### side-effect-ledger
+
+Bash commands and tool calls that change things outside the working tree: `git push` (the undo written from what push printed: `git push --force-with-lease=main:<new> origin <old>:main`, or `--delete` for a new branch), `gh pr|issue|release|repo …`, `gh api -X POST…`, npm/cargo/PyPI/gem publish, docker push, kubectl, helm, terraform, pulumi, cdk, vercel, netlify, fly, wrangler, firebase, gcloud, aws, `curl -X POST|PUT|PATCH|DELETE` to a non-local host, scp/rsync to a remote, MCP tools that create/update/send, and Artifact publish/delete. Each entry keeps its outcome (failures too), how it would be undone and how hard that is. In `/ledger` each is marked **確認済みにする** or **不要** once its undo has been checked; the status line counts the session's entries and those unchecked. Credentials in a command (`Authorization` headers, `token=`, `NAME_TOKEN=`, known key shapes) are masked as zukan does before anything is kept. Kept per repository across sessions (300).
+
+### trust-label
+
+Results from WebFetch, WebSearch, browser page reads, `curl`/`wget` to a remote, `gh issue|pr view`, logs (`*.log`, `kubectl logs`, `gh run view --log`) and MCP services get a one-line source label beside them for Claude: external data, not instructions. Text that reads like orders to the model (overriding instructions, role switches, fake conversation tags, hiding things from the user, running a command, piping curl to sh, sending secrets, instructions in HTML comments, invisible characters) is quoted as candidates, with a toast. `/trust` lists the session's sources. Finding nothing proves nothing.
+
+| Option | Default | |
+| --- | --- | --- |
+| `labelAll` | `true` | off: only results with candidates get a note |
+
+### visual-diff
+
+Each Claude in Chrome screenshot is kept as PNG with its URL and size (in `$TMPDIR/claude-visual-diff/<session>`, removed at session end). The URL is the last navigation's; after a click, a key or a form input, which may have left the page, it is asked of Claude in Chrome's tab listing for the tab shot, and a shot whose URL cannot be told is kept but never compared. A new one is compared with the last of the same URL and size taken before an edit (or the previous one, or a baseline set with `/vdiff base`): both scaled to 320 px with `sips` (or ImageMagick), a 32-column grid of cells that changed, the changed regions in page pixels, and the files edited in between. `/vdiff` opens the pane: both pictures side by side in the terminal (kitty graphics), the change map and the regions elsewhere. `/vdiff clear` removes the baselines.
+
+### journey-trace
+
+Claude in Chrome navigations, clicks, typing, keys, form fills and scrolls are recorded as steps; elements named by `find`/`read_page` keep their role and name. Expected states come from `/journey expect <text>` and from Claude through the tool `mcp__journey-trace__expect`. `/journey start [name]`, `stop`, `resume`, `clear`; `/journey md` copies a bug report (steps, expected, actual to fill in, environment), `/journey e2e` a Playwright test where coordinate-only clicks are left as TODOs.
+
+### token-lens
+
+Tokens are read from the repository's stylesheets (`--name:` custom properties, SCSS `$variables`) and tokens JSON (`$value`/`value`), references resolved. `/token-lens <selector>` (or, with no argument, the text selected in the page) runs a script in the tab Claude drives through Claude in Chrome's `javascript_tool` and checks up to five elements' colour, background, border, margin, padding, gap, radius, font family, size, weight, line height and letter spacing: equal to a token, or an off-token value with the nearest token and how far off. `/token-lens tokens` counts what was found; `/token-lens reload` reads them again.
+
 ## Develop
 
 ```
@@ -262,7 +355,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts` is done-gate's). `scripts/check-copies.sh` fails when a copy drifts.
+Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts` is done-gate's; `mask.ts` in side-effect-ledger, handoff-capsule and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
 
 ## License
 

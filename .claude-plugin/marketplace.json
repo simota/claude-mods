@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, battle report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, trust label, visual diff, journey trace, token lens",
   "owner": {
     "name": "simota"
   },
@@ -89,6 +89,71 @@
       "name": "fog-map",
       "source": "./mods/fog-map",
       "description": "Exploration map: the repository as a tree under fog, cleared where Claude read, marked where it edited, made a file or hit an error, with the importers an edit may have broken unseen; /map"
+    },
+    {
+      "name": "assertion-guard",
+      "source": "./mods/assertion-guard",
+      "description": "Catches edits that weaken tests to make them pass: assertions removed, expectations loosened or rewritten, tests skipped, exceptions swallowed; asks Claude for the reason beside the tool's result and keeps a band until the person has checked it"
+    },
+    {
+      "name": "negative-space",
+      "source": "./mods/negative-space",
+      "description": "When an edit adds authorization, input validation or error handling, lists the refusal, invalid-input, failure and boundary-value tests that no test touched this session covers yet; a band after the turn and /negative-space"
+    },
+    {
+      "name": "mutation-tap",
+      "source": "./mods/mutation-tap",
+      "description": "/mutate runs a mutation test limited to the lines changed since HEAD: each small change to the code (a flipped comparison, && for ||, a constant) is run against the tests, and the ones the tests did not catch are listed"
+    },
+    {
+      "name": "perf-delta",
+      "source": "./mods/perf-delta",
+      "description": "/perf runs a benchmark command several times and compares it with its baseline (saved earlier, or a git ref run in a temporary worktree): median wall time, peak memory and the spread of the runs, and whether the difference is larger than the noise"
+    },
+    {
+      "name": "handoff-capsule",
+      "source": "./mods/handoff-capsule",
+      "description": "A capsule to resume from: before a compaction and at the end of a session it keeps the goal, the decisions, what is left, the commands to reproduce and the files touched; the next session (or the conversation after the compaction) chooses which parts to bring back"
+    },
+    {
+      "name": "port-lantern",
+      "source": "./mods/port-lantern",
+      "description": "Keeps track of the dev servers the session started: their URLs and ports from the server's own output, whether each still listens, and its latest log lines, in the status line and a /ports pane; a toast when one starts or stops"
+    },
+    {
+      "name": "artifact-shelf",
+      "source": "./mods/artifact-shelf",
+      "description": "A shelf of what the sessions made: CSV, PDF, HTML, video, audio, images, patches and archives, each tied to the call that made it and the request it answered; /shelf finds them by kind, word, place or time"
+    },
+    {
+      "name": "focus-hud",
+      "source": "./mods/focus-hud",
+      "description": "One status line that says what is going on: the goal (the request, or the todo in progress), the target (the file, page or command in hand), what is running and for how long, and what it waits on (you, a permission, an answer, a tool); /focus gives the detail"
+    },
+    {
+      "name": "side-effect-ledger",
+      "source": "./mods/side-effect-ledger",
+      "description": "A ledger of what a git diff never shows: pushes, publishes, deploys, pull requests, releases, API writes and messages sent, each with its outcome, how it would be undone, and whether that undo has been checked; /ledger"
+    },
+    {
+      "name": "trust-label",
+      "source": "./mods/trust-label",
+      "description": "Labels text that came from outside (web pages, search results, issues and PRs, logs, browser pages, MCP services) with where it came from, beside the tool's result, and flags candidate instructions hidden in it; a heuristic, never a judgement that a text is safe; /trust"
+    },
+    {
+      "name": "visual-diff",
+      "source": "./mods/visual-diff",
+      "description": "Compares the browser screenshots Claude takes of the same URL at the same size, before and after an edit: both side by side, a map of the cells that changed, the changed regions in page pixels and the files edited in between; /vdiff"
+    },
+    {
+      "name": "journey-trace",
+      "source": "./mods/journey-trace",
+      "description": "Records what Claude does in the browser (pages opened, clicks, typing, keys, form fills) and the states expected along the way as a recipe to replay; /journey turns it into a bug report's steps in Markdown or a Playwright test draft"
+    },
+    {
+      "name": "token-lens",
+      "source": "./mods/token-lens",
+      "description": "Checks a page element's actual colours, spacing and type against the project's registered design tokens (CSS custom properties, SCSS variables, tokens JSON): /token-lens <selector>, or the text selected in the browser, lists each value as a token or an off-token value with the nearest token"
     }
   ]
 }
