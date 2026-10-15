@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { addVerdicts, auditStep, isReverted, marksOf, mutedOf, recallStep } from '../hooks/verdicts'
+import { addVerdicts, auditStep, guardRules, isReverted, marksOf, mutedOf, recallStep, revertedRules, thresholdOf, withoutRules } from '../hooks/verdicts'
 
 type Detectors = {
   isFlagged?: boolean
@@ -110,6 +110,33 @@ describe('verdicts', () => {
     expect(isReverted(marks, 'expect(x).toBe(1)\nexpect(x).toBe(1)\n')).toBe(true)
     // The new line deleted without the old one back is no revert.
     expect(isReverted(marks, 'expect(x).toBe(1)\n')).toBe(false)
+  })
+
+  test('assertion-guard: one verdict per kind per edit, and the kinds left keep their lines', () => {
+    const loosened = (v: string) => ({ kind: 'loosened' as const, path: 'a.test.ts', before: `expect(${v}).toBe(1)`, after: `expect(${v}).toBeTruthy()` })
+    const swallowed = { kind: 'swallowed' as const, path: 'a.test.ts', after: 'catch {}' }
+    const blank = { kind: 'removed' as const, path: 'a.test.ts' }
+    const findings = [loosened('x'), loosened('y'), swallowed, blank]
+    const weakened = 'expect(x).toBeTruthy()\nexpect(y).toBeTruthy()\ncatch {}\n'
+    const one = { path: 'a.test.ts', rules: guardRules(findings), marks: marksOf(findings, weakened) }
+    const undone = 'expect(x).toBe(1)\nexpect(y).toBeTruthy()\ncatch {}\n'
+    expect(revertedRules(one, undone)).toEqual(['assertion-guard:loosened'])
+    const left = withoutRules(one, ['assertion-guard:loosened'])
+    expect(left?.rules).toEqual(['assertion-guard:swallowed', 'assertion-guard:removed'])
+    expect(left?.marks.map(m => m.rule)).toEqual(['assertion-guard:swallowed', 'assertion-guard:removed'])
+    // A finding with no line to look for is never undone.
+    expect(revertedRules(left!, '')).toEqual(['assertion-guard:swallowed'])
+    expect(withoutRules(left!, ['assertion-guard:swallowed', 'assertion-guard:removed'])).toBeNull()
+  })
+
+  test('threshold: 0 to 1 is used, unset or cleared is the default quietly, anything else is named', () => {
+    expect(thresholdOf(0)).toEqual({ value: 0 })
+    expect(thresholdOf(1)).toEqual({ value: 1 })
+    expect(thresholdOf(undefined)).toEqual({ value: 0.5 })
+    expect(thresholdOf(null)).toEqual({ value: 0.5 })
+    expect(thresholdOf('')).toEqual({ value: 0.5 })
+    expect(thresholdOf(50)).toEqual({ value: 0.5, ignored: '50' })
+    expect(thresholdOf(Number.NaN)).toEqual({ value: 0.5, ignored: 'NaN' })
   })
 
   test('a rule is muted only with enough verdicts and a precision below the threshold', () => {
