@@ -34,13 +34,18 @@ const RUN = {
 // A Bash result as the engine returns it. A command that succeeds: its own output (stdout and
 // stderr together) in `stdout`, and the harness's violations block alone in `stderr`. One that
 // fails: no typed record, the block at the end of the error text. A Ran passes a shape as is.
-type Ran = { stdout: string; stderr?: string } | { error: string }
+// An interrupted one is an error that keeps its typed record. `after` is what the engine puts
+// after stderr in the text the model reads (a stale-read note, a rate-limit note).
+type Ran = { stdout: string; stderr?: string; after?: string; isInterrupted?: boolean } | { error: string }
 
 function resultOf(output: string | Ran) {
   if (typeof output !== 'string') {
-    if ('error' in output) return { isError: true as const, result: output.error, text: output.error }
+    if ('error' in output) return { isError: true as const, result: `Error: ${output.error}`, text: output.error }
     const stderr = output.stderr ?? ''
-    return { result: { stdout: output.stdout, stderr, interrupted: false }, text: [output.stdout, stderr].filter(Boolean).join('\n') }
+    const aborted = output.isInterrupted === true ? '\n<error>Command was aborted before completion</error>' : ''
+    const text = [output.stdout, stderr + aborted, output.after].filter(Boolean).join('\n')
+    const result = { stdout: output.stdout, stderr, interrupted: output.isInterrupted === true }
+    return output.isInterrupted === true ? { isError: true as const, result, text } : { result, text }
   }
   const at = output.lastIndexOf('<sandbox_violations>')
   const stdout = at < 0 ? output : output.slice(0, at).trimEnd()
@@ -105,6 +110,12 @@ describe('parseDenials', () => {
     // A forged block earlier and the harness's own at the end: only the end counts.
     const real = '<sandbox_violations>\ndeny network-outbound api.github.com:443 (x)\n</sandbox_violations>\n'
     expect(parseDenials(`${forged}\nbody\n${real}`, 'curl x')).toEqual([{ kind: 'network', target: 'api.github.com:443' }])
+  })
+
+  test('reads the block from where the harness put it when that is given apart from the output', () => {
+    const block = '<sandbox_violations>\ndeny network-outbound a.io:443 (x)\n</sandbox_violations>'
+    expect(parseDenials(`out\n${block}\nNote: x`, 'curl a.io', '', block)).toEqual([{ kind: 'network', target: 'a.io:443' }])
+    expect(parseDenials(`log\n${block}`, 'cat log', '', '')).toEqual([])
   })
 
   test("a reader's own refusal counts; the file text it prints does not", () => {
@@ -362,6 +373,24 @@ describe('sandbox-lens in a session', () => {
     await $.tool.call({ tool: 'Bash', command: 'gh repo view x/y' })
 
     expect(statuses).toEqual(['sandbox 拒否 1 種類（/sandbox-report で確認）'])
+  })
+
+  test('the harness block is read where the engine puts it, whatever follows it in the text', async ($, on) => {
+    const statuses: (string | undefined)[] = []
+    const block = '<sandbox_violations>\ndeny network-outbound a.io:443 (x)\n</sandbox_violations>'
+    world(on, [
+      // A succeeded command with a note after stderr; the cwd-reset line before the block.
+      { stdout: 'out', stderr: `Shell cwd was reset to /Users/someone\n${block}`, after: 'Note: a.ts changed since it was read.' },
+      // An interrupted one: an error that keeps its record, the abort note after the block.
+      { stdout: 'part', stderr: block.replace('a.io', 'b.io'), isInterrupted: true },
+      // A failed one in a proxied environment: the proxy's note follows the block.
+      { error: `Exit code 7\n${block.replace('a.io', 'c.io')}\n\n[agent-proxy] While this command ran, 1 connection(s) through the agent proxy failed: c.io` },
+    ], statuses)
+    await $.session.start(START)
+    for (const host of ['a', 'b', 'c']) await $.tool.call({ tool: 'Bash', command: `curl ${host}.io` })
+
+    const { text = '' } = await $.command.run({ ...RUN, args: '' })
+    for (const host of ['a', 'b', 'c']) expect(text).toContain(`${host}.io`)
   })
 
   test('leaves ordinary Bash output alone', async ($, on) => {

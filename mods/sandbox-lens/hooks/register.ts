@@ -57,10 +57,12 @@ export const register: Register = on => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.text === undefined) return ran
 
-    // A command that succeeded has its own output in `stdout` and the harness's block alone in
-    // `stderr`: a block in the output was printed by the command (`cat saved.log`), even at the end.
-    // A failed one has no typed record, and the block that ends its error text is read.
-    const stderr = ran.isError === true ? undefined : (ran.result as { stderr?: unknown } | undefined)?.stderr
+    // A command that succeeded, or was interrupted, keeps its record: its own output in `stdout`
+    // and the harness's block alone in `stderr`, so a block in the output was printed by the
+    // command (`cat saved.log`), even at the end. One that failed keeps only its error text,
+    // and the block that ends it is read: there a printed block cannot be told apart.
+    const typed = ran.result
+    const stderr = typeof typed === 'object' && typed !== null ? (typed as { stderr?: unknown }).stderr : undefined
     const hits = parseDenials(ran.text, e.command, await $.session.cwd(), typeof stderr === 'string' ? stderr : ran.text)
     if (hits.length === 0) return ran
 
