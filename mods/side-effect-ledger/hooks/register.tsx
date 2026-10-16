@@ -106,7 +106,14 @@ async function write($: EngineInterface, fn: (list: LedgerEntry[]) => LedgerEntr
     // The ledger first, then what it weighs: a write cut short leaves an index the next one mends.
     let room = await makeRoom($, key, fn(await get()).slice(0, KEEP))
     let next = room.mine
-    await $.store.set(key, next)
+    // Refused for room, the index under-reported (a ledger another version grew): it is built
+    // again from every ledger, room made by it, and the write tried once more.
+    await $.store.set(key, next).catch(async () => {
+      await $.store.delete(INDEX_KEY)
+      room = await makeRoom($, key, next)
+      next = room.mine
+      await $.store.set(key, next)
+    })
     const stored = await get()
     const again = fn(stored).slice(0, KEEP)
     if (JSON.stringify(again) !== JSON.stringify(stored)) {
