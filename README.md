@@ -304,7 +304,7 @@ A Bash command run in the background, or a server command (`pnpm dev`, `vite`, `
 
 ### artifact-shelf
 
-Files a call made, with data, document, image, video, audio, patch or archive extensions: a Write's file, a Bash command's `-o`/`--output`/`>`/`tee` targets and converter outputs, and paths a tool's answer names, each checked to have changed during the call. Each is kept with its size, time, the call and the request it answered, per repository across sessions (300); credentials in the request and the command are masked as zukan does, also in items kept before this was done. `/shelf [words]` filters by kind (`動画`, `video`), extension (`csv`), time (`今日`, `昨日`, `7d`) and text; the pane filters by kind, and pressing a name copies its path. Files deleted since are marked, not dropped.
+Files a call made, with data, document, image, video, audio, patch or archive extensions: a Write's file, a Bash command's `-o`/`--output`/`>`/`tee` targets and converter outputs, and paths a tool's answer names, each checked to have changed during the call. Each is kept with its size, time, the call and the request it answered, per repository across sessions (300); credentials in the request and the command are masked as zukan does, also in items kept before this was done (written back masked at the next session start). The store holds the 16 shelves added to most recently; an older repository's shelf leaves. `/shelf [words]` filters by kind (`動画`, `video`), extension (`csv`), time (`今日`, `昨日`, `7d`) and text; the pane filters by kind, and pressing a name copies its path. Files deleted since are marked, not dropped.
 
 ### focus-hud
 

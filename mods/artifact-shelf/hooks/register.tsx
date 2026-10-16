@@ -28,7 +28,22 @@ function serial<T>(work: () => Promise<T>): Promise<T> {
 
 // The request an item answered is kept across sessions and shown: credentials in it are masked,
 // also in items kept before this was done, as they are read.
-const masked = (list: readonly ShelfItem[]): ShelfItem[] => list.map(one => ({ ...one, purpose: maskedOf(one.purpose ?? ''), event: maskedOf(one.event ?? '') }))
+const masked = (list: readonly ShelfItem[]): ShelfItem[] =>
+  list.map(one => ({ ...one, purpose: maskedOf(String(one.purpose ?? '')), event: maskedOf(String(one.event ?? '')) }))
+
+// The store holds 4 MiB of JSON in all, every repository's shelf together: past this many shelves
+// (300 items each run to about 180 KB) the one least recently added to leaves.
+const MAX_SHELVES = 16
+
+/** Drops the shelves least recently added to, past MAX_SHELVES; never the one in hand. */
+async function keepShelves($: EngineInterface, current: string): Promise<void> {
+  const keys = ((await $.store.keys()) as string[]).filter(key => key.startsWith('shelf:') && key !== current)
+  if (keys.length < MAX_SHELVES) return
+  const newest = await Promise.all(
+    keys.map(async key => ({ key, at: Math.max(0, ...((((await $.store.get(key)) as ShelfItem[] | undefined) ?? []).map(one => one.at))) })),
+  )
+  for (const { key } of newest.sort((a, b) => a.at - b.at).slice(0, keys.length - (MAX_SHELVES - 1))) await $.store.delete(key)
+}
 
 const storeKey = async ($: EngineInterface) => `shelf:${(await $.session.repo())?.root ?? (await $.session.cwd())}`
 
@@ -56,6 +71,7 @@ async function shelveNew($: EngineInterface, candidates: string[], meta: { tool:
   const key = await storeKey($)
   const get = async () => masked(((await $.store.get(key)) as ShelfItem[] | undefined) ?? [])
   await serial(async () => {
+    await keepShelves($, key)
     let merged = shelve(await get(), found, KEEP)
     await $.store.set(key, merged)
     // Another session may have written in between: read back, and shelve again on top of theirs.
@@ -78,7 +94,11 @@ export const register: Register = on => {
       argumentHint: '[種類 | 拡張子 | 今日 | 7d | 語…]',
     })
     const started = await next(e)
-    const stored = masked(((await $.store.get(await storeKey($))) as ShelfItem[] | undefined) ?? [])
+    const key = await storeKey($)
+    const raw = ((await $.store.get(key)) as ShelfItem[] | undefined) ?? []
+    const stored = masked(raw)
+    // A shelf kept before masking is written back masked now, not at its next new item.
+    if (JSON.stringify(stored) !== JSON.stringify(raw)) await serial(() => $.store.set(key, stored)).catch(() => undefined)
     await update($, items, () => stored)
     return started
   })
@@ -86,7 +106,8 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     if (e.origin.kind === 'composer' && e.command === undefined && !e.isMeta) {
       const text = maskedOf(e.text.slice(0, 65_536)).replace(/\s+/g, ' ').trim()
-      await update($, purpose, () => (text.length > 80 ? `${text.slice(0, 79)}…` : text))
+      // Masked again once cut: a cut can leave what masks further (`Bearer ab…`), and kept as read back it stays the same.
+      await update($, purpose, () => maskedOf(text.length > 80 ? `${[...text].slice(0, 79).join('')}…` : text))
     }
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -108,7 +129,8 @@ export const register: Register = on => {
     } else if (tool === 'Bash') {
       const command = String(input.command ?? '')
       candidates = [...commandOutputs(command), ...textOutputs(text)]
-      event = `Bash: ${maskedOf(command).replace(/\s+/g, ' ').slice(0, 120)}`
+      // Only the head is shown: a heredoc of a megabyte is not masked whole on every call.
+      event = `Bash: ${maskedOf(command.slice(0, 4_096)).replace(/\s+/g, ' ').slice(0, 120)}`
     } else {
       candidates = [...inputPaths(input), ...textOutputs(text)]
       event = tool
