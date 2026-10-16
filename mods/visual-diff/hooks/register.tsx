@@ -233,7 +233,9 @@ export const register: Register = on => {
     // One session runs at a time, so nothing is left to touch; the next shot makes its folder anew.
     liveDirs.clear()
     const own = await ownFolder($)
-    if (own !== undefined) await sh($, REMOVE_CHECKED, [own, `${own}/${nameOf(e.sessionId)}`])
+    const name = nameOf(e.sessionId)
+    // As the sweep reads names: an empty one would name the mod's whole folder, every session's.
+    if (own !== undefined && /^[\w-]+$/.test(name)) await sh($, REMOVE_CHECKED, [own, `${own}/${name}`])
     return next(e)
   })
 

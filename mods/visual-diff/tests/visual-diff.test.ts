@@ -238,6 +238,13 @@ describe('visual-diff in a session', () => {
     expect(String(w.sh.find(argv => String(argv[2]).includes('rm -rf'))?.[2])).toContain('[ ! -L "$1" ]')
   })
 
+  test('an empty session id never names the whole folder for removal', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await $.session.end({ reason: 'clear', sessionId: '', resume: { id: 's1' } })
+    expect(w.sh.filter(argv => String(argv[2]).includes('rm -rf'))).toEqual([])
+  })
+
   test('a click that leaves the page is not compared with the page it left', async ($, on) => {
     const w = world(on)
     await $.session.start(START)
