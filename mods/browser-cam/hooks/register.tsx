@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { BrowserCamAction, BrowserCamFrame } from '../types'
 import { BROWSER_TOOL, cellBox, nextPage, pageFrom, pngDimensions, screenshotOf, shortName, sipsDimensions, summarize } from './cam'
@@ -14,6 +14,8 @@ const FRAMES_KEPT = 4
 const ENDED_KEPT = 10
 // A session's folder left behind (the process was killed before session.end) goes after a day.
 const STALE_MS = 24 * 60 * 60 * 1000
+// A live session touches its folder this often, so one left idle for a day is not taken for killed.
+const HEARTBEAT_MS = 60 * 60 * 1000
 
 const frame = atom({ plugin: 'browser-cam', key: 'frame' } as const, null)
 const actions = atom({ plugin: 'browser-cam', key: 'actions' } as const, [])
@@ -29,6 +31,7 @@ type Pending = { shot: Shot; toolUseId: string; at: number; seq: number; session
 let isFullscreen: boolean | undefined
 // Session folders made and checked by this load of the module, by session id.
 const sessionDirs = new Map<string, string>()
+let heartbeat: Timer | undefined
 // Results are read one at a time, in the order their calls finished.
 let queue: Promise<void> = Promise.resolve()
 // The newest screenshot seen while no pane was showing: kept, not decoded.
@@ -73,6 +76,19 @@ async function privateChild($: EngineInterface, parent: string, name: string): P
 
 const hasEnded = async ($: EngineInterface, sessionId: string) => (await read($, endedSessions)).includes(sessionId)
 
+// Each hour while this process keeps a folder, its mtime is moved on: another session's sweep
+// reads a folder untouched for a day as a killed session's, however idle this one is.
+function keepAlive($: EngineInterface): void {
+  heartbeat ??= $.clock.every(HEARTBEAT_MS, () => {
+    if (sessionDirs.size === 0) {
+      heartbeat?.cancel()
+      heartbeat = undefined
+      return
+    }
+    for (const dir of sessionDirs.values()) void $.process.run(['touch', '-c', '--', dir]).catch(() => undefined)
+  })
+}
+
 // One folder per session, derived from its id. An ended session's folder is never made again.
 async function framesDir($: EngineInterface, sessionId: string): Promise<string | undefined> {
   if (await hasEnded($, sessionId)) return undefined
@@ -83,7 +99,10 @@ async function framesDir($: EngineInterface, sessionId: string): Promise<string 
   const base = await privateChild($, parent, DIR_NAME)
   if (base === undefined) return undefined
   const dir = await privateChild($, base, folderName(sessionId))
-  if (dir !== undefined) sessionDirs.set(sessionId, dir)
+  if (dir !== undefined) {
+    sessionDirs.set(sessionId, dir)
+    keepAlive($)
+  }
   return dir
 }
 

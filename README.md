@@ -115,7 +115,7 @@ Finished tool calls are drawn as one compact line with a Nerd Font icon: Edit/Wr
 
 - Images a session writes, reads, or that a Bash command produces (png, jpg, jpeg, webp, gif) get a thumbnail under that tool's row in the terminal (kitty graphics: Ghostty, kitty).
 - `/images` opens a pane, newest first; `h`/`l` step through them.
-- Non-PNG files are converted with macOS `sips` after the tool result has gone back, so tool calls never wait on it. Converted files live in a private cache (`$TMPDIR` or `~/.cache`), newest 50 kept.
+- Non-PNG files are converted with macOS `sips` after the tool result has gone back, so tool calls never wait on it. Converted files live in a private cache (`$TMPDIR` or `~/.cache`), newest 50 kept. A killed session's folder is removed by a later session's start once a day untouched; a live one touches its own every hour, so it is kept however long it sits idle.
 - A Bash command and its output are searched for image paths in time linear in their length, before the result goes back. A path split at spaces (`/tmp/a b/x.jpg`) joins at most 8 preceding pieces and 4096 characters; the first 64 paths named are read, and of those the first 4 that exist are shown.
 
 | Option | Default | |
@@ -150,7 +150,7 @@ Off by default. When on, the skill listing is trimmed to what the project kind n
 ### browser-cam
 
 - While Claude drives a browser (Claude in Chrome, Claude Browser, or a remote device's browser), a pane shows the latest screenshot, the page title and URL, and the last 8 actions with ✓/✗. The URL comes only from the navigate call or the tab tools' own header, never from page text.
-- `/cam` toggles the pane; in a fullscreen terminal it opens by itself once per session, on the first browser call. Screenshots are decoded only while the pane is open, and written to a private per-session folder that is removed at session end.
+- `/cam` toggles the pane; in a fullscreen terminal it opens by itself once per session, on the first browser call. Screenshots are decoded only while the pane is open, and written to a private per-session folder that is removed at session end. A killed session's folder is removed by a later session's start once a day untouched; a live one touches its own every hour, so it is kept however long it sits idle.
 - The desktop app shows the title and URL, a caption and the actions, without the picture.
 
 | Option | Default | |
@@ -329,7 +329,7 @@ Results from WebFetch, WebSearch, browser page reads, `curl`/`wget` to a remote 
 
 ### visual-diff
 
-Each Claude in Chrome screenshot is kept as PNG with its URL and size (in `$TMPDIR/claude-visual-diff/<session>`, else `~/.cache/…`; both folders made private and checked to be yours and no link; removed at session end, and a killed session's folder by a later start once a day old). The URL is the last navigation's; after a click, a key or a form input, which may have left the page, it is asked of Claude in Chrome's tab listing for the tab shot, and a shot whose URL cannot be told is kept but never compared. A new one is compared with the last of the same URL and size taken before an edit (or the previous one, or a baseline set with `/vdiff base`): both scaled to 320 px with `sips` (or ImageMagick), a 32-column grid of cells that changed, the changed regions in page pixels, and the files edited in between. `/vdiff` opens the pane: both pictures side by side in the terminal (kitty graphics), the change map and the regions elsewhere. `/vdiff clear` removes the baselines.
+Each Claude in Chrome screenshot is kept as PNG with its URL and size (in `$TMPDIR/claude-visual-diff/<session>`, else `~/.cache/…`; both folders made private and checked to be yours and no link; removed at session end, and a killed session's folder by a later start once a day untouched; a live session touches its own every hour, so it is kept however long it sits idle). The URL is the last navigation's; after a click, a key or a form input, which may have left the page, it is asked of Claude in Chrome's tab listing for the tab shot, and a shot whose URL cannot be told is kept but never compared. A new one is compared with the last of the same URL and size taken before an edit (or the previous one, or a baseline set with `/vdiff base`): both scaled to 320 px with `sips` (or ImageMagick), a 32-column grid of cells that changed, the changed regions in page pixels, and the files edited in between. `/vdiff` opens the pane: both pictures side by side in the terminal (kitty graphics), the change map and the regions elsewhere. `/vdiff clear` removes the baselines.
 
 ### journey-trace
 

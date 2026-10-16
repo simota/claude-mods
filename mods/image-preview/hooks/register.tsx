@@ -1,5 +1,5 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { EngineInterface, RenderInput, RenderSurface, Register } from 'claude-code'
+import type { EngineInterface, RenderInput, RenderSurface, Register, Timer } from 'claude-code'
 
 import type { ConvertedFile, ImageItem } from '../types'
 import {
@@ -28,6 +28,8 @@ const CACHE_KEEP = 50
 const CACHE_NAME = 'claude-image-preview'
 // A session's cache left behind (the process was killed before session.end) goes after a day.
 const STALE_MS = 24 * 60 * 60 * 1000
+// A live session touches its cache this often, so one left idle for a day is not taken for killed.
+const HEARTBEAT_MS = 60 * 60 * 1000
 // The pane's own rows that are not the picture: the step buttons, the caption, the path.
 const PANE_CHROME_ROWS = 3
 const PRUNED = 'キャッシュから削除済み'
@@ -43,6 +45,20 @@ type CallPlace = { cwd: string; home: string | undefined; sessionId: string }
 
 // Session caches made and checked by this load of the module, by session id.
 const cacheDirs = new Map<string, string>()
+let heartbeat: Timer | undefined
+
+// Each hour while this process keeps a cache, its mtime is moved on: another session's sweep
+// reads a folder untouched for a day as a killed session's, however idle this one is.
+function keepAlive($: EngineInterface): void {
+  heartbeat ??= $.clock.every(HEARTBEAT_MS, () => {
+    if (cacheDirs.size === 0) {
+      heartbeat?.cancel()
+      heartbeat = undefined
+      return
+    }
+    for (const dir of cacheDirs.values()) void $.process.run(['touch', '-c', '--', dir]).catch(() => undefined)
+  })
+}
 // Work after a tool call runs one at a time, in the order the calls finished.
 let queue: Promise<void> = Promise.resolve()
 
@@ -92,7 +108,10 @@ async function cacheFolder($: EngineInterface, sessionId: string): Promise<strin
   const base = await privateChild($, parent, CACHE_NAME)
   if (base === undefined) return undefined
   const dir = await privateChild($, base, folderName(sessionId))
-  if (dir !== undefined) cacheDirs.set(sessionId, dir)
+  if (dir !== undefined) {
+    cacheDirs.set(sessionId, dir)
+    keepAlive($)
+  }
   return dir
 }
 

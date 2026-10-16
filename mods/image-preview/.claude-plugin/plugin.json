@@ -1,6 +1,6 @@
 {
   "name": "image-preview",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { VdDiff, VdEdit, VdShot } from '../types'
 import { base64ToBytes, BROWSER_TOOL, changedCells, keyOf, mapLines, mayLeave, parseBmp, pickBefore, pngSize, regionsOf, share, tabUrlOf, urlFrom } from './diff'
@@ -68,11 +68,32 @@ async function folder($: EngineInterface): Promise<string | undefined> {
     'umask 077 && mkdir -p -m 700 -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && chmod 700 -- "$1" && mkdir -p -m 700 -- "$2" && [ -d "$2" ] && [ ! -L "$2" ] && [ -O "$2" ]',
     [own, dir],
   )
-  return made?.exitCode === 0 ? dir : undefined
+  if (made?.exitCode !== 0) return undefined
+  kept.add(dir)
+  keepAlive($)
+  return dir
 }
 
 // A session killed before its end leaves its folder: removed by a later start once a day old.
 const STALE_MS = 24 * 60 * 60 * 1000
+// A live session touches its folder this often, so one left idle for a day is not taken for killed.
+const HEARTBEAT_MS = 60 * 60 * 1000
+// Session folders this load of the module writes into.
+const kept = new Set<string>()
+let heartbeat: Timer | undefined
+
+// Each hour while this process keeps a folder, its mtime is moved on: another session's sweep
+// reads a folder untouched for a day as a killed session's, however idle this one is.
+function keepAlive($: EngineInterface): void {
+  heartbeat ??= $.clock.every(HEARTBEAT_MS, () => {
+    if (kept.size === 0) {
+      heartbeat?.cancel()
+      heartbeat = undefined
+      return
+    }
+    for (const dir of kept) void $.process.run(['touch', '-c', '--', dir]).catch(() => undefined)
+  })
+}
 
 async function sweepStale($: EngineInterface): Promise<void> {
   const own = await ownFolder($)
@@ -198,6 +219,9 @@ export const register: Register = on => {
 
   on('session.end', async ($, e, next) => {
     const dir = (await read($, shots))[0]?.png.replace(/\/[^/]+$/, '')
+    const own = await ownFolder($)
+    if (own !== undefined) kept.delete(`${own}/${await sessionFolderName($)}`)
+    if (dir !== undefined) kept.delete(dir)
     if (dir !== undefined && dir.includes(`/${DIR_NAME}/`)) await sh($, 'rm -rf -- "$1"', [dir])
     return next(e)
   })

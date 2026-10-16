@@ -97,10 +97,11 @@ const PNG_800x600 = 'iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAIAAAD'
 
 function world(on: On) {
   const clock = mock.clock(on, { now: 1_000 })
-  const w = { toasts: [] as string[], files: {} as Record<string, string>, clock, tabs: undefined as string | undefined, sh: [] as string[][], dirs: [] as { name: string; mtimeMs: number }[] }
+  const w = { toasts: [] as string[], files: {} as Record<string, string>, clock, tabs: undefined as string | undefined, sh: [] as string[][], touched: [] as string[][], dirs: [] as { name: string; mtimeMs: number }[] }
   mock.store(on, {})
   mock.env(on, { TMPDIR: '/t' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('session.id', () => ({ value: 's1' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -112,6 +113,7 @@ function world(on: On) {
     const ok = { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     const [program, flag] = e.argv
     if (program === '/bin/sh') w.sh.push([...e.argv])
+    if (program === 'touch') w.touched.push([...e.argv])
     if (program === 'sips' && flag === '-Z') {
       // The small copy: the first shot is plain, every later one has the red box.
       const out = e.argv.at(-1) as string
@@ -195,6 +197,24 @@ describe('visual-diff in a session', () => {
     // A name with the time in it: a counter that starts again never meets a file already there.
     const written = w.sh.find(argv => String(argv[2]).includes('base64 -d'))
     expect(String(written?.at(-1))).toMatch(/\/s1\/1-\d+\.png$/)
+  })
+
+  test('a live session touches its folder every hour, so a long idle one is never swept as killed', async ($, on) => {
+    const HOUR = 3_600_000
+    const w = world(on)
+    await $.session.start(START)
+    await $.tool.call({ tool: 'mcp__claude-in-chrome__navigate', url: 'http://localhost:5173/', tabId: 1 } as never)
+    await $.tool.call({ tool: 'mcp__claude-in-chrome__computer', action: 'screenshot', tabId: 1 } as never)
+    await w.clock.settle()
+    expect(w.touched).toEqual([])
+
+    await w.clock.advance(24 * HOUR)
+    expect(w.touched).toHaveLength(24)
+    expect(w.touched[0]).toEqual(['touch', '-c', '--', '/t/claude-visual-diff/s1'])
+
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+    await w.clock.advance(2 * HOUR)
+    expect(w.touched).toHaveLength(24)
   })
 
   test('a click that leaves the page is not compared with the page it left', async ($, on) => {
