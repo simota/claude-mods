@@ -6,6 +6,7 @@ import {
   areaOf,
   bar,
   bashTouches,
+  capFiles,
   countsOf,
   editChange,
   errorPaths,
@@ -47,7 +48,7 @@ async function loadRepo($: EngineInterface): Promise<void> {
     return
   }
   const [listed, branch] = await Promise.all([git($, root, ['ls-files', '-z']), git($, root, ['branch', '--show-current'])])
-  const files = (listed ?? '').split('\0').filter(Boolean).slice(0, 50_000)
+  const files = capFiles((listed ?? '').split('\0').filter(Boolean).slice(0, 50_000))
   const name = root.split('/').filter(Boolean).pop() ?? root
   await update($, repo, () => ({ root, name, branch: branch?.trim() || 'detached', files }))
 }

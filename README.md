@@ -250,7 +250,7 @@ The repository as a map under fog, cleared as Claude works through it:
 
 `░` nothing touched yet, `○` read (Read, or `cat`, `sed`, `grep`… in Bash), `●` edited (Edit, Write, NotebookEdit, `sed -i`), `✚` made by the session, `✗` named with a line number by a failed Bash command since its last edit, `★` the file touched last. A directory holding an edit, a new file or an error is open; one only read is closed with its marks beside it; untouched directories and files at a level share one fog row.
 
-Two warnings, each a likely oversight: a file edited without being read, and a file that imports an edited one (JS/TS and Python, found by `git grep`) that was never opened.
+Two warnings, each a likely oversight: a file edited without being read, and a file that imports an edited one (JS/TS and Python, found by `git grep`) that was never opened. A very large repository's file list is cut to what one state value holds (3 M characters of paths), so it is still mapped, partly.
 
 - `/map` opens the pane
 - The status line keeps `🗺 31% · ●9 · ✗2 · ⚠1`
@@ -328,7 +328,7 @@ Results from WebFetch, WebSearch, browser page reads, `curl`/`wget` to a remote 
 
 ### visual-diff
 
-Each Claude in Chrome screenshot is kept as PNG with its URL and size (in `$TMPDIR/claude-visual-diff/<session>`, removed at session end). The URL is the last navigation's; after a click, a key or a form input, which may have left the page, it is asked of Claude in Chrome's tab listing for the tab shot, and a shot whose URL cannot be told is kept but never compared. A new one is compared with the last of the same URL and size taken before an edit (or the previous one, or a baseline set with `/vdiff base`): both scaled to 320 px with `sips` (or ImageMagick), a 32-column grid of cells that changed, the changed regions in page pixels, and the files edited in between. `/vdiff` opens the pane: both pictures side by side in the terminal (kitty graphics), the change map and the regions elsewhere. `/vdiff clear` removes the baselines.
+Each Claude in Chrome screenshot is kept as PNG with its URL and size (in `$TMPDIR/claude-visual-diff/<session>`, else `~/.cache/…`; both folders made private and checked to be yours and no link; removed at session end, and a killed session's folder by a later start once a day old). The URL is the last navigation's; after a click, a key or a form input, which may have left the page, it is asked of Claude in Chrome's tab listing for the tab shot, and a shot whose URL cannot be told is kept but never compared. A new one is compared with the last of the same URL and size taken before an edit (or the previous one, or a baseline set with `/vdiff base`): both scaled to 320 px with `sips` (or ImageMagick), a 32-column grid of cells that changed, the changed regions in page pixels, and the files edited in between. `/vdiff` opens the pane: both pictures side by side in the terminal (kitty graphics), the change map and the regions elsewhere. `/vdiff clear` removes the baselines.
 
 ### journey-trace
 
