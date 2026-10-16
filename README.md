@@ -203,7 +203,7 @@ An error book, kept across sessions and repos. When a Bash command fails, the er
 - `📙 No.017 再会（3回目・未解決）` — seen before, nothing known to get past it
 - `` 📗 既知 No.017（3回目）— 前回: sandbox 外で `git push origin main` `` — seen before with a fix: Claude also reads, beside the tool's result, where it was seen and what got past it (marked as a past record to check, not an instruction)
 
-A fix is learned when the same program and subcommand (`git push`, `pnpm install`) succeeds within the next 10 Bash calls of the session; whether it ran outside the sandbox is kept with it. Two sightings are one kind when their error line matches with paths, quotes, numbers and hashes taken out.
+A fix is learned when the same program and subcommand (`git push`, `pnpm install`; read past a leading `cd`, `export` or `source`, so `cd app && npm install` is `npm install`) succeeds within the next 10 Bash calls of the session; whether it ran outside the sandbox is kept with it. Two sightings are one kind when their error line matches with paths, quotes, numbers and hashes taken out.
 
 Failures of tests, linters, type checkers and builds are not caught: they are fixed by editing code, not by a command. Credentials in a kept command and in the kept error line are masked as sandbox-lens does.
 

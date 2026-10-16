@@ -2,7 +2,7 @@
 // adding sightings and fixes to the entries, and the words shown and fed to the model.
 
 import type { ZukanEntry, ZukanFix, ZukanPending } from '../types'
-import { isVerification } from './shell'
+import { allCommands, base, isVerification, program } from './shell'
 
 export const MAX_ENTRIES = 300
 export const MAX_LINE = 160
@@ -17,20 +17,27 @@ const clip = (text: string, max = MAX_LINE): string => {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
-/** The words of a command that name what ran: env assignments and wrappers skipped. */
-function words(command: string): string[] {
-  const all = command.trim().split(/\s+/)
-  const wrappers = new Set(['sudo', 'env', 'time', 'timeout', 'nice', 'command', 'exec'])
-  let i = 0
-  while (i < all.length && (/^[A-Za-z_][\w]*=/.test(all[i] ?? '') || wrappers.has(all[i] ?? '') || /^\d+[smh]?$/.test(all[i] ?? ''))) i += 1
-  return all.slice(i)
-}
+// Builtins that set up the shell for the command after them; they name what ran only alone.
+const SETUP = new Set(['cd', 'pushd', 'popd', 'export', 'source', '.', 'set', 'unset', 'shopt', 'umask', 'ulimit', 'alias', 'declare', 'typeset', 'local', 'readonly'])
+// git's own options that take the next word, before its subcommand (`git -C dir push`).
+const GIT_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path'])
 
-/** The program and, when it has one, its subcommand: `git push`, `pnpm install`, `curl`. */
+/**
+ * The program and, when it has one, its subcommand: `git push`, `pnpm install`, `curl`. Read as
+ * done-gate reads a command (assignments, wrappers and runners skipped), from the first command
+ * that is not a `cd`, `export` or `source` setting up for it: `cd app && npm install` is
+ * `npm install`, so that it is settled by `npm install` succeeding, not by any `cd app && …`.
+ */
 export function programOf(command: string): string {
-  const [first = '', second] = words(command.split(/&&|\|\||;|\|/)[0] ?? '')
-  const name = first.split('/').pop() ?? first
-  return second !== undefined && /^[a-z][\w:-]*$/.test(second) ? `${name} ${second}` : name
+  const runs = allCommands(command).flatMap(one => program(one.words) ?? [])
+  const run = runs.find(one => !SETUP.has(one.name)) ?? runs[0]
+  if (run === undefined) return base(command.trim().split(/\s+/)[0] ?? '')
+  let k = 0
+  if (run.name === 'git') {
+    while (run.args[k]?.startsWith('-') === true) k += GIT_VALUES.has(run.args[k] as string) ? 2 : 1
+  }
+  const second = run.args[k]
+  return second !== undefined && /^[a-z][\w:-]*$/.test(second) ? `${run.name} ${second}` : run.name
 }
 
 /**
@@ -47,6 +54,10 @@ export function isCheck(command: string): boolean {
 export function errorLine(output: string): string | undefined {
   const lines = output
     .replace(/<\/?sandbox_violations>/g, '')
+    // Colour and cursor codes, then the other controls: drawn raw in the toast and the pane.
+    .replace(/\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|[@-Z\\-_])/g, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
     .split('\n')
     .map(line => line.trim())
     .filter(line => line !== '' && !/^Exit code \d+$/i.test(line))
