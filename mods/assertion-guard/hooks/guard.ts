@@ -23,7 +23,7 @@ const SWALLOW = [
   /catch\s*(?:\([^()]*\)\s*)?\{\s*(?:\/\/[^\n]*\n\s*)*\}/g,
   /\.catch\(\s*(?:\((?:\s*\w+)?\s*\)|\w+)\s*=>\s*(?:\{\s*\}|undefined|null|void 0|false)\s*\)/g,
   // Comment lines may stand between the clause and its pass; an ellipsis is the clause's whole body, not prose.
-  /^[ \t]*except\b(?:[ \t][^:\n]*)?:(?:\s*#[^\n]*)*\s*(?:pass\b|\.\.\.(?![^\S\n]*\S))/gm,
+  /^[ \t]*except\b(?:[ \t][^:\n]*)?:(?:\s*#[^\n]*)*\s*(?:pass\b|\.\.\.(?![^\S\n]*[^\s#]))/gm,
   /\brescue\b(?:[ \t]+[\w:]+)?(?:[ \t]*=>[ \t]*\w+)?\s*nil\b/g,
   /\bif\s+err\s*!=\s*nil\s*\{\s*\}/g,
   /\b_\s*=\s*err\b/g,
@@ -139,16 +139,45 @@ const positive = (matcher: string): string => matcher.replace(/(^|\.)not\./, '$1
 
 const LITERAL = /^(?:true|false|True|False|None|nil|null|undefined|-?\d+(?:\.\d+)?|'[^'\\]*'|"[^"\\]*")$/
 
-/** Whether an assertion's first argument (the subject, after any `t,` or `self.`) is a bare literal. */
-function isAboutLiteral(line: string): boolean {
-  const open = line.indexOf('(')
-  if (open < 0) {
-    const bare = line.match(/^assert\s+(\S+)\s*$/)
-    return bare?.[1] !== undefined && LITERAL.test(bare[1])
+// The call that asserts, wherever on the line it stands: `expect(`, `assertTrue(`, `assert.Equal(`, `assert_eq!(`.
+const ASSERT_CALL = /(?:^|[^\w.])(?:expect|assert\w*|XCTAssert\w*|(?:assert|require)\.\w+|assert(?:_eq|_ne)?!)\s*\(/
+
+/** The top-level arguments of the call whose `(` is at `open`, one linear pass. */
+function argsAt(line: string, open: number): string[] {
+  const args: string[] = []
+  let depth = 0
+  let from = open + 1
+  for (let i = open; i < line.length; i += 1) {
+    const ch = line[i]
+    if (ch === '(' || ch === '[' || ch === '{') depth += 1
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1
+      if (depth === 0) {
+        args.push(line.slice(from, i).trim())
+        return args
+      }
+    } else if (ch === ',' && depth === 1) {
+      args.push(line.slice(from, i).trim())
+      from = i + 1
+    }
   }
-  const args = subjectOf(line).slice(open + 1).replace(/\)$/, '').split(',').map(one => one.trim())
-  const first = args[0] === 't' && args.length > 1 ? args[1] : args[0]
-  return first !== undefined && LITERAL.test(first)
+  return args
+}
+
+/**
+ * Whether an assertion checks nothing but literals: every argument of the asserting call
+ * (Go's leading `t` aside) is one (`expect(true)`, `assertTrue(True)`, `assert.Equal(t, 1, 1)`),
+ * or a bare `assert` compares two (`assert 1 == 1`). One with an expected value written first
+ * still names what it checks.
+ */
+function isAboutLiteral(line: string): boolean {
+  const bare = line.match(/^assert\s+(\S+)(?:\s*(?:==|!=|\bis\b)\s*(\S+))?\s*$/)
+  if (bare !== null) return [bare[1], bare[2]].every(one => one === undefined || LITERAL.test(one))
+  const call = ASSERT_CALL.exec(line)
+  if (call === null) return false
+  const args = argsAt(line, call.index + call[0].length - 1)
+  const checked = args[0] === 't' && args.length > 1 ? args.slice(1) : args
+  return checked.length > 0 && checked.every(one => LITERAL.test(one))
 }
 
 function newMatches(pattern: RegExp, before: string, after: string): string[] {
