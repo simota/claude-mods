@@ -16,6 +16,9 @@ const DIR_NAME = 'claude-mutation-tap'
 const COPY_TIMEOUT_MS = 600_000
 // A live run moves at least this often: the copy and each test run are held to 10 minutes.
 const QUIET_MS = 30 * 60_000
+// Written at the copy's root once it is whole; a copy being removed loses it first (the folder is
+// moved aside in one step before it is deleted), so its absence says the copy is no longer whole.
+const SENTINEL = '.claude-mutation-tap'
 
 type Copies = Record<string, { at: number }>
 
@@ -58,7 +61,9 @@ async function makeCopy($: EngineInterface, root: string): Promise<string | unde
       [
         '/bin/sh',
         '-c',
-        'umask 077 && mkdir -p -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && { cp -cR -- "$2"/. "$1"/ 2>/dev/null || cp -a --reflink=auto -- "$2"/. "$1"/; }',
+        // Compiled Python is dropped: a mutant of the same length written within one second would
+        // otherwise run the bytecode of the line before it.
+        'umask 077 && mkdir -p -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && { cp -cR -- "$2"/. "$1"/ 2>/dev/null || cp -a --reflink=auto -- "$2"/. "$1"/; } && { find "$1" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; true; }',
         'sh',
         dir,
         root,
@@ -66,7 +71,7 @@ async function makeCopy($: EngineInterface, root: string): Promise<string | unde
       { timeoutMs: COPY_TIMEOUT_MS },
     )
     .catch(() => undefined)
-  if (made?.exitCode === 0) {
+  if (made?.exitCode === 0 && (await $.fs.write(`${dir}/${SENTINEL}`, String(await $.clock.now())).then(() => true).catch(() => false))) {
     await mark($, dir)
     return dir
   }
@@ -76,9 +81,19 @@ async function makeCopy($: EngineInterface, root: string): Promise<string | unde
 
 /** Removes a copy this module made: only a folder under its own name, found again from the store. */
 async function removeCopy($: EngineInterface, dir: string): Promise<void> {
-  if (dir.includes(`/${DIR_NAME}/`) && !dir.includes('..')) await $.process.run(['rm', '-rf', '--', dir], { timeoutMs: 120_000 }).catch(() => undefined)
+  if (dir.includes(`/${DIR_NAME}/`) && !dir.includes('..')) await removeTree($, dir)
   await mark($, dir, true)
 }
+
+/** Moves the folder aside in one step, then deletes it: a run in it sees it whole or not at all. */
+async function removeTree($: EngineInterface, dir: string): Promise<void> {
+  await $.process
+    .run(['/bin/sh', '-c', 'd="$1.removing.$$"; mv -- "$1" "$d" 2>/dev/null && rm -rf -- "$d"', 'sh', dir], { timeoutMs: 120_000 })
+    .catch(() => undefined)
+}
+
+/** Whether the copy is still whole: its root marker is there. */
+const isWhole = ($: EngineInterface, copy: string): Promise<boolean> => $.fs.exists(`${copy}/${SENTINEL}`).catch(() => false)
 
 async function testCommand($: EngineInterface, root: string, given: string): Promise<string | undefined> {
   if (given.trim() !== '') return given.trim()
@@ -89,7 +104,7 @@ async function testCommand($: EngineInterface, root: string, given: string): Pro
 
 /** One run of the tests: killed when they fail, timeout when they run past the limit. */
 async function runTests($: EngineInterface, root: string, command: string, timeoutMs: number): Promise<'pass' | 'fail' | 'timeout'> {
-  const ran = await $.process.run(['/bin/sh', '-c', command], { cwd: root, timeoutMs }).catch(() => undefined)
+  const ran = await $.process.run(['/bin/sh', '-c', `export PYTHONDONTWRITEBYTECODE=1; ${command}`], { cwd: root, timeoutMs }).catch(() => undefined)
   if (ran === undefined) return 'timeout'
   return ran.exitCode === 0 ? 'pass' : 'fail'
 }
@@ -101,10 +116,16 @@ async function mutateAll($: EngineInterface, options: Options, given: string): P
     update($, run, () => ({ status: 'failed', command, root, startedAt: at, finishedAt: at, mutants: [], ran: 0, note }) as MutationRun)
 
   // Against HEAD; in a repository with no commit yet, the working tree against the index.
-  const head = await sh($, root, ['git', 'diff', '-U0', '--no-color', '--no-ext-diff', 'HEAD'])
-  const diff = head?.exitCode === 0 ? head : await sh($, root, ['git', 'diff', '-U0', '--no-color', '--no-ext-diff'])
+  // Paths as written, whatever the person's diff settings (mnemonicPrefix, noprefix, quotePath).
+  const gitDiff = (...rest: string[]) =>
+    sh($, root, ['git', '-c', 'core.quotePath=false', 'diff', '-U0', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', ...rest])
+  const head = await gitDiff('HEAD')
+  const diff = head?.exitCode === 0 ? head : await gitDiff()
   if (diff === undefined || diff.exitCode !== 0) return void (await fail('git diff を取れませんでした（git リポジトリの外？）'))
-  const changed = [...changedLines(diff.stdout)].filter(([path]) => isMutable(path))
+  // A new file not yet added is changed whole: an empty list stands for every line.
+  const untracked = await sh($, root, ['git', 'ls-files', '--others', '--exclude-standard', '-z'])
+  const added: [string, number[]][] = (untracked?.exitCode === 0 ? untracked.stdout.split('\0') : []).filter(path => path !== '').map(path => [path, []])
+  const changed = [...changedLines(diff.stdout), ...added].filter(([path]) => isMutable(path))
   if (changed.length === 0) return void (await fail('HEAD からの変更行に、改変できるソースの行がありません（テストファイル・コメント・import は対象外）'))
 
   const command = await testCommand($, root, given || options.command)
@@ -126,7 +147,7 @@ async function mutateAll($: EngineInterface, options: Options, given: string): P
       const text = await $.fs.read(`${copy}/${path}`).then(String).catch(() => undefined)
       if (text === undefined) continue
       const all = text.split('\n')
-      for (const n of lines) byLine.push(mutantsOf(path, n, all[n - 1] ?? ''))
+      for (const n of lines.length > 0 ? lines : all.map((_, i) => i + 1)) byLine.push(mutantsOf(path, n, all[n - 1] ?? ''))
     }
     const mutants = spread(byLine.filter(list => list.length > 0), options.max)
     if (mutants.length === 0) return void (await fail('HEAD からの変更行に、改変できるソースの行がありません（テストファイル・コメント・import は対象外）', command))
@@ -146,21 +167,24 @@ async function mutateAll($: EngineInterface, options: Options, given: string): P
       }
       const file = `${copy}/${mutant.path}`
       await mark($, copy)
+      // Tests fail in a copy taken away from under them: that is no mutant caught.
+      const gone = () => fail('実行中にリポジトリの複製が消えました（別の処理が削除した可能性）。結果は数えていません', command)
+      if (!(await isWhole($, copy))) return void (await gone())
       const original = await $.fs.read(file).then(String).catch(() => undefined)
-      const mutated = original === undefined ? undefined : apply(original, mutant)
+      if (original === undefined) return void (await gone())
+      const mutated = apply(original, mutant)
       let outcome: Mutant['outcome'] = 'skipped'
-      if (original !== undefined && mutated !== undefined) {
+      if (mutated !== undefined) {
         await $.fs.write(file, mutated)
         let isThere = true
         try {
           const result = await runTests($, copy, command, options.timeoutMs)
-          // Tests fail in a copy taken away from under them: that is no mutant caught.
-          isThere = (await $.fs.read(file).then(String).catch(() => undefined)) === mutated
+          isThere = await isWhole($, copy)
           outcome = result === 'pass' ? 'survived' : result === 'fail' ? 'killed' : 'timeout'
         } finally {
           if (isThere) await $.fs.write(file, original)
         }
-        if (!isThere) return void (await fail('実行中にリポジトリの複製が消えました（別の処理が削除した可能性）。結果は数えていません', command))
+        if (!isThere) return void (await gone())
       }
       const done = await patch($, old => ({ ...old, ran: index + 1, mutants: old.mutants.map((one, i) => (i === index ? { ...one, outcome } : one)), note: undefined }))
       const t = tallyOf(done?.mutants ?? [])
@@ -168,7 +192,12 @@ async function mutateAll($: EngineInterface, options: Options, given: string): P
     }
 
     const end = await $.clock.now()
-    const finished = await patch($, old => ({ ...old, status: 'done', finishedAt: end }))
+    const all = tallyOf((await read($, run))?.mutants ?? [])
+    // Every mutant passing is more often the tests reading another tree than tests that check nothing.
+    const note = all.survived >= 2 && all.killed === 0 && all.timeout === 0
+      ? 'すべての改変が生存しました。テストが複製ではなく元のツリーを読んでいる可能性があります（editable install・絶対パスの参照・ビルド済みの dist）'
+      : undefined
+    const finished = await patch($, old => ({ ...old, status: 'done', finishedAt: end, note }))
     const t = tallyOf(finished?.mutants ?? [])
     $.ui.toast(t.survived > 0 ? `🧬 テストが見逃した改変 ${t.survived}件 — /mutate show` : `🧬 すべての改変をテストが検出（${scoreLine(t)}）`)
   } finally {
@@ -195,9 +224,15 @@ export const register: Register = (on, options) => {
     // quiet; one another session is running in is left alone.
     const now = await $.clock.now()
     for (const [dir, { at }] of Object.entries(await copiesOf($))) if (now - at > QUIET_MS) await removeCopy($, dir)
+    // An earlier version's copy, named by when it was made: removed once that is long past, else
+    // kept track of like this version's, so a run of that version still going is not cut short.
     const legacy = await $.store.get(LEGACY_KEY)
     if (typeof legacy === 'string') {
-      if (legacy.includes(`/${DIR_NAME}/`) && !legacy.includes('..')) await $.process.run(['rm', '-rf', '--', legacy], { timeoutMs: 120_000 }).catch(() => undefined)
+      const made = Number(legacy.match(/\/(\d+)$/)?.[1] ?? 0)
+      if (legacy.includes(`/${DIR_NAME}/`) && !legacy.includes('..')) {
+        if (now - made > QUIET_MS) await removeTree($, legacy)
+        else await $.store.set(COPIES_KEY, { ...(await copiesOf($)), [legacy]: { at: made } })
+      }
       await $.store.delete(LEGACY_KEY)
     }
     const last = await read($, run)
