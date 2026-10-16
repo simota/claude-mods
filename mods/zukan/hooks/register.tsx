@@ -58,13 +58,18 @@ export const register: Register = on => {
 
     const program = programOf(e.command)
     const isFailure = ran.isError === true
-    const aged = step(await read($, pending), program, !isFailure)
-    await update($, pending, () => aged.pending)
+    // Aged inside the update: a parallel call's failure set in between is kept, not written over.
+    let fixed = undefined as ZukanPending | undefined
+    await update($, pending, all => {
+      const aged = step(all, program, !isFailure)
+      fixed = aged.fixed
+      return aged.pending
+    })
 
-    if (aged.fixed !== undefined) {
-      const fixed = aged.fixed
+    if (fixed !== undefined) {
       const fix = { command: exampleOf(e.command), isSandboxOff: e.dangerouslyDisableSandbox === true, repo: await repoName($), at: await $.clock.now() }
-      await mutate($, list => withFix(list, fixed.key, fix))
+      const { key } = fixed
+      await mutate($, list => withFix(list, key, fix))
     }
 
     if (!isFailure || isCheck(e.command)) return ran

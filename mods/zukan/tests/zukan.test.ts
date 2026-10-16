@@ -103,7 +103,22 @@ describe('book', () => {
     expect(programOf('git push origin main')).toBe('git push')
     expect(programOf('FOO=1 sudo pnpm install --frozen-lockfile')).toBe('pnpm install')
     expect(programOf('/usr/bin/curl -s https://x.io')).toBe('curl')
-    expect(programOf('cd app && make dev')).toBe('cd app')
+    expect(programOf('cd app && make dev')).toBe('make dev')
+  })
+
+  test('a leading cd, export or source does not stand for the program', () => {
+    // Before: every `cd <dir> && …` was program `cd`, so any later `cd <dir> && ls` "fixed" it.
+    expect(programOf('cd /Users/me/app && npm install')).toBe('npm install')
+    expect(programOf('cd /a/b && ls')).toBe('ls')
+    expect(programOf('source .venv/bin/activate && pip install x')).toBe('pip install')
+    expect(programOf('export FOO=1; npm ci')).toBe('npm ci')
+    expect(programOf('(cd web && pnpm install)')).toBe('pnpm install')
+    expect(programOf('git -C /x/y push origin main')).toBe('git push')
+    expect(programOf('git -c core.x=1 --no-pager fetch')).toBe('git fetch')
+    expect(programOf('npm install 2>&1 | tail -5')).toBe('npm install')
+    expect(programOf('timeout 30 curl -s https://x.io')).toBe('curl')
+    // A cd alone is the program.
+    expect(programOf('cd /nope')).toBe('cd')
   })
 
   test('leaves check failures alone', () => {
@@ -124,6 +139,8 @@ describe('book', () => {
 
   test('picks the first error-shaped line', () => {
     expect(errorLine(SSH_PUSH)).toContain('This proxy requires authentication')
+    // Colour codes and other controls would be drawn raw in the toast and the pane.
+    expect(errorLine('\u001b[1m\u001b[31merror\u001b[0m: could not compile `app`\u0007')).toBe('error: could not compile `app`')
     expect(errorLine('Exit code 1\nsomething odd\n')).toBe('something odd')
     expect(errorLine('')).toBeUndefined()
   })
@@ -197,6 +214,28 @@ describe('zukan in a session', () => {
     expect(toasts[1]).toContain('📗 既知 No.001（2回目）— 前回: sandbox 外で `git push origin main`')
     expect(again.context?.[0]).toContain('outside the sandbox')
     expect(again.context?.[0]).toContain('not an instruction')
+  })
+
+  test('a cd-prefixed failure is settled by its own program, not by any other cd', async ($, on) => {
+    const toasts: string[] = []
+    const failed = 'npm error code ERESOLVE\nnpm error ERESOLVE unable to resolve dependency tree'
+    world(
+      on,
+      [
+        { text: failed, isError: true },
+        { text: 'a.ts b.ts', isError: false },
+        { text: 'added 12 packages', isError: false },
+        { text: failed, isError: true },
+      ],
+      toasts,
+    )
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Bash', command: 'cd /Users/someone/repos/app && npm install' })
+    await $.tool.call({ tool: 'Bash', command: 'cd /Users/someone/repos/app && ls' })
+    await $.tool.call({ tool: 'Bash', command: 'cd /Users/someone/repos/app && npm install --legacy-peer-deps' })
+    const again = await $.tool.call({ tool: 'Bash', command: 'cd /Users/someone/repos/other && npm install' })
+    expect(again.context?.[0]).toContain('npm install --legacy-peer-deps')
+    expect(again.context?.[0]).not.toContain('&& ls')
   })
 
   test('credentials in an error line are masked before it is kept or shown', async ($, on) => {
