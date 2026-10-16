@@ -26,6 +26,10 @@ function serial<T>(work: () => Promise<T>): Promise<T> {
   return run
 }
 
+// The request an item answered is kept across sessions and shown: credentials in it are masked,
+// also in items kept before this was done, as they are read.
+const masked = (list: readonly ShelfItem[]): ShelfItem[] => list.map(one => ({ ...one, purpose: maskedOf(one.purpose ?? ''), event: maskedOf(one.event ?? '') }))
+
 const storeKey = async ($: EngineInterface) => `shelf:${(await $.session.repo())?.root ?? (await $.session.cwd())}`
 
 /** Strings in a tool's input that name a file it may have written (`path`, `output_path`, …). */
@@ -50,7 +54,7 @@ async function shelveNew($: EngineInterface, candidates: string[], meta: { tool:
   }
   if (found.length === 0) return found
   const key = await storeKey($)
-  const get = async () => ((await $.store.get(key)) as ShelfItem[] | undefined) ?? []
+  const get = async () => masked(((await $.store.get(key)) as ShelfItem[] | undefined) ?? [])
   await serial(async () => {
     let merged = shelve(await get(), found, KEEP)
     await $.store.set(key, merged)
@@ -74,14 +78,14 @@ export const register: Register = on => {
       argumentHint: '[種類 | 拡張子 | 今日 | 7d | 語…]',
     })
     const started = await next(e)
-    const stored = ((await $.store.get(await storeKey($))) as ShelfItem[] | undefined) ?? []
+    const stored = masked(((await $.store.get(await storeKey($))) as ShelfItem[] | undefined) ?? [])
     await update($, items, () => stored)
     return started
   })
 
   on('prompt.submit', async ($, e, next) => {
     if (e.origin.kind === 'composer' && e.command === undefined && !e.isMeta) {
-      const text = e.text.replace(/\s+/g, ' ').trim()
+      const text = maskedOf(e.text.slice(0, 65_536)).replace(/\s+/g, ' ').trim()
       await update($, purpose, () => (text.length > 80 ? `${text.slice(0, 79)}…` : text))
     }
     return next(e)
