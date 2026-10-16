@@ -86,6 +86,7 @@ describe('guard', () => {
     expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept Exception:\n    # best effort\n    pass')).toEqual(['swallowed'])
     expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept Exception:  # noqa\n    # a\n    # b\n    ...')).toEqual(['swallowed'])
     expect(kinds('README.md', 'x', 'x\nexcept in rare cases: ...see below')).toEqual([])
+    expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept E: ...  # todo')).toEqual(['swallowed'])
   })
 
   test('a change inside a string, to its kind of quotes where that matters, or to the opposite matcher is still a rewrite', () => {
@@ -100,6 +101,18 @@ describe('guard', () => {
     expect(kinds('a.test.ts', 'expect(total).toBe(10)', 'expect(true).toBe(true)')).toEqual(['loosened'])
     expect(kinds('test_a.py', 'self.assertEqual(total, 3)', 'self.assertTrue(True)')).toEqual(['loosened'])
     expect(kinds('a.test.ts', 'expect(total).toBe(10)', 'expect(sum).toBe(10)')).toEqual([])
+    expect(kinds('x_test.go', 'assert.Equal(t, total, 10)', 'assert.Equal(t, true, true)')).toEqual(['loosened'])
+    expect(kinds('test_a.py', 'assert total == 10', 'assert 1 == 1')).toEqual(['loosened'])
+    expect(kinds('a.test.ts', 'expect(total).toBe(10)', 'expect  (true).toBe(true)')).toEqual(['loosened'])
+  })
+
+  test('a literal elsewhere on the line, or an expected value written first, is no loosening', () => {
+    // The subject is the assertion's own argument, not the first parenthesis on the line.
+    expect(kinds('a.test.ts', 'expect(add(1, 2)).toBe(3)', "it('adds', () => expect(add(1, 2)).toBe(3))")).toEqual([])
+    expect(kinds('test_a.py', 'assert fn(x) == y', "assert fn('a') == 'b'")).toEqual([])
+    // Arguments in the other order: one of them is still not a literal.
+    expect(kinds('src/lib.rs', '#[cfg(test)]\nassert_eq!(total, 10);', '#[cfg(test)]\nassert_eq!(10, total);')).toEqual([])
+    expect(kinds('test_a.py', 'self.assertEqual(total, 10)', 'self.assertEqual(10, total)')).toEqual([])
   })
 
   test('no pattern is quadratic on long runs either', () => {
