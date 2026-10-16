@@ -93,6 +93,22 @@ describe('fog', () => {
     expect(errorPaths('src/a.ts(12,5): error TS2322\n  at lib/x.py:40 in f')).toEqual(['src/a.ts', 'lib/x.py'])
   })
 
+  test('reads a long output without a path in linear time: it runs before every Bash result', () => {
+    // Each of these took over a second when a regex scanned the rest of a long word from every dot.
+    for (const output of ['a.b'.repeat(10_000), 'Q'.repeat(60_000), `${'x.y'.repeat(10_000)}:1`]) {
+      const started = performance.now()
+      errorPaths(output)
+      expect(performance.now() - started).toBeLessThan(100)
+    }
+    expect(errorPaths(`${'a.b'.repeat(10_000)} src/a.ts:3`)).toEqual(['src/a.ts'])
+  })
+
+  test('names the same paths the line-number regex did, word for word', () => {
+    expect(errorPaths('a.ts:12.b.ts:3')).toEqual(['a.ts', '.b.ts'])
+    expect(errorPaths('x a.ts-x:1 b.c.d(1,2) e.1f:2 .g:3 h.i')).toEqual(['b.c.d'])
+    expect(errorPaths('@scope/pkg/index.js:7:9 ~/x.py:1')).toEqual(['@scope/pkg/index.js', '~/x.py'])
+  })
+
   test('greps importers of JS/TS and Python only, in POSIX classes macOS git understands', () => {
     expect(importPattern('src/a.ts')).toContain('[/.]a(')
     expect(importPattern('lib/x.py')).toContain('?x(')

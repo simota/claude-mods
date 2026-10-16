@@ -116,6 +116,7 @@ Finished tool calls are drawn as one compact line with a Nerd Font icon: Edit/Wr
 - Images a session writes, reads, or that a Bash command produces (png, jpg, jpeg, webp, gif) get a thumbnail under that tool's row in the terminal (kitty graphics: Ghostty, kitty).
 - `/images` opens a pane, newest first; `h`/`l` step through them.
 - Non-PNG files are converted with macOS `sips` after the tool result has gone back, so tool calls never wait on it. Converted files live in a private cache (`$TMPDIR` or `~/.cache`), newest 50 kept.
+- A Bash command and its output are searched for image paths in time linear in their length, before the result goes back. A path split at spaces (`/tmp/a b/x.jpg`) is followed back at most 8 pieces.
 
 | Option | Default | |
 | --- | --- | --- |
@@ -256,7 +257,7 @@ Two warnings, each a likely oversight: a file edited without being read, and a f
 - The status line keeps `🗺 31% · ●9 · ✗2 · ⚠1`
 - A toast at 25, 50, 75 and 100% explored, and when an edit first reaches a new area (`🗺 新しい区域を開拓: mods/zukan/`)
 
-The map is the session's, subagents' calls included; files outside the repository are not mapped. Explored is touched files over `git ls-files`, read again after a checkout, pull, `mv` or `rm`. Outside a git repository only the edit count is shown.
+The map is the session's, subagents' calls included; files outside the repository are not mapped. Explored is touched files over `git ls-files`, read again after a checkout, pull, `mv` or `rm`. Outside a git repository only the edit count is shown. A failed command's output is read once, in time linear in its length, before its result goes back.
 
 ### assertion-guard
 

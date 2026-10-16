@@ -101,11 +101,28 @@ export function bashTouches(
   return { reads: [...reads], edits: [...edits] }
 }
 
-/** Paths a failed command's output names with a line (`a.ts:12`, `a.ts(12,5)`), as candidates. */
+const PATH_WORD = /[\w.@~+/-]+/g
+const LINE_MARK = /:\d+|\(\d+,\d+\)/y
+const EXTENSION = /^[A-Za-z]\w*$/
+
+/**
+ * Paths a failed command's output names with a line (`a.ts:12`, `a.ts(12,5)`), as candidates.
+ * Linear: each word is read once and only its last dot is tried, the dot a path's extension
+ * must follow; a regex trying every dot of a long word took seconds on a minified line.
+ */
 export function errorPaths(output: string): string[] {
   const found = new Set<string>()
-  for (const match of output.matchAll(/([\w.@~+/-]+\.[A-Za-z][\w]*)(?::\d+|\(\d+,\d+\))/g)) {
-    if (match[1] !== undefined) found.add(match[1])
+  let taken = 0 // where the last mark ended: a path never starts inside one (`a.ts:12.b.ts:3`)
+  for (const word of output.matchAll(PATH_WORD)) {
+    const end = word.index + word[0].length
+    LINE_MARK.lastIndex = end
+    const mark = LINE_MARK.exec(output)
+    if (mark === null) continue
+    const path = output.slice(Math.max(word.index, taken), end)
+    const dot = path.lastIndexOf('.')
+    if (dot < 1 || !EXTENSION.test(path.slice(dot + 1))) continue
+    found.add(path)
+    taken = end + mark[0].length
   }
   return [...found]
 }
