@@ -9,19 +9,18 @@ const SERVER =
 
 export const isServerCommand = (command: string): boolean => SERVER.test(command)
 
-const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g
+// An OSC sequence (a hyperlink, a title) ends at BEL or at ST (`ESC \`); read up to the next ESC
+// at most, so one never ended does not make each later one scan to the end of the output.
+const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g
 export const stripAnsi = (text: string): string => text.replace(ANSI, '')
 
 const LOCAL_URL = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|[\w-]+\.localhost|[\w.-]+\.local)(?::\d{2,5})?(?:\/[^\s'"<>)\]`]*)?/g
 
 /** Local URLs a text names, in order, `0.0.0.0` read as localhost, a trailing dot or comma off. */
 export function urlsOf(text: string): string[] {
-  const found: string[] = []
-  for (const m of stripAnsi(text).matchAll(LOCAL_URL)) {
-    const url = m[0].replace(/[.,;:]+$/, '').replace('://0.0.0.0', '://localhost')
-    if (!found.includes(url)) found.push(url)
-  }
-  return found
+  const found = new Set<string>()
+  for (const m of stripAnsi(text).matchAll(LOCAL_URL)) found.add(m[0].replace(/[.,;:]+$/, '').replace('://0.0.0.0', '://localhost'))
+  return [...found]
 }
 
 const portOfUrl = (url: string): number | undefined => {
