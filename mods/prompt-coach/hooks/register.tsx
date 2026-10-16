@@ -34,6 +34,21 @@ const release = async ($: EngineInterface): Promise<string | undefined> => {
   return prompt?.text
 }
 
+/**
+ * Hands the held prompt to `act` (send it, or put words in the box). The hold emptied the box, so
+ * the held text is the only copy: when `act` throws or the box could not be filled, it is held
+ * again, band and all, and its words are shown, so the person never loses what they typed.
+ */
+const handOver = async ($: EngineInterface, act: (text: string) => Promise<boolean>): Promise<void> => {
+  const prompt = await read($, held)
+  if (prompt === null) return
+  await update($, held, () => null)
+  const isDone = await act(prompt.text).catch(() => false)
+  if (isDone) return
+  await update($, held, () => prompt)
+  $.ui.toast(`prompt-coach: 入力欄へ戻せませんでした。保留中の依頼: ${prompt.text}`)
+}
+
 export const register: Register = (on, options) => {
   const isEnabled = options.enabled !== false
   const model = typeof options.model === 'string' && options.model !== '' ? options.model : DEFAULT_MODEL
@@ -53,7 +68,8 @@ export const register: Register = (on, options) => {
     if (before !== undefined) {
       const ran = await next(e)
       if (shouldRestore(e.text, before)) {
-        const filled = await $.prompt.fill({ text: before, mode: 'insert' })
+        // The prompt has entered: nothing here may throw into the .catch below, and the held words are shown if they cannot go back.
+        const filled = await $.prompt.fill({ text: before, mode: 'insert' }).catch(() => ({ isFilled: false }))
         if (!filled.isFilled) await $.ui.toast(`保留していた依頼: ${before}`)
       }
       return ran
@@ -82,27 +98,24 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || prompt === null) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const sendAsIs = async () => {
-      const text = await release($)
-      if (text !== undefined) await $.prompt.submit({ text, asUser: true })
-    }
-    const addCondition = async () => {
-      const text = await release($)
-      if (text === undefined) return
-      // What comes back completed is the person's answer to the coach: never held again.
-      await update($, followUps, list => remember(list, text))
-      await $.prompt.fill({ text: `${text}${FOLLOW_UP}`, mode: 'replace' })
-    }
+    const sendAsIs = () =>
+      handOver($, async text => {
+        await $.prompt.submit({ text, asUser: true })
+        return true
+      })
+    const addCondition = () =>
+      handOver($, async text => {
+        // What comes back completed is the person's answer to the coach: never held again.
+        await update($, followUps, list => remember(list, text))
+        return (await $.prompt.fill({ text: `${text}${FOLLOW_UP}`, mode: 'replace' })).isFilled
+      })
     // A guess goes into the box to edit and send, and is not held again once sent.
-    const choose = (option: string) => async () => {
-      if ((await release($)) === undefined) return
-      await update($, followUps, list => remember(list, option))
-      await $.prompt.fill({ text: option, mode: 'replace' })
-    }
-    const dismiss = async () => {
-      const text = await release($)
-      if (text !== undefined) await $.prompt.fill({ text, mode: 'replace' })
-    }
+    const choose = (option: string) => () =>
+      handOver($, async () => {
+        await update($, followUps, list => remember(list, option))
+        return (await $.prompt.fill({ text: option, mode: 'replace' })).isFilled
+      })
+    const dismiss = () => handOver($, async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled)
 
     const mine = (
       <Box key="prompt-coach" flexDirection="column">

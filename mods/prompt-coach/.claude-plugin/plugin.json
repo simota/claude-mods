@@ -1,6 +1,6 @@
 {
   "name": "prompt-coach",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; on by default",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",
