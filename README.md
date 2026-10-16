@@ -165,7 +165,7 @@ On by default (`enabled: false` turns it off). A typed prompt that looks ambiguo
 - `e: 補足して送る` puts it back with `完了条件: ` to fill in (not held again)
 - `q: 閉じる` puts it back in the prompt
 
-Typing another prompt instead sends that one and puts the held text back into the prompt. The held text is never lost: when a send fails or is dropped beneath, or putting words back fails, it stays held with its band (unless another prompt was held since) and its words are shown in a toast; a prompt still held when the session ends goes back into the box at the next session start. Words go into an empty box as they are, and after a draft typed meanwhile on a line of their own, never over it.
+Typing another prompt instead sends that one and puts the held text back into the prompt. The held text is never lost: when a send fails or is dropped beneath, or putting words back fails, it stays held with its band (unless another prompt was held since) and its words are shown in a toast; a prompt still held at `/clear` goes straight back into the box, and one held when the session quits comes back at this project's next interactive session start. Words go into an empty box as they are, and are appended after a draft typed meanwhile on a line of their own, never over it.
 
 Slash commands, prompts under 12 or over 1500 characters, prompts with any attachment or an `@` mention, prompts sent by a plugin, and prompts typed while a turn runs are not judged. A timeout or error sends the prompt unchanged; the same text is not held twice (within the last 50 judged). Sending can wait up to `timeoutMs`.
 

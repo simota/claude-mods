@@ -56,17 +56,15 @@ const holdAgain = async ($: EngineInterface, prompt: PromptCoachHeld): Promise<v
 }
 
 /**
- * Puts words back in the box: into it as they are when it reads empty, else after the draft typed
- * since, on a line of their own, so they never land in the middle of it. A box that cannot be read
- * reads empty: the words are then inserted, never written over what may be there.
+ * Puts words back in the box: into it as they are when it reads empty, else appended after the
+ * draft typed since, on a line of their own, so they never land in the middle of it and nothing
+ * typed meanwhile is written over. A box that cannot be read reads empty: the words are inserted.
  */
 const putBack = async ($: EngineInterface, text: string): Promise<boolean> => {
   const draft = (await $.prompt.read().catch(() => undefined))?.text ?? ''
   if (draft.trim() === '') return (await $.prompt.fill({ text, mode: 'insert' })).isFilled
-  return (await $.prompt.fill({ text: `${draft.replace(/\s+$/, '')}\n${text}`, mode: 'replace' })).isFilled
+  return (await $.prompt.fill({ text: `\n${text}`, mode: 'append' })).isFilled
 }
-
-const UNSENT_KEY = 'unsent'
 
 /**
  * Hands the held prompt to `act` (send it, or put words in the box). The hold emptied the box, so
@@ -80,6 +78,10 @@ const handOver = async ($: EngineInterface, act: (text: string) => Promise<boole
   const isDone = await act(prompt.text).catch(() => false)
   if (!isDone) await holdAgain($, prompt)
 }
+
+// Prompts held when a session ended, kept per project until one of its interactive sessions starts.
+const unsentKey = (project: string) => `unsent:${project}`
+let project = ''
 
 export const register: Register = (on, options) => {
   const isEnabled = options.enabled !== false
@@ -133,25 +135,37 @@ export const register: Register = (on, options) => {
     return { drop: DROP_REASON }
   }).catch(($, e, next) => next(e)) // Fail open: a coach never loses a prompt.
 
-  // A prompt still held when the session ends (quit, /clear) is kept, and the next session start
-  // puts it back in the box: a toast at the end of a quit would never be seen.
+  // A prompt still held when the session ends: at /clear the box is still there, so it goes back
+  // at once; otherwise (a quit, whose toast would never be seen) it is kept for this project, and
+  // its next interactive session start puts it back in the box.
   on('session.end', async ($, e, next) => {
     const prompt = await take($).catch(() => null)
     if (prompt !== null) {
-      await $.store.set(UNSENT_KEY, prompt.text).catch(() => undefined)
-      $.ui.toast(`prompt-coach: 保留していた依頼（送信されていません）: ${prompt.text}`)
+      const isBack = e.reason === 'clear' && (await putBack($, prompt.text).catch(() => false))
+      if (!isBack) {
+        const key = unsentKey(project)
+        await $.store
+          .get(key)
+          .then(kept => $.store.set(key, [...(Array.isArray(kept) ? kept.filter((one): one is string => typeof one === 'string') : []), prompt.text].slice(-5)))
+          .catch(() => undefined)
+        $.ui.toast(`prompt-coach: 保留していた依頼（送信されていません）: ${prompt.text}`)
+      }
     }
     return next(e)
   })
 
   on('session.start', async ($, e, next) => {
+    project = e.cwd
     const started = await next(e)
+    // Only a session with a box to put it in; kept until it is in.
+    if (e.isInteractive === false) return started
     try {
-      const unsent = await $.store.get(UNSENT_KEY)
-      if (typeof unsent === 'string' && unsent !== '') {
-        await $.store.delete(UNSENT_KEY)
-        const isFilled = await putBack($, unsent).catch(() => false)
-        $.ui.toast(isFilled ? 'prompt-coach: 前回送信されなかった依頼を入力欄に戻しました' : `prompt-coach: 前回送信されなかった依頼: ${unsent}`)
+      const key = unsentKey(project)
+      const kept = await $.store.get(key)
+      const texts = Array.isArray(kept) ? kept.filter((one): one is string => typeof one === 'string' && one !== '') : []
+      if (texts.length > 0 && (await putBack($, texts.join('\n')).catch(() => false))) {
+        await $.store.delete(key)
+        $.ui.toast('prompt-coach: 前回送信されなかった依頼を入力欄に戻しました')
       }
     } catch {
       // No store: nothing kept to bring back.

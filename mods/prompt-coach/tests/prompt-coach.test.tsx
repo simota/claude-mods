@@ -95,7 +95,7 @@ const engine = (on: On, isSlow = false): Calls => {
     }
     calls.filled.push(e.text)
     calls.modes.push(e.mode)
-    calls.box = e.mode === 'replace' ? e.text : calls.box + e.text
+    calls.box = e.mode === 'replace' ? e.text : calls.box + e.text // insert lands at the end of the box here, as append does
     return { isFilled: true, text: calls.box, cursor: calls.box.length }
   })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
@@ -341,20 +341,44 @@ test('words go back into an empty box as they are, and after a new draft on a li
   expect((await typed($, `${calls.box}画面が崩れないこと`)).drop).toBeUndefined()
 })
 
-test('a prompt held when the session ends comes back into the box at the next start', ON, async ($, on) => {
+test('a prompt held at /clear goes straight back into the box', ON, async ($, on) => {
+  const calls = engine(on)
+  mock.store(on, {})
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await typed($, VAGUE)
+  await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } })
+  expect(calls.box).toBe(VAGUE)
+})
+
+test("a prompt held when the session ends comes back at this project's next interactive start, once", ON, async ($, on) => {
   const calls = engine(on)
   mock.store(on, {})
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
   await typed($, VAGUE)
-  await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } })
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 's', resume: { id: 's' } } as never)
+  expect(calls.box).toBe('')
+  // Another project's start, or a run with no box, does not take it.
+  await $.session.start({ cwd: '/x', surface: 'terminal', isInteractive: true })
+  await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: false })
   expect(calls.box).toBe('')
   await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
   expect(calls.box).toBe(VAGUE)
-  // Once only.
   calls.box = ''
   await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
   expect(calls.box).toBe('')
+})
+
+test('words go after a draft with append, so nothing typed meanwhile is written over', ON, async ($, on) => {
+  const calls = engine(on)
+  await typed($, VAGUE)
+  calls.box = 'also fix the login bug'
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'coach-dismiss' })
+  expect(calls.modes).toEqual(['append'])
+  expect(calls.box).toBe(`also fix the login bug\n${VAGUE}`)
+  await ui.unmount()
 })
 
 test('a new prompt while one is held is sent once, even when the held words cannot go back', ON, async ($, on) => {
