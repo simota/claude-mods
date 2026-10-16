@@ -2,14 +2,16 @@
 // capsule reads when it is brought back.
 
 import type { Capsule, CapsuleCommand, CapsuleLog, CapsuleSection } from '../types'
+import { maskedOf } from './mask'
 
 export const SECTIONS: CapsuleSection[] = ['goal', 'decisions', 'open', 'commands', 'files']
 export const SECTION_LABEL: Record<CapsuleSection, string> = { goal: '目的', decisions: '決定', open: '未完了', commands: 'コマンド', files: 'ファイル' }
 
 export const emptyLog = (): CapsuleLog => ({ prompts: [], decisions: [], open: [], todos: [], commands: [], files: {} })
 
+// Everything kept is kept across sessions and fed to another: credentials in it are masked first.
 const clip = (text: string, max: number) => {
-  const one = text.replace(/\s+/g, ' ').trim()
+  const one = maskedOf(text).replace(/\s+/g, ' ').trim()
   return one.length > max ? `${one.slice(0, max - 1)}…` : one
 }
 
