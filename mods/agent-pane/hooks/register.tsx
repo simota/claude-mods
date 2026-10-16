@@ -31,6 +31,7 @@ function finish(list: AgentRun[], id: string, status: AgentRunStatus, endedAt: n
 const GLYPH: Record<Exclude<AgentRunStatus, 'running'>, { mark: string; color: string }> = {
   completed: { mark: '✓ ', color: 'success' },
   failed: { mark: '✗ ', color: 'error' },
+  stopped: { mark: '■ ', color: 'warning' },
   unknown: { mark: '? ', color: 'warning' },
   detached: { mark: '↗ ', color: 'suggestion' },
 }
@@ -79,7 +80,8 @@ async function tick($: EngineInterface): Promise<void> {
         if (run.misses) await update($, runs, list => list.map(one => (one.id === run.id ? { ...one, misses: 0 } : one)))
         continue
       }
-      const status = agent.status === 'completed' ? 'completed' : 'failed'
+      // Killed is a stop someone asked for (the user, or Claude ending it), not a failure.
+      const status = agent.status === 'completed' ? 'completed' : agent.status === 'killed' ? 'stopped' : 'failed'
       await update($, runs, list => finish(list, run.id, status, at))
     }
   }
@@ -235,7 +237,9 @@ export const register: Register = on => {
               ? '起動済み（追跡外）'
               : run.status === 'unknown'
                 ? `結果不明 · ${formatDuration((run.endedAt ?? at) - run.startedAt)}以上`
-                : formatDuration((run.endedAt ?? at) - run.startedAt)
+                : run.status === 'stopped'
+                  ? `停止 · ${formatDuration((run.endedAt ?? at) - run.startedAt)}`
+                  : formatDuration((run.endedAt ?? at) - run.startedAt)
           return (
             <Text key={run.id} wrap="truncate-end" dimColor={run.status === 'completed'}>
               <Text color={glyph.color}>{glyph.mark}</Text>

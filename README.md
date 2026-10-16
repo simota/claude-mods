@@ -65,7 +65,7 @@ A change made with `/plugin configure` reloads the mod; one made from a shell ap
 
 ### agent-pane
 
-- `/agent-pane` opens the pane: running subagents first with elapsed time, then finished ones with ✓/✗ and duration. A background run that left the roster without a result shows `? 結果不明`; a teammate or remote launch shows `↗ 起動済み（追跡外）`.
+- `/agent-pane` opens the pane: running subagents first with elapsed time, then finished ones with ✓/✗ and duration; a background run that was stopped shows `■ 停止`. A background run that left the roster without a result shows `? 結果不明`; a teammate or remote launch shows `↗ 起動済み（追跡外）`.
 - In a fullscreen terminal the pane opens by itself once per session, on the first Agent call (a reload does not reopen it).
 - The status line shows `agents: N running` while any run.
 
