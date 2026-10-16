@@ -292,3 +292,21 @@ test('the pane says when nothing ran yet', async $ => {
     expect((await paneTexts($, surface)).some(text => text.includes('まだエージェントは起動していません'))).toBe(true)
   }
 })
+
+test('a background run that was stopped is drawn as stopped, not as failed', async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents: AgentInfo[] = [{ id: 'a-bg', description: 'background', type: 'fork', status: 'running' } as AgentInfo]
+  beneath(on, agents)
+  on('tool.call', { tool: 'Agent' }, () => ({ result: launched('a-bg', 'background') }))
+
+  await $.tool.call({ tool: 'Agent', description: 'background', prompt: 'p', subagent_type: 'fork' })
+  await clock.advance(2_000)
+  agents[0] = { id: 'a-bg', description: 'background', type: 'fork', status: 'killed' } as AgentInfo
+  await clock.advance(1_000)
+  for (const surface of SURFACES) {
+    const row = (await paneTexts($, surface)).find(text => text.includes('background'))
+    expect(row).toContain('■')
+    expect(row).toContain('停止')
+    expect(row).not.toContain('✗')
+  }
+})
