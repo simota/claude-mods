@@ -19,6 +19,27 @@ function serial<T>(work: () => Promise<T>): Promise<T> {
   return run
 }
 
+// The store holds 4 MiB of JSON in all, every repository's ledger together (300 entries run to
+// about 200 KB): past this many ledgers one leaves before each write, so a write is never refused.
+const MAX_LEDGERS = 12
+
+/**
+ * Drops ledgers past MAX_LEDGERS, never the one in hand: first those whose every undo was looked
+ * at (confirmed or waived), then the rest, each time the one least recently written.
+ */
+async function keepLedgers($: EngineInterface, current: string): Promise<void> {
+  const keys = ((await $.store.keys()) as string[]).filter(key => key.startsWith('ledger:') && key !== current)
+  if (keys.length < MAX_LEDGERS) return
+  const ledgers = await Promise.all(
+    keys.map(async key => {
+      const list = ((await $.store.get(key)) as LedgerEntry[] | undefined) ?? []
+      return { key, at: Math.max(0, ...list.map(one => one.at)), isOpen: list.some(one => one.undoState === 'unchecked') }
+    }),
+  )
+  const order = ledgers.sort((a, b) => Number(a.isOpen) - Number(b.isOpen) || a.at - b.at)
+  for (const { key } of order.slice(0, keys.length - (MAX_LEDGERS - 1))) await $.store.delete(key)
+}
+
 const storeKey = async ($: EngineInterface) => `ledger:${(await $.session.repo())?.root ?? (await $.session.cwd())}`
 
 /**
@@ -31,6 +52,7 @@ async function write($: EngineInterface, fn: (list: LedgerEntry[]) => LedgerEntr
   const key = await storeKey($)
   const get = async () => ((await $.store.get(key)) as LedgerEntry[] | undefined) ?? []
   return serial(async () => {
+    await keepLedgers($, key)
     let next = fn(await get()).slice(0, KEEP)
     await $.store.set(key, next)
     const stored = await get()
