@@ -266,20 +266,38 @@ describe('side-effect-ledger in a session', () => {
     expect(kept).not.toContain('zzz999')
   })
 
-  test('past 12 ledgers the store drops one whose undos were all looked at, before one still unchecked', async ($, on) => {
+  test('the ledgers are held to 12 and to the room the store has, one with nothing open leaving first', async ($, on) => {
     const w = world(on)
-    const entry = (repo: string, at: number, undoState: string) => ({ id: `${repo}:${at}`, at, kind: 'push', label: 'git push', source: 'git push', isOk: true, outcome: '', undo: 'x', reversibility: 'easy', undoState, sessionId: 's0' })
-    // Ledgers of 20 other repositories: /r0 is the oldest and still has an unchecked undo; the rest were checked.
-    for (let i = 0; i < 20; i += 1) w.kept[`ledger:/r${i}`] = [entry(`/r${i}`, 100 + i, i === 0 ? 'unchecked' : 'confirmed')]
+    const entry = (repo: string, at: number, undoState: string, isOk = true) => ({ id: `${repo}:${at}`, at, kind: 'push', label: 'git push', source: 'git push', isOk, outcome: '', undo: 'x', reversibility: 'easy', undoState, sessionId: 's0' })
+    // 20 other repositories: /r0 is the oldest and still has an unchecked undo; /r1's only unchecked entry failed.
+    for (let i = 0; i < 20; i += 1) w.kept[`ledger:/r${i}`] = [entry(`/r${i}`, 100 + i, i === 0 ? 'unchecked' : i === 1 ? 'unchecked' : 'confirmed', i !== 1)]
     await $.session.start(START)
     await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
     const ledgers = Object.keys(w.kept).filter(key => key.startsWith('ledger:'))
     expect(ledgers).toHaveLength(12)
-    expect(ledgers).toContain("ledger:/w")
-    // Still unchecked: kept though oldest. The checked ones least recently written leave first.
+    expect(ledgers).toContain('ledger:/w')
     expect(ledgers).toContain('ledger:/r0')
     expect(ledgers).toContain('ledger:/r19')
     expect(ledgers).not.toContain('ledger:/r1')
+
+    // By size too: five big ledgers do not fit beside one another, whatever their count.
+    const big = (repo: string, at: number) => Array.from({ length: 300 }, (_, i) => ({ ...entry(repo, at * 1000 + i, 'confirmed'), source: 'y'.repeat(2_500) }))
+    for (const key of Object.keys(w.kept)) if (key.startsWith('ledger:/r')) delete w.kept[key]
+    for (let i = 0; i < 5; i += 1) w.kept[`ledger:/b${i}`] = big(`/b${i}`, 10 + i)
+    await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+    expect(JSON.stringify(w.kept).length).toBeLessThan(4_194_304)
+    expect(w.kept['ledger:/b4']).toBeDefined()
+    expect(w.kept['ledger:/b0']).toBeUndefined()
+  })
+
+  test('a field is kept small whatever the command named', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Bash', command: `git push origin ${Array.from({ length: 400 }, (_, i) => `refs/tags/v${i}`).join(' ')}` })
+    const [one] = w.kept['ledger:/w'] as { label: string; undo: string; source: string }[]
+    expect(one?.label.length).toBeLessThanOrEqual(200)
+    expect(one?.undo.length).toBeLessThanOrEqual(600)
+    expect(one?.source.length).toBeLessThanOrEqual(300)
   })
 
   test('an entry overwritten by another session at the same moment is written again', async ($, on) => {

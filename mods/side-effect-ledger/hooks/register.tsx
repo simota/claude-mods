@@ -19,28 +19,79 @@ function serial<T>(work: () => Promise<T>): Promise<T> {
   return run
 }
 
-// The store holds 4 MiB of JSON in all, every repository's ledger together (300 entries run to
-// about 200 KB): past this many ledgers one leaves before each write, so a write is never refused.
+// The store holds 4,194,304 characters of JSON in all, every repository's ledger together. Before
+// each write the ledgers are held to MAX_LEDGERS and their JSON to BUDGET together, the current
+// one cut to its newest entries past CURRENT_BUDGET, so a write is never refused for room.
 const MAX_LEDGERS = 12
+const BUDGET = 3_500_000
+const CURRENT_BUDGET = 1_500_000
+// What each ledger weighs, kept beside them so a write need not read every other ledger.
+const INDEX_KEY = 'ledger-index'
 
-/**
- * Drops ledgers past MAX_LEDGERS, never the one in hand: first those whose every undo was looked
- * at (confirmed or waived), then the rest, each time the one least recently written.
- */
-async function keepLedgers($: EngineInterface, current: string): Promise<void> {
-  const keys = ((await $.store.keys()) as string[]).filter(key => key.startsWith('ledger:') && key !== current)
-  if (keys.length < MAX_LEDGERS) return
-  const ledgers = await Promise.all(
-    keys.map(async key => {
-      const list = ((await $.store.get(key)) as LedgerEntry[] | undefined) ?? []
-      return { key, at: Math.max(0, ...list.map(one => one.at)), isOpen: list.some(one => one.undoState === 'unchecked') }
-    }),
-  )
-  const order = ledgers.sort((a, b) => Number(a.isOpen) - Number(b.isOpen) || a.at - b.at)
-  for (const { key } of order.slice(0, keys.length - (MAX_LEDGERS - 1))) await $.store.delete(key)
+type Meta = { size: number; at: number; isOpen: boolean }
+const metaOf = (list: readonly LedgerEntry[]): Meta => ({
+  size: JSON.stringify(list).length,
+  at: Math.max(0, ...list.map(one => one.at)),
+  // Open: an undo not yet looked at, of a call that did something (as the status line counts).
+  isOpen: list.some(one => one.isOk && one.undoState === 'unchecked'),
+})
+
+/** The newest entries of a ledger whose JSON fits in `room` characters. */
+function fitting(list: readonly LedgerEntry[], room: number): LedgerEntry[] {
+  const kept: LedgerEntry[] = []
+  let size = 2
+  for (const one of list) {
+    const next = JSON.stringify(one).length + 1
+    if (size + next > room) break
+    size += next
+    kept.push(one)
+  }
+  return kept
 }
 
-const storeKey = async ($: EngineInterface) => `ledger:${(await $.session.repo())?.root ?? (await $.session.cwd())}`
+/**
+ * Makes room for `next` under `key`: other ledgers leave, those with nothing open first, each time
+ * the one least recently written, until there are fewer than MAX_LEDGERS and all fit in BUDGET.
+ * Answers `next`, cut to its newest entries when it alone would pass CURRENT_BUDGET.
+ */
+async function makeRoom($: EngineInterface, key: string, next: LedgerEntry[]): Promise<{ mine: LedgerEntry[]; index: Record<string, Meta> }> {
+  const stored = (await $.store.get(INDEX_KEY)) as Record<string, Meta> | undefined
+  const index: Record<string, Meta> = typeof stored === 'object' && stored !== null ? { ...stored } : {}
+  const keys = ((await $.store.keys()) as string[]).filter(one => one.startsWith('ledger:') && one !== key)
+  for (const name of Object.keys(index)) if (name === key || !keys.includes(name)) delete index[name]
+  // A ledger the index does not know yet (an earlier version's, another session's): read once.
+  for (const name of keys) if (index[name] === undefined) index[name] = metaOf(((await $.store.get(name)) as LedgerEntry[] | undefined) ?? [])
+  const mine = JSON.stringify(next).length > CURRENT_BUDGET ? fitting(next, CURRENT_BUDGET) : next
+  const order = Object.entries(index).sort(([, a], [, b]) => Number(a.isOpen) - Number(b.isOpen) || a.at - b.at)
+  let total = JSON.stringify(mine).length + order.reduce((sum, [name, one]) => sum + one.size + name.length + 6, 0)
+  let count = order.length
+  for (const [name, one] of order) {
+    if (count < MAX_LEDGERS && total <= BUDGET) break
+    await $.store.delete(name)
+    delete index[name]
+    total -= one.size + name.length + 6
+    count -= 1
+  }
+  return { mine, index: { ...index, [key]: metaOf(mine) } }
+}
+
+/** A store key is held to 256 characters: a longer path keeps its tail, told apart by a hash of the whole. */
+function keyFor(root: string): string {
+  const key = `ledger:${root}`
+  if (key.length <= 256) return key
+  let hash = 5381
+  for (const ch of root) hash = ((hash * 33) ^ ch.charCodeAt(0)) >>> 0
+  return `ledger:${hash.toString(36)}:…${root.slice(-200)}`
+}
+
+// A field as kept: control characters (colour codes) out, as they weigh up to six characters in
+// JSON each, and held to `max`, so one entry stays small whatever a command printed.
+const field = (text: string, max: number): string => {
+  const plain = text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+  return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain
+}
+
+const storeKey = async ($: EngineInterface) => keyFor((await $.session.repo())?.root ?? (await $.session.cwd()))
 
 /**
  * Changes the ledger in the store and in the session together, the store read first. The store
@@ -52,15 +103,18 @@ async function write($: EngineInterface, fn: (list: LedgerEntry[]) => LedgerEntr
   const key = await storeKey($)
   const get = async () => ((await $.store.get(key)) as LedgerEntry[] | undefined) ?? []
   return serial(async () => {
-    await keepLedgers($, key)
-    let next = fn(await get()).slice(0, KEEP)
+    // The ledger first, then what it weighs: a write cut short leaves an index the next one mends.
+    let room = await makeRoom($, key, fn(await get()).slice(0, KEEP))
+    let next = room.mine
     await $.store.set(key, next)
     const stored = await get()
     const again = fn(stored).slice(0, KEEP)
     if (JSON.stringify(again) !== JSON.stringify(stored)) {
-      next = again
+      room = await makeRoom($, key, again)
+      next = room.mine
       await $.store.set(key, next)
     }
+    await $.store.set(INDEX_KEY, room.index)
     await update($, entries, () => next)
     return next
   })
@@ -117,13 +171,13 @@ export const register: Register = on => {
     const source = maskedOf(tool === 'Bash' ? String(input.command ?? '') : `${tool} ${JSON.stringify(input)}`)
     const fresh: LedgerEntry[] = found.map((one, i) => ({
       ...one,
-      label: maskedOf(one.label),
-      undo: maskedOf(failedUndo(one, isOk)),
+      label: field(maskedOf(one.label), 200),
+      undo: field(maskedOf(failedUndo(one, isOk)), 600),
       id: `${e.tool_use_id ?? at}:${i}`,
       at,
-      source: source.replace(/\s+/g, ' ').slice(0, 300),
+      source: field(source.replace(/\s+/g, ' '), 300),
       isOk,
-      outcome: maskedOf(outcomeOf(text, isOk)),
+      outcome: field(maskedOf(outcomeOf(text, isOk)), 160),
       undoState: 'unchecked',
       sessionId,
     }))
