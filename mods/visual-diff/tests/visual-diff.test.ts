@@ -217,6 +217,27 @@ describe('visual-diff in a session', () => {
     expect(w.touched).toHaveLength(24)
   })
 
+  test('after a reload the session folder already there is touched again, unasked', async ($, on) => {
+    const w = world(on)
+    // A load of the module before this one made the folder; this load has made nothing yet.
+    w.dirs = [{ name: 's1', mtimeMs: 1_000 }]
+    await $.session.start(START)
+    await w.clock.advance(3_600_000)
+    expect(w.touched).toEqual([['touch', '-c', '--', '/t/claude-visual-diff/s1']])
+  })
+
+  test("session.end removes the ending session's own folder, found from its id, not from the shots kept", async ($, on) => {
+    const w = world(on)
+    w.dirs = [{ name: 's1', mtimeMs: 1_000 }]
+    await $.session.start(START)
+    // No shot in this session: the folder is still its own, and goes.
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+    const removed = w.sh.filter(argv => String(argv[2]).includes('rm -rf')).map(argv => argv.at(-1))
+    expect(removed).toEqual(['/t/claude-visual-diff/s1'])
+    // Both levels are checked right before, as the sweep does.
+    expect(String(w.sh.find(argv => String(argv[2]).includes('rm -rf'))?.[2])).toContain('[ ! -L "$1" ]')
+  })
+
   test('a click that leaves the page is not compared with the page it left', async ($, on) => {
     const w = world(on)
     await $.session.start(START)

@@ -469,3 +469,12 @@ test('a live session touches its folder every hour, so a long idle one is never 
   await clock.advance(2 * HOUR)
   expect(touches()).toHaveLength(24)
 })
+
+test('after a reload the session folder already there is touched again, unasked', async ($, on) => {
+  const clock = mock.clock(on)
+  // A load of the module before this one made the folder; this load has made nothing yet.
+  const { runs } = beneath(on, {}, { dirs: { [DIR]: 0, [SESSION_DIR]: 0 } })
+  await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
+  await clock.advance(60 * 60 * 1000)
+  expect(runs.filter(run => run.argv[0] === 'touch').map(run => run.argv)).toEqual([['touch', '-c', '--', SESSION_DIR]])
+})
