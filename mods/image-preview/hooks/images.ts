@@ -24,6 +24,11 @@ const SEPARATOR_END = /[,;:)\]]$/
 // not offered as one path per argument, nor one longer than a path can be.
 const MAX_PIECES = 8
 const MAX_PATH = 4096
+// Paths read from one text: a call shows its first few images, so a listing of thousands
+// (an echoed glob, `find -name '*.png'`) is read no further than its first ones.
+const MAX_GROUPS = 64
+
+const isUrl = (path: string) => /^[a-z]+:\/\//i.test(path)
 
 /**
  * The bare image path in one word, at most one: from the word's first place a path may start
@@ -65,16 +70,23 @@ function headBefore(text: string, end: number): string | undefined {
  * longest first. Text alone cannot tell `/tmp/a b/x.jpg` (one path with a space) from
  * `convert /tmp/a /tmp/b.png` (two arguments): each joined reading is offered with the
  * plain tail last, and the one that exists on disk is the path. Linear in the text: it
- * runs on every Bash result before the result goes back.
+ * runs on every Bash result before the result goes back. The first MAX_GROUPS paths only.
  */
 export function findImageCandidates(text: string): string[][] {
   const found: { at: number; candidates: string[] }[] = []
+  // Distinct paths read so far, URLs aside: what the cap counts, so repeats never use it up.
+  const quoted = new Set<string>()
+  const tails = new Set<string>()
   for (const match of text.matchAll(QUOTED)) {
-    if (match[2] !== undefined) found.push({ at: match.index, candidates: [match[2]] })
+    if (match[2] === undefined) continue
+    found.push({ at: match.index, candidates: [match[2]] })
+    if (!isUrl(match[2])) quoted.add(match[2])
+    if (quoted.size >= MAX_GROUPS) break
   }
   // Quoted spans are blanked out, so a space inside one is never read as a split.
   const bare = text.replace(QUOTED, span => ' '.repeat(span.length))
   for (const word of bare.matchAll(WORD)) {
+    if (tails.size >= MAX_GROUPS) break
     const one = pathInWord(bare, word.index, word[0])
     if (one === undefined) continue
     let start = one.at
@@ -87,14 +99,16 @@ export function findImageCandidates(text: string): string[][] {
       candidates.unshift(path)
     }
     found.push({ at: start, candidates })
+    if (!isUrl(one.path)) tails.add(one.path)
   }
   const seen = new Set<string>()
   const groups: string[][] = []
   for (const one of found.sort((a, b) => a.at - b.at)) {
-    const fresh = one.candidates.filter(path => !/^[a-z]+:\/\//i.test(path) && !seen.has(path))
+    const fresh = one.candidates.filter(path => !isUrl(path) && !seen.has(path))
     if (fresh.length === 0) continue
     for (const path of fresh) seen.add(path)
     groups.push(fresh)
+    if (groups.length >= MAX_GROUPS) break
   }
   return groups
 }
