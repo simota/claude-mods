@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { bashTouches, blank, countsOf, editChange, errorPaths, importPattern, inRepo, milestoneOf, rowsOf, warningsOf, withEdit, withRead } from '../hooks/fog'
+import { bashTouches, blank, capFiles, countsOf, editChange, errorPaths, importPattern, inRepo, milestoneOf, rowsOf, warningsOf, withEdit, withRead } from '../hooks/fog'
 
 const ROOT = '/w/app'
 const FILES = ['README.md', 'src/a.ts', 'src/b.ts', 'src/util/c.ts', 'docs/guide.md', 'lib/x.py']
@@ -10,7 +10,7 @@ type Seen = { toasts: string[]; status: (string | undefined)[] }
 
 // The world beneath the plugin: a git repository at ROOT with FILES, where src/b.ts imports
 // src/a.ts, and tools that succeed unless a Bash run is told to fail.
-function world(on: On, failing: Record<string, string> = {}): Seen {
+function world(on: On, failing: Record<string, string> = {}, files: readonly string[] = FILES): Seen {
   const seen: Seen = { toasts: [], status: [] }
   mock.store(on, {})
   mock.clock(on, { now: 1_000 })
@@ -38,7 +38,7 @@ function world(on: On, failing: Record<string, string> = {}): Seen {
   on('process.run', ($, e) => {
     const argv = e.argv.join(' ')
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } }) as never
-    if (argv === 'git ls-files -z') return ok(`${FILES.join('\0')}\0`)
+    if (argv === 'git ls-files -z') return ok(`${files.join('\0')}\0`)
     if (argv === 'git branch --show-current') return ok('main\n')
     if (argv.startsWith('git grep -l -E') && argv.includes('a(')) return ok('src/a.ts\nsrc/b.ts\n')
     if (argv.startsWith('git grep')) return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
@@ -56,6 +56,15 @@ const START = { cwd: ROOT, surface: 'terminal', isInteractive: true } as const
 const RUN = { command: 'map', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as const
 
 describe('fog', () => {
+  test('the file list is held under the state limit, whatever the repository holds', () => {
+    const files = Array.from({ length: 50_000 }, (_, i) => `src/main/java/com/example/${'x'.repeat(60)}/F${String(i).padStart(6, '0')}.java`)
+    const held = capFiles(files)
+    expect(JSON.stringify(held).length).toBeLessThanOrEqual(3_000_000)
+    expect(held.length).toBeGreaterThan(0)
+    expect(held).toEqual(files.slice(0, held.length))
+    expect(capFiles(FILES)).toEqual(FILES)
+  })
+
   test('places a path in the repository, or nowhere', () => {
     expect(inRepo('/w/app/src/a.ts', ROOT, ROOT)).toBe('src/a.ts')
     expect(inRepo('../src/../README.md', ROOT, '/w/app/src')).toBe('README.md')
@@ -161,4 +170,12 @@ describe('fog-map in a session', () => {
       await ui.unmount()
     })
   }
+  test('a large repository is still mapped, not taken for no repository', async ($, on) => {
+    const big = Array.from({ length: 50_000 }, (_, i) => `src/main/java/com/example/${'x'.repeat(60)}/F${String(i).padStart(6, '0')}.java`)
+    world(on, {}, big)
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Read', file_path: `${ROOT}/${big[0]}` } as never)
+    const text = (await $.command.run(RUN)).text
+    expect(text).not.toContain('リポジトリの外')
+  })
 })

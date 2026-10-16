@@ -286,3 +286,21 @@ export function rowsOf(
   walk(root, '', 0)
   return rows
 }
+
+// The repository's files are kept in one state value, which the engine holds to 4,194,304
+// characters of JSON: past this the list is cut, so the write is never refused and the
+// repository never taken for none.
+export const MAX_FILES_CHARS = 3_000_000
+
+/** The files a state value can hold, in the order git lists them. */
+export function capFiles(files: readonly string[]): string[] {
+  const kept: string[] = []
+  let size = 2
+  for (const file of files) {
+    const next = JSON.stringify(file).length + 1
+    if (size + next > MAX_FILES_CHARS) break
+    size += next
+    kept.push(file)
+  }
+  return kept
+}
