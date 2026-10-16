@@ -1,7 +1,7 @@
 import type { On, RenderElement } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { boundsOf, candidatesOf, enclosingName, namesOn, requestOf, testsFor, triggersOf } from '../hooks/space'
+import { boundsOf, candidatesOf, enclosingName, namesOn, requestOf, testsFor, triggersOf, withTest } from '../hooks/space'
 
 const kinds = (path: string, before: string, after: string) => triggersOf(path, before, after, 1).map(one => one.kind)
 
@@ -50,6 +50,19 @@ describe('space', () => {
     const found = triggersOf('src/pay.ts', '', file, 1)
     expect(candidatesOf(found, { 'src/pay.test.ts': "it('lists items', () => { expect(res.error).toBeUndefined() })" }, []).map(one => one.kind)).toEqual(['error'])
     expect(candidatesOf(found, { 'src/pay.test.ts': "it('chargeCard retries when the gateway fails', () => {})" }, [])).toEqual([])
+  })
+
+  test('the tests seen in a long session are held to the latest 30, each to its last 200 KB', () => {
+    let held: Record<string, string> = {}
+    for (let i = 0; i < 45; i += 1) held = withTest(held, `/w/tests/t${i}.test.ts`, `it('t${i}', () => {})`)
+    expect(Object.keys(held)).toHaveLength(30)
+    expect(held['/w/tests/t44.test.ts']).toBeDefined()
+    expect(held['/w/tests/t0.test.ts']).toBeUndefined()
+    // Seen again, a file is the newest: it stays past the next ones.
+    held = withTest(held, '/w/tests/t15.test.ts', 'again')
+    for (let i = 45; i < 70; i += 1) held = withTest(held, `/w/tests/t${i}.test.ts`, 'x')
+    expect(held['/w/tests/t15.test.ts']).toBe('again')
+    expect(withTest({}, 'a.test.ts', 'y'.repeat(300_000))['a.test.ts']).toHaveLength(200_000)
   })
 
   test('words the request with the trigger line quoted', () => {

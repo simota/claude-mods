@@ -1,8 +1,8 @@
-import { atom, read, update } from 'claude-code'
+import { atom, derive, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { NegativeTrigger } from '../types'
-import { candidatesOf, isTestPath, KIND_LABEL, keyOf, requestOf, summaryOf, triggersOf } from './space'
+import { candidatesOf, isTestPath, KIND_LABEL, keyOf, requestOf, summaryOf, triggersOf, withTest } from './space'
 
 const triggers = atom({ plugin: 'negative-space', key: 'triggers' } as const, [] as NegativeTrigger[])
 const tests = atom({ plugin: 'negative-space', key: 'tests' } as const, {} as Record<string, string>)
@@ -10,7 +10,6 @@ const dismissed = atom({ plugin: 'negative-space', key: 'dismissed' } as const, 
 const isShown = atom({ plugin: 'negative-space', key: 'isShown' } as const, false)
 
 const KEEP = 200
-const TEST_TEXT_MAX = 200_000
 
 type Edit = { path: string; before: string; after: string }
 
@@ -25,7 +24,9 @@ function editsOf(tool: string, input: Record<string, unknown>, written: string |
   return []
 }
 
-const open = async ($: EngineInterface) => candidatesOf(await read($, triggers), await read($, tests), await read($, dismissed))
+// Counted again only when a trigger, a test or a dismissal changed: the band reads it at every draw.
+const candidates = derive([triggers, tests, dismissed], candidatesOf)
+const open = ($: EngineInterface) => read($, candidates)
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -50,7 +51,7 @@ export const register: Register = on => {
     for (const one of after !== undefined ? [{ path, before: before ?? '', after }] : editsOf(tool, input, before)) {
       if (isTestPath(one.path)) {
         // What the test says now: the file as it stands, or an Edit's new text added to what was seen.
-        await update($, tests, all => ({ ...all, [one.path]: (after !== undefined || tool === 'Write' ? one.after : `${all[one.path] ?? ''}\n${one.after}`).slice(-TEST_TEXT_MAX) }))
+        await update($, tests, all => withTest(all, one.path, after !== undefined || tool === 'Write' ? one.after : `${all[one.path] ?? ''}\n${one.after}`))
         continue
       }
       const found = triggersOf(one.path, one.before, one.after, at)
@@ -68,7 +69,7 @@ export const register: Register = on => {
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError !== true && isTestPath(e.file_path)) {
       const text = ran.text ?? ''
-      await update($, tests, all => ({ ...all, [e.file_path]: `${all[e.file_path] ?? ''}\n${text}`.slice(-TEST_TEXT_MAX) }))
+      await update($, tests, all => withTest(all, e.file_path, `${all[e.file_path] ?? ''}\n${text}`))
     }
     return ran
   }).catch(($, e, next) => next(e))
