@@ -26,6 +26,12 @@ describe('delta', () => {
     expect(verdictOf(statsOf([100, 140, 60, 100]), statsOf([110, 150, 70, 110])).verdict).toBe('noise')
   })
 
+  test('calls nothing from fewer than three runs a side: one run has no spread to weigh a difference by', () => {
+    expect(verdictOf(statsOf([100]), statsOf([95]))).toMatchObject({ verdict: 'few', deltaPct: -5 })
+    expect(verdictOf(statsOf([100, 101]), statsOf([90, 91])).verdict).toBe('few')
+    expect(verdictOf(statsOf([100, 101, 99]), statsOf([80, 81, 79])).verdict).toBe('faster')
+  })
+
   test('reads the arguments and refuses a ref that is not one', () => {
     expect(parseArgs('base npm run bench')).toEqual({ mode: 'base', command: 'npm run bench' })
     expect(parseArgs('ref HEAD~1 cargo bench --bench parse')).toEqual({ mode: 'ref', ref: 'HEAD~1', command: 'cargo bench --bench parse' })
@@ -47,16 +53,16 @@ describe('delta', () => {
   })
 })
 
-type World = { argvs: string[]; toasts: string[]; clock: ReturnType<typeof mock.clock>; reals: number[] }
+type World = { argvs: string[]; toasts: string[]; clock: ReturnType<typeof mock.clock>; reals: number[]; cwd: string; missing: string[]; unstartable: string[] }
 
 function world(on: On): World {
   const clock = mock.clock(on, { now: 1_000 })
-  const w: World = { argvs: [], toasts: [], clock, reals: [] }
+  const w: World = { argvs: [], toasts: [], clock, reals: [], cwd: '/w', missing: [], unstartable: [] }
   mock.store(on, {})
   mock.env(on, { TMPDIR: '/tmp/me' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.repo', () => ({ value: { root: '/w', remote: null, internal: false, name: null } }))
-  on('session.cwd', () => ({ value: '/w' }))
+  on('session.cwd', () => ({ value: w.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.status', () => ({ value: undefined }))
@@ -64,12 +70,13 @@ function world(on: On): World {
     w.toasts.push(e.text)
     return { value: undefined }
   })
-  on('fs.exists', () => ({ value: true }))
+  on('fs.exists', ($, e) => ({ value: !w.missing.includes(String(e.path)) }))
   on('process.run', ($, e) => {
     const argv = e.argv.join(' ')
     w.argvs.push(argv)
     const ok = (stdout: string, stderr = '') => ({ value: { exitCode: 0, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
     if (argv === 'uname -s') return ok('Darwin\n')
+    if (w.unstartable.some(one => argv.endsWith(one))) throw new Error('spawn ENOENT')
     const real = w.reals.shift() ?? 1
     return ok('', BSD(real, 50 * 1024 * 1024))
   })
@@ -110,6 +117,51 @@ describe('perf-delta in a session', () => {
       expect(await ui.find({ type: 'Text', text: /時間: -20\.0% 改善/ })).toBeDefined()
       await ui.unmount()
     }
+  })
+
+  test('a baseline is the folder\'s it was measured in: the same command elsewhere is measured anew', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await $.command.run(perf('npm test'))
+    await w.clock.settle()
+    w.cwd = '/w/packages/api'
+    expect((await $.command.run(perf('npm test'))).text).toContain('基準として計測')
+  })
+
+  test('a folder missing at the ref, or a command that cannot start, says so', async ($, on) => {
+    const w = world(on)
+    w.cwd = '/w/packages/new'
+    await $.session.start(START)
+    w.missing = ['/tmp/me/perf-delta-1000/packages/new']
+    await $.command.run(perf('ref HEAD~1 make bench'))
+    await w.clock.settle()
+    expect((await $.command.run(perf('show'))).text).toBeDefined()
+    const ui = await $.ui.mount({
+      plugin: 'perf-delta',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'perf-delta',
+      props: { title: '性能差', isFocused: true, bodyColumns: 160, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    expect(await ui.find({ type: 'Text', text: /HEAD~1 には packages\/new がありません/ })).toBeDefined()
+    expect(w.argvs.some(a => a.startsWith('git worktree remove --force -- /tmp/me/perf-delta-'))).toBe(true)
+    await ui.unmount()
+
+    w.cwd = '/w'
+    w.missing = []
+    w.unstartable = ['nosuchbench']
+    await $.command.run(perf('nosuchbench'))
+    await w.clock.settle()
+    const again = await $.ui.mount({
+      plugin: 'perf-delta',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'perf-delta',
+      props: { title: '性能差', isFocused: true, bodyColumns: 160, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    expect(await again.find({ type: 'Text', text: /起動できませんでした/ })).toBeDefined()
+    expect(await again.find({ type: 'Text', text: /秒以内に終わりませんでした/ })).toBeUndefined()
+    await again.unmount()
   })
 
   test('runs a git ref in a temporary worktree and removes it after', async ($, on) => {

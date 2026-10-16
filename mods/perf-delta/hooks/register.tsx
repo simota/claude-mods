@@ -34,8 +34,16 @@ async function measure($: EngineInterface, cwd: string, command: string, label: 
   for (let i = 0; i <= s.runs; i += 1) {
     await update($, report, old => (old === null ? null : { ...old, note: `${label}: ${i === 0 ? 'ウォームアップ' : `${i}/${s.runs} 回目`}` }))
     const started = await $.clock.now()
-    const ran = await $.process.run(argv, { cwd, timeoutMs: s.timeoutMs }).catch(() => undefined)
+    let failure: unknown
+    const ran = await $.process.run(argv, { cwd, timeoutMs: s.timeoutMs }).catch(err => {
+      failure = err
+      return undefined
+    })
     const elapsed = (await $.clock.now()) - started
+    // The run rejects both when it outlasts the timeout and when it cannot start (a missing folder).
+    if (ran === undefined && elapsed < s.timeoutMs) {
+      throw new Error(`${label}: 起動できませんでした — ${failure instanceof Error ? failure.message : String(failure)}`.slice(0, 300))
+    }
     if (ran === undefined) throw new Error(`${label}: ${s.timeoutMs / 1000}秒以内に終わりませんでした`)
     if (ran.exitCode !== 0) throw new Error(`${label}: 終了コード ${ran.exitCode}${commandStderr(ran.stderr) === '' ? '' : ` — ${commandStderr(ran.stderr).slice(-300)}`}`)
     if (i === 0) continue
@@ -69,7 +77,9 @@ async function measureRef($: EngineInterface, root: string, cwd: string, ref: st
   const added = await git($, root, ['worktree', 'add', '--detach', '--', dir, ref])
   if (added?.exitCode !== 0) throw new Error(`git worktree add ${ref} に失敗: ${added?.stderr.trim().slice(-200) ?? ''}`)
   try {
-    const inside = cwd.startsWith(`${root}/`) ? `${dir}/${cwd.slice(root.length + 1)}` : dir
+    const below = cwd.startsWith(`${root}/`) ? cwd.slice(root.length + 1) : ''
+    const inside = below === '' ? dir : `${dir}/${below}`
+    if (below !== '' && !(await $.fs.exists(inside).catch(() => false))) throw new Error(`${ref} には ${below} がありません（このフォルダはその時点のコミットにありません）`)
     return await measure($, inside, command, ref, s)
   } finally {
     await git($, root, ['worktree', 'remove', '--force', '--', dir])
@@ -80,7 +90,7 @@ function toastOf(r: PerfReport): string {
   const t = verdictOf(r.before === undefined ? undefined : statsOf(r.before.timesMs), r.after === undefined ? undefined : statsOf(r.after.timesMs))
   if (r.before === undefined) return '⏱ 基準を保存しました'
   if (t.deltaPct === undefined) return '⏱ 計測しました'
-  const word = t.verdict === 'faster' ? '速くなった' : t.verdict === 'slower' ? '遅くなった' : 'ばらつきの範囲内'
+  const word = t.verdict === 'faster' ? '速くなった' : t.verdict === 'slower' ? '遅くなった' : t.verdict === 'few' ? '回数が少なく判定できません' : 'ばらつきの範囲内'
   return `⏱ ${t.deltaPct > 0 ? '+' : ''}${t.deltaPct.toFixed(1)}% ${word} — /perf`
 }
 
@@ -112,7 +122,7 @@ export const register: Register = (on, options) => {
     }
     if (mode === 'clear') {
       const all = await baselinesOf($)
-      const kept = command === '' ? {} : Object.fromEntries(Object.entries(all).filter(([key]) => key !== baselineKey(root, command)))
+      const kept = command === '' ? {} : Object.fromEntries(Object.entries(all).filter(([key]) => key !== baselineKey(root, command, cwd)))
       await $.store.set(BASELINES, kept)
       return { text: `⏱ 基準を${command === '' ? 'すべて' : ''}削除しました。` }
     }
@@ -120,7 +130,7 @@ export const register: Register = (on, options) => {
     if (mode === 'ref' && (ref === undefined || !isSafeRef(ref))) return { text: `⏱ git ref として使えない値です: ${ref ?? ''}` }
     if (isBusy) return { text: '⏱ 計測中です。終わるまでお待ちください。' }
 
-    const key = baselineKey(root, command)
+    const key = baselineKey(root, command, cwd)
     const saved = (await baselinesOf($))[key]
     isBusy = true
     await update($, report, (): PerfReport => ({ status: 'running', command, note: '準備中' }))
