@@ -67,19 +67,44 @@ export function sanitize(text: string, max: number): string {
   return chars.length <= max ? flat : `${chars.slice(0, Math.max(0, max - 1)).join('')}…`
 }
 
-/** Text flattened as `sanitize` flattens a quote, without the cut: for finding a quote in the reply. */
-const flat = (text: string): string => text.replace(/\s+/g, ' ').replace(UNSAFE, '').trim()
+/**
+ * Text as compared when a quote is looked for in the reply: what a fork quoting by heart changes
+ * set aside (markdown emphasis and code marks, list bullets, curly quotes, case, full-width forms,
+ * every space and line break, a closing full stop).
+ */
+export function comparable(text: string): string {
+  return text
+    .normalize('NFKC')
+    // Bullets first, while the line breaks they start after are still there.
+    .replace(/^[ \t]*(?:[-*+•]|\d+[.)])[ \t]+/gm, '')
+    .replace(UNSAFE, '')
+    .replace(/[\u200b-\u200d\u2060\ufeff]/g, '')
+    .replace(/[*_`~]/g, '')
+    .replace(/[“”„‟«»]/g, '"')
+    .replace(/[‘’‚‛]/g, "'")
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[。.！!？?、,]+$/, '')
+}
 
 /**
  * Whether a violation holds up against the reply it is about: one of the five rules, with a quote
- * found in the reply (a quote cut for drawing is matched by what is left of it). The fork is asked
- * for a verbatim quote; one it made up, or a rule of its own, would be fed back to Claude as a
- * finding about words it never wrote.
+ * found in the reply. The quote is compared as `comparable` reads it; one shortened with … or ...
+ * is found piece by piece, in order. The fork is asked for a verbatim quote; one it made up, or a
+ * rule of its own, would be fed back to Claude as a finding about words it never wrote.
  */
 function isGrounded(one: SelfAuditViolation, reply: string): boolean {
-  if (!/^R[1-5]$/i.test(one.rule.trim())) return false
-  const quote = one.quote.replace(/…$/, '').trim()
-  return quote !== '' && flat(reply).includes(quote)
+  if (!/^R[1-5](?![0-9])/i.test(one.rule.trim())) return false
+  const pieces = one.quote.split(/…|\.{3,}/).map(comparable).filter(piece => piece !== '')
+  if (pieces.length === 0) return false
+  const text = comparable(reply)
+  let from = 0
+  for (const piece of pieces) {
+    const at = text.indexOf(piece, from)
+    if (at === -1) return false
+    from = at + piece.length
+  }
+  return true
 }
 
 /**
