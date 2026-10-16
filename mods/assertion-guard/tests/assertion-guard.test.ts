@@ -82,6 +82,46 @@ describe('guard', () => {
     expect(kinds('a.py', '', 'try:\n  f()\nexcept (ValueError, KeyError) as e:\n  pass')).toEqual(['swallowed'])
   })
 
+  test('a comment on its own line before pass is still a swallow; prose starting with except is not', () => {
+    expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept Exception:\n    # best effort\n    pass')).toEqual(['swallowed'])
+    expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept Exception:  # noqa\n    # a\n    # b\n    ...')).toEqual(['swallowed'])
+    expect(kinds('README.md', 'x', 'x\nexcept in rare cases: ...see below')).toEqual([])
+  })
+
+  test('a change inside a string, to its kind of quotes where that matters, or to the opposite matcher is still a rewrite', () => {
+    expect(kinds('a.test.ts', "expect(x).toBe('a, b')", "expect(x).toBe('a,b')")).toEqual(['rewritten'])
+    expect(kinds('a.test.ts', "expect(x).toBe('x: 1')", "expect(x).toBe('x:1');")).toEqual(['rewritten'])
+    expect(kinds('a.test.ts', 'expect(x).toBe(`${y}`)', "expect(x).toBe('${y}')")).toEqual(['rewritten'])
+    expect(kinds('pkg/x_test.go', "assert.Equal(t, 'a', s)", 'assert.Equal(t, "a", s)')).toEqual(['rewritten'])
+    expect(kinds('a.test.ts', 'expect(t).toBe(10)', 'expect(t).not.toBe(10)')).toEqual(['rewritten'])
+  })
+
+  test('an assertion replaced by one about a literal is loosened', () => {
+    expect(kinds('a.test.ts', 'expect(total).toBe(10)', 'expect(true).toBe(true)')).toEqual(['loosened'])
+    expect(kinds('test_a.py', 'self.assertEqual(total, 3)', 'self.assertTrue(True)')).toEqual(['loosened'])
+    expect(kinds('a.test.ts', 'expect(total).toBe(10)', 'expect(sum).toBe(10)')).toEqual([])
+  })
+
+  test('no pattern is quadratic on long runs either', () => {
+    const hostile: [string, string][] = [
+      ['a.py', `except:${' '.repeat(80_000)}`],
+      ['a.ts', `catch${' '.repeat(80_000)}`],
+      ['a.ts', 'catch('.repeat(15_000)],
+      ['a.ts', `.catch((${' '.repeat(80_000)}`],
+      ['a.test.ts', `expect(x)${' '.repeat(80_000)}y`],
+      ['a.test.ts', `${';'.repeat(80_000)}x`],
+      ['a.test.ts', `assert ${'a'.repeat(80_000)}`],
+      ['test_a.py', 'assert a '.repeat(10_000)],
+      ['a.test.ts', `"${'\\"'.repeat(30_000)}`],
+    ]
+    for (const [path, text] of hostile) {
+      const started = performance.now()
+      inspect(path, 'x', text)
+      inspect(path, text, 'x')
+      expect(performance.now() - started).toBeLessThan(500)
+    }
+  })
+
   test('leaves alone edits that keep or strengthen the tests', () => {
     expect(kinds('a.test.ts', 'expect(r).toBeDefined()', 'expect(r).toEqual({ id: 1 })')).toEqual([])
     expect(kinds('a.test.ts', 'const x = 1', "const x = 1\nexpect(x).toBe(1)")).toEqual([])

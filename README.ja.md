@@ -260,9 +260,9 @@ hit-rate がオンなら、hit-rate が止めたルールは返しません（`s
 
 ### assertion-guard
 
-Edit・Write・MultiEdit のたびに、呼び出し前後のファイル全体の差分を見ます（ファイル内で移動しただけの assertion は削除扱いせず、整形だけの変更（引用符、末尾の `;` や `,`、記号まわりの空白）は書き換え扱いしません）。テストファイル（名前で判定、Rust はファイル内のどこかにテストモジュールがあるもの）では、assertion の削除やコメントアウト、厳しい matcher から緩い matcher への変更（`toEqual` → `toBeDefined`、`assertEqual` → `assertTrue`、`toThrow(X)` → `toThrow()`）、同じ assertion の期待値の書き換え、スキップや限定（`it.skip`、`@pytest.mark.skip`、`#[ignore]`、`t.Skip`）を拾います。どのファイルでも、新しく増えた例外の握りつぶし（`catch {}`、`.catch(() => undefined)`、`except: pass`、`|| true`）を拾います。
+Edit・Write・MultiEdit のたびに、呼び出し前後のファイル全体の差分を見ます（ファイル内で移動しただけの assertion は削除扱いせず、整形だけの変更（記号まわりの空白、末尾の `;` や `,`、両者を同じに読む言語での `'…'` と `"…"`）は書き換え扱いしません。文字列の中身が変われば書き換えです）。テストファイル（名前で判定、Rust はファイル内のどこかにテストモジュールがあるもの）では、assertion の削除やコメントアウト、厳しい matcher から緩い matcher への変更（`toEqual` → `toBeDefined`、`assertEqual` → `assertTrue`、`toThrow(X)` → `toThrow()`）、リテラルについての assertion への置き換え（`expect(true).toBe(true)`）、同じ assertion の期待値の書き換えや反転（`toBe` → `not.toBe`）、スキップや限定（`it.skip`、`@pytest.mark.skip`、`#[ignore]`、`t.Skip`）を拾います。どのファイルでも、新しく増えた例外の握りつぶし（`catch {}`、`.catch(() => undefined)`、`except: pass`、`|| true`）を拾います。
 
-見つけた内容はデータとして引用して編集結果に添え、Claude に変更ごとの理由を明示するか戻すよう求めます。入力欄の上の帯は **確認済み** を押すまで残り、**理由を尋ねる** で質問をプロンプトに入れます。`/assertion-guard` でセッション中の一覧。正当なテスト更新も候補として出ます。
+見つけた内容はデータとして引用して編集結果に添え、Claude に変更ごとの理由を明示するか戻すよう求めます。入力欄の上の帯は **確認済み** を押すまで残り、**理由を尋ねる** で質問をプロンプトに入れます。`/assertion-guard` でセッション中の一覧。正当なテスト更新も候補として出ます。変わった行を読むので、行に触れずに無効化した assertion（ブロックコメントで囲む、手前で `return` する）は見えません。
 
 ### negative-space
 
