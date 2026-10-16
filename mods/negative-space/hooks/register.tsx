@@ -1,11 +1,11 @@
 import { atom, derive, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { NegativeTrigger } from '../types'
-import { candidatesOf, isTestPath, KIND_LABEL, keyOf, requestOf, summaryOf, triggersOf, withTest } from './space'
+import type { NegativeTrigger, TestDigest } from '../types'
+import { candidatesOf, digestOf, isTestPath, KIND_LABEL, keyOf, requestOf, summaryOf, triggersOf, withTest } from './space'
 
 const triggers = atom({ plugin: 'negative-space', key: 'triggers' } as const, [] as NegativeTrigger[])
-const tests = atom({ plugin: 'negative-space', key: 'tests' } as const, {} as Record<string, string>)
+const tests = atom({ plugin: 'negative-space', key: 'tests' } as const, {} as Record<string, TestDigest>)
 const dismissed = atom({ plugin: 'negative-space', key: 'dismissed' } as const, [] as string[])
 const isShown = atom({ plugin: 'negative-space', key: 'isShown' } as const, false)
 
@@ -51,7 +51,9 @@ export const register: Register = on => {
     for (const one of after !== undefined ? [{ path, before: before ?? '', after }] : editsOf(tool, input, before)) {
       if (isTestPath(one.path)) {
         // What the test says now: the file as it stands, or an Edit's new text added to what was seen.
-        await update($, tests, all => withTest(all, one.path, after !== undefined || tool === 'Write' ? one.after : `${all[one.path] ?? ''}\n${one.after}`))
+        const known = await read($, triggers)
+        const isWhole = after !== undefined || tool === 'Write'
+        await update($, tests, all => withTest(all, one.path, digestOf(one.after), isWhole, known))
         continue
       }
       const found = triggersOf(one.path, one.before, one.after, at)
@@ -68,8 +70,11 @@ export const register: Register = on => {
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError !== true && isTestPath(e.file_path)) {
-      const text = ran.text ?? ''
-      await update($, tests, all => withTest(all, e.file_path, `${all[e.file_path] ?? ''}\n${text}`))
+      // A read of the whole file says what it is now; one of a part adds to what was seen.
+      const isWhole = e.offset === undefined && e.limit === undefined
+      const known = await read($, triggers)
+      const digest = digestOf(ran.text ?? '')
+      await update($, tests, all => withTest(all, e.file_path, digest, isWhole, known))
     }
     return ran
   }).catch(($, e, next) => next(e))
@@ -109,7 +114,9 @@ export const register: Register = on => {
             label="不要"
             role="dismiss"
             onPress={async () => {
-              await update($, dismissed, keys => [...new Set([...keys, ...list.map(one => one.key)])])
+              // What is open now, not what was drawn: a candidate come since is not hidden undismissed.
+              const now = await open($)
+              await update($, dismissed, keys => [...new Set([...keys, ...now.map(one => one.key)])])
               await update($, isShown, () => false)
             }}
           />

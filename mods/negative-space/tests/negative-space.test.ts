@@ -1,7 +1,7 @@
 import type { On, RenderElement } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { boundsOf, candidatesOf, enclosingName, namesOn, requestOf, testsFor, triggersOf, withTest } from '../hooks/space'
+import { boundsOf, candidatesOf, digestOf, enclosingName, MAX_TESTS_CHARS, namesOn, requestOf, testsFor, triggersOf, withTest } from '../hooks/space'
 
 const kinds = (path: string, before: string, after: string) => triggersOf(path, before, after, 1).map(one => one.kind)
 
@@ -22,8 +22,8 @@ describe('space', () => {
   })
 
   test('matches tests to a source file by its stem', () => {
-    const tests = { 'tests/api.test.ts': 'A', 'tests/form.test.ts': 'B', 'tests/test_api.py': 'C' }
-    expect(testsFor('src/api.ts', tests)).toBe('A\nC')
+    const tests = { 'tests/api.test.ts': digestOf('Alpha'), 'tests/form.test.ts': digestOf('Beta'), 'tests/test_api.py': digestOf('Gamma') }
+    expect(testsFor('src/api.ts', tests).words.sort()).toEqual(['Alpha', 'Gamma'])
   })
 
   test('asks for a refusal test and each bound, until the tests of that file speak of them', () => {
@@ -31,7 +31,7 @@ describe('space', () => {
     const none = candidatesOf(found, {}, [])
     expect(none.map(one => one.ask)).toEqual(['不正・空・型違いの入力で拒否されるか', '境界値 39 / 40 / 41', '失敗（例外・タイムアウト・依存先エラー）時にどう振る舞うか'])
 
-    const covered = candidatesOf(found, { 'src/form.test.ts': "it('rejects an invalid title', () => { expect(() => f('x'.repeat(41))).toThrow(); f('x'.repeat(40)) })" }, [])
+    const covered = candidatesOf(found, { 'src/form.test.ts': digestOf("it('rejects an invalid title', () => { expect(() => f('x'.repeat(41))).toThrow(); f('x'.repeat(40)) })") }, [])
     expect(covered).toEqual([])
 
     expect(candidatesOf(found, {}, none.map(one => one.key))).toEqual([])
@@ -48,21 +48,44 @@ describe('space', () => {
   test('a stray word in a test of the file does not cover a failure it never names', () => {
     const file = 'export async function chargeCard(card) {\n  try { await gateway.charge(card) } catch (e) { return retry(card) }\n}'
     const found = triggersOf('src/pay.ts', '', file, 1)
-    expect(candidatesOf(found, { 'src/pay.test.ts': "it('lists items', () => { expect(res.error).toBeUndefined() })" }, []).map(one => one.kind)).toEqual(['error'])
+    expect(candidatesOf(found, { 'src/pay.test.ts': digestOf("it('lists items', () => { expect(res.error).toBeUndefined() })") }, []).map(one => one.kind)).toEqual(['error'])
+    expect(candidatesOf(found, { 'src/pay.test.ts': digestOf("it('chargeCard retries when the gateway fails', () => {})") }, [])).toEqual([])
+    // A test held as text by an earlier version is read as its digest.
     expect(candidatesOf(found, { 'src/pay.test.ts': "it('chargeCard retries when the gateway fails', () => {})" }, [])).toEqual([])
   })
 
-  test('the tests seen in a long session are held to the latest 30, each to its last 200 KB', () => {
-    let held: Record<string, string> = {}
-    for (let i = 0; i < 45; i += 1) held = withTest(held, `/w/tests/t${i}.test.ts`, `it('t${i}', () => {})`)
-    expect(Object.keys(held)).toHaveLength(30)
-    expect(held['/w/tests/t44.test.ts']).toBeDefined()
-    expect(held['/w/tests/t0.test.ts']).toBeUndefined()
-    // Seen again, a file is the newest: it stays past the next ones.
-    held = withTest(held, '/w/tests/t15.test.ts', 'again')
-    for (let i = 45; i < 70; i += 1) held = withTest(held, `/w/tests/t${i}.test.ts`, 'x')
-    expect(held['/w/tests/t15.test.ts']).toBe('again')
-    expect(withTest({}, 'a.test.ts', 'y'.repeat(300_000))['a.test.ts']).toHaveLength(200_000)
+  test('the tests are held as digests under the state limit, a test some trigger needs kept longest', () => {
+    const found = triggersOf('src/api.ts', '', 'if (!user.isAdmin) return res.status(403)', 1)
+    let held = withTest({}, 'tests/api.test.ts', digestOf("it('refuses a non-admin with 403', () => { isAdmin })"), true, found)
+    expect(candidatesOf(found, held, [])).toEqual([])
+    // Many other big test files read after it: the store stays under the limit, the api test stays.
+    const big = Array.from({ length: 3_000 }, (_, i) => `word${i} ${i}`).join(' ')
+    for (let i = 0; i < 300; i += 1) held = withTest(held, `tests/other${i}.test.ts`, digestOf(`${big} other${i}`), true, found)
+    expect(JSON.stringify(held).length).toBeLessThanOrEqual(MAX_TESTS_CHARS)
+    expect(held['tests/api.test.ts']).toBeDefined()
+    expect(candidatesOf(found, held, [])).toEqual([])
+    // A part read adds to what a whole read saw; a whole read replaces it.
+    const part = withTest(held, 'tests/api.test.ts', digestOf('extraName 7'), false, found)
+    expect(part['tests/api.test.ts']?.words).toEqual(expect.arrayContaining(['isAdmin', 'extraName']))
+    expect(withTest(part, 'tests/api.test.ts', digestOf('fresh'), true, found)['tests/api.test.ts']?.words).toEqual(['fresh'])
+  })
+
+  test('a line number from Read is no bound tried, and a long minified line is no trigger', () => {
+    const found = triggersOf('src/form.ts', '', "if (name.length > 100) throw new ValidationError('long')", 1)
+    const numbered = Array.from({ length: 120 }, (_, i) => `${String(i + 1).padStart(6)}\tit('rejects invalid name', () => {})`).join('\n')
+    expect(candidatesOf(found, { 'tests/form.test.ts': digestOf(numbered) }, []).map(one => one.ask)).toContain('境界値 99 / 100 / 101')
+    const started = performance.now()
+    expect(triggersOf('dist/app.js', '', `if (a) {${'b>1&&'.repeat(40_000)}}`, 1)).toEqual([])
+    expect(triggersOf('src/big.ts', '', Array.from({ length: 10_000 }, (_, i) => `const v${i} = 'x${i}'`).join('\n'), 1)).toEqual([])
+    expect(performance.now() - started).toBeLessThan(1_000)
+  })
+
+  test('the function is the one the line stands in, an arrow is no comparison, and setPermissions is authorization', () => {
+    const file = ['function loadUser(id) {', '  if (!id) throw new Error("bad")', '}', 'function chargeCard(id) {', '  if (!id) throw new Error("bad")', '}'].join('\n')
+    const before = ['function loadUser(id) {', '  if (!id) throw new Error("bad")', '}', 'function chargeCard(id) {', '}'].join('\n')
+    expect(triggersOf('src/pay.ts', before, file, 1)[0]?.names).toContain('chargeCard')
+    expect(boundsOf('if (ready) list.map(x => 1)')).toEqual([])
+    expect(triggersOf('src/acl.ts', '', 'setPermissions(user, roles)', 1).map(one => one.kind)).toEqual(['auth'])
   })
 
   test('words the request with the trigger line quoted', () => {
