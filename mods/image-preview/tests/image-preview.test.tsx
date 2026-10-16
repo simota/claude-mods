@@ -26,6 +26,8 @@ type World = {
   place?: { cwd: string }
   /** Folders that exist; a `link` one is a symbolic link elsewhere. */
   dirs?: Record<string, 'dir' | 'link'>
+  /** The session's id, read when asked: a /clear moves it on. */
+  session?: { id: string }
 }
 
 const DEFAULT_DIRS = { '/tmpdir': 'dir', '/tmpdir/claude-image-preview': 'dir' } as const
@@ -40,7 +42,7 @@ function beneath(on: On, files: Record<string, File>, world: World) {
   const dirs: Record<string, 'dir' | 'link'> = world.dirs ?? { ...DEFAULT_DIRS }
   const place = world.place ?? { cwd: CWD }
   on('session.cwd', () => ({ value: place.cwd }))
-  on('session.id', () => ({ value: 'sess-1' }))
+  on('session.id', () => ({ value: world.session?.id ?? 'sess-1' }))
   on('env.get', ($, e) => ({ value: env[e.name] }))
   on('fs.stat', ($, e) => {
     const dir = dirs[e.path]
@@ -501,4 +503,34 @@ test('a live session touches its cache every hour, so a long idle one is never s
   await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: { id: 'sess-1' } })
   await clock.advance(2 * HOUR)
   expect(touches()).toHaveLength(24)
+})
+
+test('after a reload the session cache already there is touched again, unasked', async ($, on) => {
+  const clock = mock.clock(on, { now: 100_000 })
+  // A load of the module before this one made the folder; this load has made nothing yet.
+  const { runs } = beneath(on, {}, { hasSips: false, dirs: { ...DEFAULT_DIRS, [CACHE]: 'dir' } })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  await clock.advance(60 * 60 * 1000)
+  expect(runs.filter(argv => argv[0] === 'touch')).toEqual([['touch', '-c', '--', CACHE]])
+})
+
+test('a conversion still queued when its session ends never makes that folder again', async ($, on) => {
+  const clock = mock.clock(on, { now: 100_000 })
+  const files = { '/work/app/gen/new.jpg': { size: 5000, mtimeMs: 100_500 } }
+  const session = { id: 'sess-1' }
+  const { runs } = beneath(on, files, { hasSips: true, session })
+  on('tool.call', { tool: 'Bash' }, async () => {
+    await clock.advance(1_000)
+    return { result: { stdout: 'wrote gen/new.jpg', stderr: '', interrupted: false } } as never
+  })
+
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: 'python gen.py', description: 'gen' })
+  // A /clear: the session ends and the process goes on under a new id before the queue runs.
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: { id: 'sess-2' } })
+  session.id = 'sess-2'
+  await clock.settle()
+
+  expect(runs.some(argv => argv[0] === '/bin/sh' && argv.at(-1) === CACHE)).toBe(false)
+  await clock.advance(2 * 60 * 60 * 1000)
+  expect(runs.filter(argv => argv[0] === 'touch')).toEqual([])
 })

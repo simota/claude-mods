@@ -221,6 +221,13 @@ export const register: Register = (on, options) => {
     pending = undefined
     await update($, frame, old => (old !== null && old.sessionId !== sessionId ? null : old))
     await sweepStale($, sessionId)
+    // After a reload this load has made nothing, yet the session's folder may be there already.
+    const base = await existingBase($)
+    const dir = base === undefined || (await hasEnded($, sessionId)) ? undefined : await checkedChild($, base, folderName(sessionId))
+    if (dir !== undefined) {
+      sessionDirs.set(sessionId, dir)
+      keepAlive($)
+    }
     return next(e)
   })
 

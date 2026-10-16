@@ -53,7 +53,8 @@ async function ownFolder($: EngineInterface): Promise<string | undefined> {
   return base === '' || base === '/.cache' ? undefined : `${base}/${DIR_NAME}`
 }
 
-const sessionFolderName = async ($: EngineInterface) => (await $.session.id()).replace(/[^\w-]/g, '_')
+const nameOf = (sessionId: string) => sessionId.replace(/[^\w-]/g, '_')
+const sessionFolderName = async ($: EngineInterface) => nameOf(await $.session.id())
 
 /**
  * The session's folder, made 0700 and checked to be ours, and so is the mod's folder it sits in:
@@ -69,7 +70,7 @@ async function folder($: EngineInterface): Promise<string | undefined> {
     [own, dir],
   )
   if (made?.exitCode !== 0) return undefined
-  kept.add(dir)
+  liveDirs.add(dir)
   keepAlive($)
   return dir
 }
@@ -79,21 +80,24 @@ const STALE_MS = 24 * 60 * 60 * 1000
 // A live session touches its folder this often, so one left idle for a day is not taken for killed.
 const HEARTBEAT_MS = 60 * 60 * 1000
 // Session folders this load of the module writes into.
-const kept = new Set<string>()
+const liveDirs = new Set<string>()
 let heartbeat: Timer | undefined
 
 // Each hour while this process keeps a folder, its mtime is moved on: another session's sweep
 // reads a folder untouched for a day as a killed session's, however idle this one is.
 function keepAlive($: EngineInterface): void {
   heartbeat ??= $.clock.every(HEARTBEAT_MS, () => {
-    if (kept.size === 0) {
+    if (liveDirs.size === 0) {
       heartbeat?.cancel()
       heartbeat = undefined
       return
     }
-    for (const dir of kept) void $.process.run(['touch', '-c', '--', dir]).catch(() => undefined)
+    for (const dir of liveDirs) void $.process.run(['touch', '-c', '--', dir]).catch(() => undefined)
   })
 }
+
+// Removes a session's folder, both levels checked again right before: ours, no link.
+const REMOVE_CHECKED = '[ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -d "$2" ] && [ ! -L "$2" ] && [ -O "$2" ] && rm -rf -- "$2"'
 
 async function sweepStale($: EngineInterface): Promise<void> {
   const own = await ownFolder($)
@@ -104,8 +108,7 @@ async function sweepStale($: EngineInterface): Promise<void> {
     if (entry.kind !== 'dir' || entry.name === current || !/^[\w-]+$/.test(entry.name)) continue
     const stat = await $.fs.stat(`${own}/${entry.name}`).catch(() => undefined)
     if (stat === undefined || stat.mtimeMs >= cutoff) continue
-    // Both levels checked again right before: ours, no link.
-    await sh($, '[ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -d "$2" ] && [ ! -L "$2" ] && [ -O "$2" ] && rm -rf -- "$2"', [own, `${own}/${entry.name}`])
+    await sh($, REMOVE_CHECKED, [own, `${own}/${entry.name}`])
   }
 }
 
@@ -214,15 +217,23 @@ export const register: Register = on => {
     await $.command.register({ name: 'vdiff', description: '同じ URL・画面サイズのスクリーンショットの変更前後を比較（/vdiff · base で基準に固定 · clear）', argumentHint: '[base | clear]' })
     const started = await next(e)
     $.clock.after(0, () => void sweepStale($).catch(() => undefined))
+    // After a reload this load has made nothing, yet the session's folder may be there already.
+    const own = await ownFolder($)
+    const dir = own === undefined ? undefined : `${own}/${await sessionFolderName($)}`
+    const stat = dir === undefined ? undefined : await $.fs.stat(dir).catch(() => undefined)
+    if (dir !== undefined && stat?.kind === 'dir' && !stat.isLink) {
+      liveDirs.add(dir)
+      keepAlive($)
+    }
     return started
   })
 
   on('session.end', async ($, e, next) => {
-    const dir = (await read($, shots))[0]?.png.replace(/\/[^/]+$/, '')
+    // The ending session's folder, named from its id: the shots kept may be an earlier session's.
+    // One session runs at a time, so nothing is left to touch; the next shot makes its folder anew.
+    liveDirs.clear()
     const own = await ownFolder($)
-    if (own !== undefined) kept.delete(`${own}/${await sessionFolderName($)}`)
-    if (dir !== undefined) kept.delete(dir)
-    if (dir !== undefined && dir.includes(`/${DIR_NAME}/`)) await sh($, 'rm -rf -- "$1"', [dir])
+    if (own !== undefined) await sh($, REMOVE_CHECKED, [own, `${own}/${nameOf(e.sessionId)}`])
     return next(e)
   })
 

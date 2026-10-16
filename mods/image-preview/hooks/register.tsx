@@ -103,6 +103,8 @@ async function privateChild($: EngineInterface, parent: string, name: string): P
 async function cacheFolder($: EngineInterface, sessionId: string): Promise<string | undefined> {
   const known = cacheDirs.get(sessionId)
   if (known !== undefined) return known
+  // Work queued for a session a /clear has since ended: its folder is gone and stays gone.
+  if (sessionId !== (await $.session.id())) return undefined
   const parent = await rootDir($)
   if (parent === undefined) return undefined
   const base = await privateChild($, parent, CACHE_NAME)
@@ -324,7 +326,15 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'images', description: 'このセッションの画像をプレビューペインに表示する' })
-    await sweepStale($, await $.session.id())
+    const sessionId = await $.session.id()
+    await sweepStale($, sessionId)
+    // After a reload this load has made nothing, yet the session's cache may be there already.
+    const base = await existingBase($)
+    const dir = base === undefined ? undefined : await checkedChild($, base, folderName(sessionId))
+    if (dir !== undefined) {
+      cacheDirs.set(sessionId, dir)
+      keepAlive($)
+    }
     return next(e)
   })
 
