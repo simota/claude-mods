@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Journey } from '../types'
-import { BROWSER_TOOL, markdownOf, playwrightOf, refsOf, stepsOf, stepText } from './journey'
+import type { Journey, JourneyStep, JourneyTarget } from '../types'
+import { BROWSER_TOOL, markdownOf, maskedUrl, playwrightOf, refsOf, stepsOf, stepText } from './journey'
 
 const PANE = 'journey-trace'
 const TITLE = '操作の記録'
@@ -25,6 +25,20 @@ async function expectStep($: EngineInterface, text: string, by: 'person' | 'clau
 async function exportText($: EngineInterface, format: 'md' | 'e2e'): Promise<string> {
   const j = await read($, journey)
   return format === 'md' ? markdownOf(j, await $.clock.now()) : playwrightOf(j)
+}
+
+/**
+ * The element text typed next goes into: the one last clicked or filled by name. Not known after
+ * a Tab or an Enter (the focus moved), a new page, or a click by coordinates.
+ */
+function focusOf(steps: readonly JourneyStep[]): JourneyTarget | undefined {
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const one = steps[i] as JourneyStep
+    if (one.kind === 'goto') return undefined
+    if (one.kind === 'key' && /tab|enter|return/i.test(one.key)) return undefined
+    if (one.kind === 'click' || one.kind === 'fill') return one.target.name === undefined ? undefined : one.target
+  }
+  return undefined
 }
 
 export const register: Register = on => {
@@ -69,7 +83,7 @@ export const register: Register = on => {
     if (name === 'navigate') {
       const shown = text.split('\n').slice(0, 3).map(line => line.match(/^URL: (https?:\/\/\S+)$/)?.[1]).find(Boolean)
       const to = typeof input.url === 'string' && /^https?:\/\//.test(input.url) ? input.url : undefined
-      if (shown ?? to) await update($, url, () => (shown ?? to) as string)
+      if (shown ?? to) await update($, url, () => maskedUrl((shown ?? to) as string))
     }
     if (name === 'resize_window' && typeof input.width === 'number' && typeof input.height === 'number') {
       const viewport = { width: input.width, height: input.height }
@@ -80,9 +94,7 @@ export const register: Register = on => {
     if (!j.isRecording) return ran
     const at = await $.clock.now()
     const page = await read($, url)
-    // The element last clicked or filled has the focus: text typed next goes into it.
-    const focus = [...j.steps].reverse().find(one => one.kind === 'click' || one.kind === 'fill')
-    const steps = stepsOf(name, input, await read($, refs), page, at, focus?.kind === 'click' || focus?.kind === 'fill' ? focus.target : undefined)
+    const steps = stepsOf(name, input, await read($, refs), page, at, focusOf(j.steps))
     if (steps.length > 0) await update($, journey, old => ({ ...old, steps: [...old.steps, ...steps].slice(-KEEP_STEPS) }))
     return ran
   }).catch(($, e, next) => next(e)) // an observer: a failure here never changes the call
