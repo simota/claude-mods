@@ -124,7 +124,7 @@ Finished tool calls are drawn as one compact line with a Nerd Font icon: Edit/Wr
 
 ### self-audit
 
-After each reply of at least `minChars` characters, one tool-less fork of the conversation (served mostly from the prompt cache), given the reply itself as quoted data, checks it against the CLAUDE.md rules: claims done without evidence, first line not the result, unverified assertions, bypassed checks, scope inflation. Violations show in red above the prompt; 詳細 or `/self-audit` opens the pane with quotes and the fork's token use. Results belong to the latest reply only: when it was not audited, the pane says why.
+After each reply of at least `minChars` characters, one tool-less fork of the conversation (served mostly from the prompt cache), given the reply itself as quoted data, checks it against the CLAUDE.md rules: claims done without evidence, first line not the result, unverified assertions, bypassed checks, scope inflation. Only violations of the five rules whose quote is found in the reply are kept (a made-up quote or rule is dropped). Violations show in red above the prompt; 詳細 or `/self-audit` opens the pane with quotes and the fork's token use. Results belong to the latest reply only: when it was not audited, the pane says why.
 
 | Option | Default | |
 | --- | --- | --- |

@@ -6,7 +6,8 @@ import { MAX_REPLY, buildPrompt, capReply, clip, displayWidth, parseViolations, 
 
 const SURFACES = ['terminal', 'desktop'] as const
 
-const LONG = '実装しました。'.repeat(40)
+// A long reply carrying what the fork quotes below.
+const LONG = `実装しました。テストは全部通ります。他にも3案あります。API は v2 で対応済み。${'実装しました。'.repeat(40)}`
 
 const USAGE = {
   input_tokens: 1_200,
@@ -52,9 +53,10 @@ const PANE = {
 
 // Stands for the engine beneath the plugin: the fork answers what `bottom.reply` says, the band draws a marker.
 function engine(on: On) {
-  const bottom = { reply: answered(FOUND), forks: 0, prompts: [] as string[], opened: [] as string[] }
+  const bottom = { reply: answered(FOUND), forks: 0, prompts: [] as string[], opened: [] as string[], throws: false }
   on('model.fork', ($, e) => {
     bottom.forks += 1
+    if (bottom.throws) throw new Error('overloaded')
     bottom.prompts.push(e.prompt)
     return { value: bottom.reply }
   })
@@ -96,6 +98,25 @@ describe('parseViolations', () => {
       { rule: 'R2', quote: 'q', why: 'w' },
     ])
     expect(parseViolations('{"violations":[]}')).toEqual([])
+  })
+
+  test('keeps only violations of the five rules whose quote is in the reply', () => {
+    const reply = '完了しました。\nテストは  全部通ります。'
+    const answer = (violations: unknown[]) => JSON.stringify({ violations })
+    expect(
+      parseViolations(
+        answer([
+          { rule: 'R1', quote: 'テストは 全部通ります', why: '実行していない' },
+          { rule: 'R3', quote: 'API は v2 で対応済み', why: '返信にない引用' },
+          { rule: 'R6', quote: '完了しました', why: '定義にないルール' },
+          { rule: 'R2', quote: '', why: '引用なし' },
+        ]),
+        reply,
+      ),
+    ).toEqual([{ rule: 'R1', quote: 'テストは 全部通ります', why: '実行していない' }])
+    // A quote clipped for drawing is matched by what is left of it.
+    const long = `前置き ${'あ'.repeat(300)} 後書き`
+    expect(parseViolations(answer([{ rule: 'R5', quote: `前置き ${'あ'.repeat(300)}`, why: 'w' }]), long)).toHaveLength(1)
   })
 
   test('drops malformed entries and refuses what is not the asked shape', () => {
@@ -305,6 +326,18 @@ test('a slash command or a hidden prompt keeps the last result: /self-audit can 
   const pane = await $.ui.mount({ plugin: 'self-audit', surface: 'terminal', ...PANE })
   expect(await pane.find({ text: 'まだ監査した返答はありません。' })).toBeUndefined()
   await pane.unmount()
+})
+
+test('a fork that throws leaves the reply skipped, not pending for ever', async ($, on) => {
+  const bottom = engine(on)
+  bottom.throws = true
+  const clock = mock.clock(on, { now: 0 })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.turn.complete({ answer: LONG, durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'self-audit', surface: 'terminal', ...PANE })
+  expect(await ui.find({ type: 'Text', text: /監査されていません/ })).toBeDefined()
+  await ui.unmount()
 })
 
 test('a garbled or clean audit shows nothing', async ($, on) => {

@@ -67,11 +67,27 @@ export function sanitize(text: string, max: number): string {
   return chars.length <= max ? flat : `${chars.slice(0, Math.max(0, max - 1)).join('')}…`
 }
 
+/** Text flattened as `sanitize` flattens a quote, without the cut: for finding a quote in the reply. */
+const flat = (text: string): string => text.replace(/\s+/g, ' ').replace(UNSAFE, '').trim()
+
+/**
+ * Whether a violation holds up against the reply it is about: one of the five rules, with a quote
+ * found in the reply (a quote cut for drawing is matched by what is left of it). The fork is asked
+ * for a verbatim quote; one it made up, or a rule of its own, would be fed back to Claude as a
+ * finding about words it never wrote.
+ */
+function isGrounded(one: SelfAuditViolation, reply: string): boolean {
+  if (!/^R[1-5]$/i.test(one.rule.trim())) return false
+  const quote = one.quote.replace(/…$/, '').trim()
+  return quote !== '' && flat(reply).includes(quote)
+}
+
 /**
  * Reads the fork's reply: bare or fenced JSON, the object found between its first `{` and last `}`.
- * Undefined when it is not the asked shape, so a garbled reply records nothing.
+ * Undefined when it is not the asked shape, so a garbled reply records nothing. Given the audited
+ * reply, only the violations that hold up against it are kept.
  */
-export function parseViolations(text: string): SelfAuditViolation[] | undefined {
+export function parseViolations(text: string, reply?: string): SelfAuditViolation[] | undefined {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
   if (start < 0 || end <= start) return undefined
@@ -97,7 +113,7 @@ export function parseViolations(text: string): SelfAuditViolation[] | undefined 
       why: sanitize(why, 120),
     })
   }
-  return found
+  return reply === undefined ? found : found.filter(one => isGrounded(one, reply))
 }
 
 /** The rule's name for display: `R1` reads as its label, anything else as written. */
