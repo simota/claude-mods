@@ -27,7 +27,7 @@ const ZWJ = 0x200d
  * User-perceived characters where the runtime has no Intl.Segmenter: a ZWJ sequence
  * (👩‍💻), a flag (two regional indicators), a keycap or a base with its marks stays whole.
  */
-export function graphemesFallback(text: string): string[] {
+export function graphemesFallback(text: string, limit = Infinity): string[] {
   const out: string[] = []
   let isAfterJoiner = false
   for (const ch of text) {
@@ -36,24 +36,34 @@ export function graphemesFallback(text: string): string[] {
     const prevCp = prev?.codePointAt(0) ?? 0
     const isFlagHalf = isRegional(cp) && prev !== undefined && Array.from(prev).length === 1 && isRegional(prevCp)
     if (prev !== undefined && (isAfterJoiner || cp === ZWJ || isExtend(cp) || isFlagHalf)) out[out.length - 1] = prev + ch
+    else if (out.length >= limit) break
     else out.push(ch)
     isAfterJoiner = cp === ZWJ
   }
   return out
 }
 
-export function graphemes(text: string): string[] {
+/** The first `limit` user-perceived characters, read no further than needed. */
+export function graphemes(text: string, limit = Infinity): string[] {
   if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
-    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), part => part.segment)
+    const out: string[] = []
+    for (const part of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      if (out.length >= limit) break
+      out.push(part.segment)
+    }
+    return out
   }
-  return graphemesFallback(text)
+  return graphemesFallback(text, limit)
 }
 
 // Cut between whole characters, so an emoji (a ZWJ sequence or a flag too) is never split.
 export function clip(text: string, max: number): string {
-  const flat = graphemes(text.replace(/\s+/g, ' ').trim())
+  const flat = graphemes(text.replace(/\s+/g, ' ').trim(), max + 1)
   return flat.length > max ? `${flat.slice(0, max - 1).join('')}…` : flat.join('')
 }
+
+// Typed text is counted this far, so a pasted document is not read through to say its length.
+const MAX_COUNT = 10_000
 
 /**
  * The call's key input in one short line: action, coordinate, url, typed text or query.
@@ -70,7 +80,8 @@ export function summarize(input: Record<string, unknown>): string {
     const value = input[field]
     if (typeof value !== 'string' || value === '') continue
     // A key action's text names keys (`ctrl+a`, `Enter`), not what was typed.
-    parts.push(field === 'text' && input.action === 'key' ? `"${clip(value, 30)}"` : `‹${graphemes(value).length}文字›`)
+    const count = graphemes(value, MAX_COUNT + 1).length
+    parts.push(field === 'text' && input.action === 'key' ? `"${clip(value, 30)}"` : `‹${count > MAX_COUNT ? `${MAX_COUNT}+` : count}文字›`)
   }
   if (typeof input.query === 'string' && input.query !== '') parts.push(`"${clip(maskedOf(input.query), 30)}"`)
   return parts.join(' ')

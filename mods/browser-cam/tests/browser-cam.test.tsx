@@ -494,3 +494,11 @@ test('after a reload the session folder already there is touched again, unasked'
   await clock.advance(60 * 60 * 1000)
   expect(runs.filter(run => run.argv[0] === 'touch').map(run => run.argv)).toEqual([['touch', '-c', '--', SESSION_DIR]])
 })
+
+test('a long typed text or URL is measured and cut without reading it all', () => {
+  const started = performance.now()
+  expect(summarize({ action: 'type', text: 'a'.repeat(2_000_000) })).toBe('type ‹10000+文字›')
+  expect(summarize({ action: 'type', text: 'a'.repeat(9_999) })).toBe('type ‹9999文字›')
+  expect(summarize({ url: `https://example.com/${'p'.repeat(2_000_000)}` })).toHaveLength(60)
+  expect(performance.now() - started).toBeLessThan(100)
+})

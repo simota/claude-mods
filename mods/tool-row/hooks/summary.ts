@@ -98,7 +98,7 @@ const ZWJ = 0x200d
  * User-perceived characters where the runtime has no Intl.Segmenter: a ZWJ sequence
  * (👩‍💻), a flag (two regional indicators), a keycap or a base with its marks stays whole.
  */
-export function graphemesFallback(text: string): string[] {
+export function graphemesFallback(text: string, limit = Infinity): string[] {
   const out: string[] = []
   let isAfterJoiner = false
   for (const ch of text) {
@@ -107,23 +107,33 @@ export function graphemesFallback(text: string): string[] {
     const prevCp = prev?.codePointAt(0) ?? 0
     const isFlagHalf = isRegional(cp) && prev !== undefined && Array.from(prev).length === 1 && isRegional(prevCp)
     if (prev !== undefined && (isAfterJoiner || cp === ZWJ || isExtend(cp) || isFlagHalf)) out[out.length - 1] = prev + ch
+    else if (out.length >= limit) break
     else out.push(ch)
     isAfterJoiner = cp === ZWJ
   }
   return out
 }
 
-export function graphemes(text: string): string[] {
+/** The first `limit` user-perceived characters, read no further than needed: a row is drawn often. */
+export function graphemes(text: string, limit = Infinity): string[] {
   if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
-    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), part => part.segment)
+    const out: string[] = []
+    for (const part of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      if (out.length >= limit) break
+      out.push(part.segment)
+    }
+    return out
   }
-  return graphemesFallback(text)
+  return graphemesFallback(text, limit)
 }
 
 // Cut between whole characters, so an emoji (a ZWJ sequence or a flag too) is never split.
 function firstLine(command: string): string {
-  const [head = '', ...rest] = command.trim().split('\n')
-  const line = graphemes(rest.length > 0 ? `${head} …` : head)
+  const text = command.trim()
+  const end = text.indexOf('\n')
+  const head = end < 0 ? text : text.slice(0, end)
+  // One past the cut, to know whether there is more.
+  const line = graphemes(end >= 0 ? `${head} …` : head, COMMAND_CHARS + 1)
   return line.length > COMMAND_CHARS ? `${line.slice(0, COMMAND_CHARS - 1).join('')}…` : line.join('')
 }
 
