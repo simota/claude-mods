@@ -11,7 +11,8 @@ export const emptyLog = (): CapsuleLog => ({ prompts: [], decisions: [], open: [
 
 // Everything kept is kept across sessions and fed to another: credentials in it are masked first.
 const clip = (text: string, max: number) => {
-  const one = maskedOf(text).replace(/\s+/g, ' ').trim()
+  // Cut before masking, so a long paste costs no more than what is kept (a token cut at the end still reads as one).
+  const one = maskedOf(text.slice(0, max + 256)).replace(/\s+/g, ' ').trim()
   return one.length > max ? `${one.slice(0, max - 1)}…` : one
 }
 
@@ -66,7 +67,7 @@ export const withTodos = (log: CapsuleLog, todos: unknown): CapsuleLog => {
 const relative = (path: string, root: string) => (path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path)
 
 /** The capsule a log makes. */
-export function capsuleOf(log: CapsuleLog, meta: Pick<Capsule, 'id' | 'at' | 'sessionId' | 'root' | 'branch' | 'reason'>): Capsule {
+export function capsuleOf(log: CapsuleLog, meta: Pick<Capsule, 'id' | 'at' | 'sessionId' | 'root' | 'branch' | 'reason' | 'isInteractive'>): Capsule {
   const goal = log.prompts.length === 0 ? [] : log.prompts.length === 1 ? [log.prompts[0] as string] : [log.prompts[0] as string, log.prompts.at(-1) as string]
   const todosOpen = log.todos.filter(one => one.status !== 'completed').map(one => `${one.status === 'in_progress' ? '▶ ' : ''}${one.content}`)
   return {
@@ -82,14 +83,37 @@ export function capsuleOf(log: CapsuleLog, meta: Pick<Capsule, 'id' | 'at' | 'se
   }
 }
 
+const union = (first: readonly string[], then: readonly string[]): string[] => [...first, ...then.filter(one => !first.includes(one))]
+
+/**
+ * A session's newer capsule laid on its older one, as when it is resumed in a new process and
+ * its log starts empty: its first request stays the goal's first, its branch is kept when the
+ * newer has none, and the rest is both, the newer's ahead.
+ */
+export function merged(older: Capsule, newer: Capsule): Capsule {
+  const first = older.goal[0] ?? newer.goal[0]
+  const latest = newer.goal.at(-1) ?? older.goal.at(-1)
+  const branch = newer.branch ?? older.branch
+  return {
+    ...newer,
+    ...(branch === undefined ? {} : { branch }),
+    goal: first === undefined ? [] : latest === undefined || latest === first ? [first] : [first, latest],
+    decisions: union(older.decisions, newer.decisions).slice(-10),
+    open: union(newer.open, older.open).slice(0, 12),
+    commands: [...older.commands.filter(one => !newer.commands.some(other => other.command === one.command)), ...newer.commands].slice(-8),
+    files: union(newer.files, older.files).slice(0, 15),
+  }
+}
+
 export const isEmpty = (c: Capsule): boolean => SECTIONS.every(section => c[section].length === 0)
 
 /** The sections a capsule has anything in. */
 export const filled = (c: Capsule): CapsuleSection[] => SECTIONS.filter(section => c[section].length > 0)
 
+/** A section's lines as shown and fed, masked again: a capsule kept before masking may hold a credential. */
 export function sectionLines(c: Capsule, section: CapsuleSection): string[] {
-  if (section === 'commands') return c.commands.map(one => `${one.isOk ? '✓' : '✗'} ${one.command}`)
-  return c[section]
+  if (section === 'commands') return c.commands.map(one => maskedOf(`${one.isOk ? '✓' : '✗'} ${one.command}`))
+  return c[section].map(maskedOf)
 }
 
 export const REASON_LABEL: Record<Capsule['reason'], string> = { compact: '圧縮前', end: '終了時', manual: '手動' }

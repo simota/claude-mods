@@ -60,10 +60,10 @@ const EARLIER: Capsule = {
   files: ['src/auth.ts'],
 }
 
-type World = { contexts: (readonly string[] | undefined)[]; kept: Record<string, unknown>; race?: (mine: unknown) => unknown }
+type World = { id: string; contexts: (readonly string[] | undefined)[]; kept: Record<string, unknown>; race?: (mine: unknown) => unknown }
 
 function world(on: On, sessionId: string, store: Record<string, unknown> = {}): World {
-  const w: World = { contexts: [], kept: { ...store } }
+  const w: World = { id: sessionId, contexts: [], kept: { ...store } }
   // A store in memory the test can read back.
   on('store.get', ($, e) => ({ value: w.kept[e.key] }) as never)
   on('store.set', ($, e) => {
@@ -83,10 +83,11 @@ function world(on: On, sessionId: string, store: Record<string, unknown> = {}): 
   on('store.keys', () => ({ value: Object.keys(w.kept) }))
   mock.clock(on, { now: 2 * 60 * 60 * 1000 })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.id', () => ({ value: sessionId }))
+  on('session.id', () => ({ value: w.id }))
   on('session.repo', () => ({ value: { root: ROOT, remote: null, internal: false, name: null } }))
   on('session.cwd', () => ({ value: ROOT }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('session.compact', () => ({ skip: 'test' }) as never)
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.toast', () => ({ value: undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -139,27 +140,104 @@ describe('handoff-capsule in a session', () => {
     for (const secret of ['ghp_abcdefghij', 'sk_live_abcdefghij', 'hunter2secret']) expect(kept).not.toContain(secret)
   })
 
-  test('a -p run or the SDK leaves no capsule to push the person\'s off the shelf', async ($, on) => {
-    const w = world(on, 's9', { capsules: { [ROOT]: [EARLIER] } })
-    await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
-    await $.prompt.submit({ text: 'summarise the diff', origin: { kind: 'sdk' }, wait: false })
-    await $.tool.call({ tool: 'Bash', command: 'pnpm test' })
-    await $.turn.complete({ answer: 'Tests pass; nothing left to do except the remaining docs.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
-    await $.session.end({ reason: 'other', sessionId: 's9', resume: {} as never })
-    expect(w.kept.capsules).toEqual({ [ROOT]: [EARLIER] })
+  test('automated runs keep one capsule per repository, and a person at the terminal is offered theirs', async ($, on) => {
+    const w = world(on, 's8', { capsules: { [ROOT]: [EARLIER] } })
+    for (const id of ['s8', 's9', 's10']) {
+      w.id = id
+      await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+      await $.prompt.submit({ text: `run ${id}`, origin: { kind: 'sdk' }, wait: false })
+      await $.tool.call({ tool: 'Bash', command: 'pnpm test' })
+      await $.session.end({ reason: 'other', sessionId: id, resume: {} as never })
+    }
+    expect(((w.kept.capsules as Record<string, Capsule[]>)[ROOT] ?? []).map(one => one.sessionId)).toEqual(['s10', 's1'])
+
+    w.id = 's11'
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'handoff-capsule', surface: 'terminal', ...BAND })
+    await ui.press({ key: 'take' })
+    await ui.unmount()
+    await $.prompt.submit({ text: '続きを', origin: { kind: 'composer' }, wait: false })
+    expect(w.contexts.at(-1)?.[0]).toContain('JWT の有効期限は 15 分に決定')
   })
 
-  test('after /clear the next conversation starts a capsule of its own', async ($, on) => {
+  test('a desktop session, which is no REPL, still keeps its capsule and takes one back', async ($, on) => {
+    const w = world(on, 's2', { capsules: { [ROOT]: [EARLIER] } })
+    await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: false })
+    const ui = await $.ui.mount({ plugin: 'handoff-capsule', surface: 'desktop', ...BAND })
+    await ui.press({ key: 'take' })
+    await ui.unmount()
+    await $.prompt.submit({ text: 'ログイン画面を作って', origin: { kind: 'sdk' }, wait: false })
+    expect(w.contexts[0]?.[0]).toContain('JWT の有効期限は 15 分に決定')
+    await $.session.end({ reason: 'other', sessionId: 's2', resume: {} as never })
+    expect((w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.find(one => one.sessionId === 's2')?.goal).toEqual(['ログイン画面を作って'])
+  })
+
+  test('a resumed session adds to its own capsule, and is offered no other', async ($, on) => {
+    const w = world(on, 's1', { capsules: { [ROOT]: [EARLIER, { ...EARLIER, id: 's0:1', sessionId: 's0', at: 500 }] } })
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'handoff-capsule', surface: 'terminal', ...BAND })
+    expect(await ui.find({ type: 'Text', text: /引き継ぎ（/ })).toBeUndefined()
+    await ui.unmount()
+    await $.prompt.submit({ text: 'テストを足して', origin: { kind: 'composer' }, wait: false })
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: {} as never })
+    const mine = (w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.find(one => one.sessionId === 's1')
+    expect(mine?.goal).toEqual(['ログインを直して', 'テストを足して'])
+    expect(mine?.decisions).toEqual(['JWT の有効期限は 15 分に決定'])
+    expect(mine?.branch).toBe('feat/login')
+  })
+
+  test('a pre-compaction is no compaction: nothing is saved or offered', async ($, on) => {
     const w = world(on, 's1')
     await $.session.start(START)
     await $.prompt.submit({ text: 'ログインを直して', origin: { kind: 'composer' }, wait: false })
-    await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} as never })
+    await $.session.compact({ trigger: 'precompute', messages: [] })
+    expect(w.kept.capsules).toBeUndefined()
+  })
+
+  test('a subagent\'s todo list does not replace the session\'s', async ($, on) => {
+    const w = world(on, 's1')
+    await $.session.start(START)
+    await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'main work', status: 'pending' }] } as never)
+    await $.tool.call({ tool: 'TodoWrite', agentId: 'a1', todos: [{ content: 'sub step', status: 'pending' }] } as never)
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: {} as never })
+    expect((w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.[0]?.open).toEqual(['main work'])
+  })
+
+  test('a capsule kept before masking is masked when it is read back', async ($, on) => {
+    const old = { ...EARLIER, decisions: ['API_KEY=hunter2secret を使うことに決定'] }
+    const w = world(on, 's2', { capsules: { [ROOT]: [old] } })
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'handoff-capsule', surface: 'terminal', ...BAND })
+    await ui.press({ key: 'take' })
+    await ui.unmount()
+    await $.prompt.submit({ text: '続きを', origin: { kind: 'composer' }, wait: false })
+    expect(w.contexts[0]?.[0]).toContain('API_KEY=***')
+    expect(w.contexts[0]?.[0]).not.toContain('hunter2secret')
+  })
+
+  for (const reason of ['clear', 'resume'] as const) {
+  test(`after ${reason} in the REPL the next conversation starts a capsule of its own`, async ($, on) => {
+    const w = world(on, 's5', { capsules: { [ROOT]: [EARLIER] } })
+    await $.session.start(START)
+    // A capsule chosen before is not carried into the next conversation.
+    const band = await $.ui.mount({ plugin: 'handoff-capsule', surface: 'terminal', ...BAND })
+    await band.press({ key: 'take' })
+    await band.unmount()
+    await $.tool.call({ tool: 'Bash', command: 'pnpm build' })
+    await $.session.end({ reason, sessionId: 's5', resume: {} as never })
+    w.id = 's2'
+    // After /clear the capsule just kept is offered; a resumed conversation has its own history.
+    const ui = await $.ui.mount({ plugin: 'handoff-capsule', surface: 'terminal', ...BAND })
+    expect((await ui.find({ type: 'Text', text: /引き継ぎ（たった今/ })) !== undefined).toBe(reason === 'clear')
+    await ui.unmount()
     await $.prompt.submit({ text: 'README を書いて', origin: { kind: 'composer' }, wait: false })
+    expect(w.contexts.at(-1)).toBeUndefined()
     await $.session.end({ reason: 'prompt_input_exit', sessionId: 's2', resume: {} as never })
     const list = (w.kept.capsules as Record<string, Capsule[]>)[ROOT] ?? []
     expect(list.find(one => one.sessionId === 's2')?.goal).toEqual(['README を書いて'])
-    expect(list.find(one => one.sessionId === 's1')?.goal).toEqual(['ログインを直して'])
+    expect(list.find(one => one.sessionId === 's5')?.commands).toEqual([{ command: 'pnpm build', isOk: true }])
   })
+  }
 
   for (const surface of ['terminal', 'desktop'] as const) {
     test(`the ${surface} band brings back the chosen parts beside the next prompt`, async ($, on) => {

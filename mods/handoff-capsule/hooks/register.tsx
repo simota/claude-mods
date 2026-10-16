@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Capsule, CapsuleSection } from '../types'
+import type { Capsule, CapsuleLog, CapsuleSection } from '../types'
 import {
   ago,
   capsuleOf,
@@ -9,6 +9,7 @@ import {
   emptyLog,
   filled,
   isEmpty,
+  merged,
   REASON_LABEL,
   SECTION_LABEL,
   SECTIONS,
@@ -31,8 +32,11 @@ const FRESH_MS = 14 * 24 * 60 * 60 * 1000
 const log = atom({ plugin: 'handoff-capsule', key: 'log' } as const, emptyLog())
 const offer = atom({ plugin: 'handoff-capsule', key: 'offer' } as const, null as { capsule: Capsule; sections: CapsuleSection[] } | null)
 const pending = atom({ plugin: 'handoff-capsule', key: 'pending' } as const, null as string | null)
-// A `-p` run or the SDK: no person to hand over to, and its capsule would push theirs off the shelf.
-const isHeadless = atom({ plugin: 'handoff-capsule', key: 'isHeadless' } as const, false)
+// False with no REPL: a `-p` run and the SDK, but also the desktop app, a person's. Such a
+// session keeps one capsule per root, so automated runs never push a person's off the shelf.
+const isInteractive = atom({ plugin: 'handoff-capsule', key: 'isInteractive' } as const, true)
+// What a person sends: typed at the terminal, from the desktop app or the SDK host, or a phone.
+const PERSON = new Set(['composer', 'sdk', 'bridge'])
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
@@ -57,17 +61,28 @@ async function branchOf($: EngineInterface, root: string): Promise<string | unde
   return ran?.exitCode === 0 && ran.stdout.trim() !== '' ? ran.stdout.trim() : undefined
 }
 
-/** Makes the capsule from what was seen and keeps it, newest first, per root. */
-async function save($: EngineInterface, reason: Capsule['reason'], known?: { sessionId: string; skipBranch?: boolean }): Promise<Capsule | undefined> {
+/** Makes the capsule from what was seen (or a log taken before) and keeps it, newest first, per root. */
+async function save(
+  $: EngineInterface,
+  reason: Capsule['reason'],
+  known?: { sessionId: string; skipBranch?: boolean; seen?: CapsuleLog },
+): Promise<Capsule | undefined> {
   const root = await rootOf($)
   const at = await $.clock.now()
   const sessionId = known?.sessionId ?? (await $.session.id())
   const branch = known?.skipBranch ? undefined : await branchOf($, root)
-  const capsule = capsuleOf(await read($, log), { id: `${sessionId}:${at}`, at, sessionId, root, reason, ...(branch === undefined ? {} : { branch }) })
+  const meta = { id: `${sessionId}:${at}`, at, sessionId, root, reason, isInteractive: await read($, isInteractive), ...(branch === undefined ? {} : { branch }) }
+  const capsule = capsuleOf(known?.seen ?? (await read($, log)), meta)
   if (isEmpty(capsule)) return undefined
-  // One capsule per session and root: a later save replaces the session's earlier one.
+  let kept = capsule
+  // One capsule per session and root: a later save is laid on the session's earlier one (a
+  // resumed session's log starts empty), and one per root for sessions with no REPL.
   const withCapsule = (shelf: Shelf): Shelf => {
-    const list = [capsule, ...(shelf[root] ?? []).filter(one => one.sessionId !== sessionId)].slice(0, PER_ROOT)
+    const old = shelf[root] ?? []
+    const earlier = old.find(one => one.sessionId === sessionId)
+    kept = earlier === undefined ? capsule : merged(earlier, capsule)
+    const others = old.filter(one => one.sessionId !== sessionId && (kept.isInteractive !== false || one.isInteractive !== false))
+    const list = [kept, ...others].slice(0, PER_ROOT)
     return Object.fromEntries(
       Object.entries({ ...shelf, [root]: list })
         .sort(([, a], [, b]) => (b[0]?.at ?? 0) - (a[0]?.at ?? 0))
@@ -81,7 +96,7 @@ async function save($: EngineInterface, reason: Capsule['reason'], known?: { ses
     const again = withCapsule(stored)
     if (JSON.stringify(again) !== JSON.stringify(stored)) await $.store.set(STORE_KEY, again)
   })
-  return capsule
+  return kept
 }
 
 const offerOf = (capsule: Capsule) => ({ capsule, sections: filled(capsule) })
@@ -89,18 +104,23 @@ const offerOf = (capsule: Capsule) => ({ capsule, sections: filled(capsule) })
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'handoff', description: '引き継ぎカプセル: 表示（/handoff）· 保存（save）· 前回分を取り込む（load）', argumentHint: '[save | load]' })
-    await update($, isHeadless, () => !e.isInteractive)
+    await update($, isInteractive, () => e.isInteractive)
     const started = await next(e)
     if ((await read($, offer)) !== null || (await read($, pending)) !== null) return started
     const sessionId = await $.session.id()
     const now = await $.clock.now()
-    const latest = (await shelfOf($))[await rootOf($)]?.find(one => one.sessionId !== sessionId)
+    const list = (await shelfOf($))[await rootOf($)] ?? []
+    // A resumed session has its history and its own capsule: no other is offered.
+    if (list.some(one => one.sessionId === sessionId)) return started
+    const others = list.filter(one => one.sessionId !== sessionId)
+    // At the terminal a person's capsule before an automated run's.
+    const latest = (e.isInteractive ? others.find(one => one.isInteractive !== false) : undefined) ?? others[0]
     if (latest !== undefined && now - latest.at < FRESH_MS) await update($, offer, () => offerOf(latest))
     return started
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind !== 'composer' || e.command !== undefined || e.isMeta) return next(e)
+    if (!PERSON.has(e.origin.kind) || e.command !== undefined || e.isMeta) return next(e)
     await update($, log, old => withPrompt(old, e.text))
     const carried = e.turnId === undefined ? await read($, pending) : null
     if (carried === null) return next(e)
@@ -126,12 +146,16 @@ export const register: Register = on => {
     else if (EDIT_TOOLS.has(tool) && ran.isError !== true) {
       const path = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : undefined
       if (path !== undefined) await update($, log, old => withFile(old, path))
-    } else if (tool === 'TodoWrite') await update($, log, old => withTodos(old, input.todos))
+    } else if (tool === 'TodoWrite' && input.agentId === undefined) {
+      // A subagent's list is its own step, not the session's.
+      await update($, log, old => withTodos(old, input.todos))
+    }
     return ran
   }).catch(($, e, next) => next(e)) // an observer: a failure here never changes the call
 
   on('session.compact', async ($, e, next) => {
-    if (e.agentId !== undefined || (await read($, isHeadless))) return next(e)
+    // A pre-compaction installs nothing: the conversation goes on whole.
+    if (e.agentId !== undefined || e.trigger === 'precompute') return next(e)
     const capsule = await save($, 'compact').catch(() => undefined)
     const done = await next(e)
     // After the compaction the conversation has only its summary: offer the capsule back.
@@ -140,10 +164,19 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.end', async ($, e, next) => {
+    // A /clear or a /resume goes on in this process under another session, with no session.start:
+    // the log, and what was chosen for the conversation that ends, are taken now and start afresh.
+    const seen = await read($, log)
+    const isGoingOn = e.reason === 'clear' || e.reason === 'resume'
+    if (isGoingOn) {
+      await update($, log, () => emptyLog())
+      await update($, offer, () => null)
+      await update($, pending, () => null)
+    }
     // The end has about a second and a half in all: no git call, the store write alone.
-    if (!(await read($, isHeadless))) await save($, 'end', { sessionId: e.sessionId, skipBranch: true }).catch(() => undefined)
-    // A /clear goes on in the same process under a new session: its capsule starts afresh.
-    if (e.reason === 'clear') await update($, log, () => emptyLog())
+    const capsule = await save($, 'end', { sessionId: e.sessionId, skipBranch: true, seen }).catch(() => undefined)
+    // After /clear the person starts afresh in the same place: what was just kept is offered.
+    if (e.reason === 'clear' && capsule !== undefined) await update($, offer, () => offerOf(capsule))
     return next(e)
   })
 
