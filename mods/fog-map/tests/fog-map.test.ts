@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { bashTouches, blank, capFiles, countsOf, editChange, errorPaths, importPattern, inRepo, milestoneOf, rowsOf, warningsOf, withEdit, withRead } from '../hooks/fog'
+import { bashTouches, blank, capFiles, countsOf, editChange, errorPaths, importPattern, inRepo, milestoneOf, rowsOf, treeOf, warningsOf, withEdit, withRead } from '../hooks/fog'
 
 const ROOT = '/w/app'
 const FILES = ['README.md', 'src/a.ts', 'src/b.ts', 'src/util/c.ts', 'docs/guide.md', 'lib/x.py']
@@ -132,6 +132,34 @@ describe('fog', () => {
     }
     const rows = rowsOf(FILES, touched, 'src/a.ts', 80).map(row => `${'  '.repeat(row.depth)}${row.text}`)
     expect(rows).toEqual(['▾ src/', '  ▸ util/  ○', '  ● a.ts  +3 −1  ★', '  ░ b.ts', '░ docs/  ░ lib/  ░ README.md'])
+  })
+
+  test('a large repository is drawn and counted quickly from its tree and file set, built once', () => {
+    const files: string[] = []
+    for (let a = 0; a < 20; a++) for (let b = 0; b < 25; b++) for (let c = 0; c < 100; c++) files.push(`pkg${a}/mod${b}/deep/er/src/f${c}.ts`)
+    const touched: Record<string, ReturnType<typeof blank>> = {}
+    for (let i = 0; i < 300; i++) touched[files[i * 157] as string] = i % 3 === 0 ? withRead(undefined, i) : withEdit(undefined, { added: 1, removed: 0 }, i)
+    const tree = treeOf(files)
+    const tracked = new Set(files)
+    // As the session pane draws it, again and again: the tree and the set come from a cache,
+    // built when the list changes. The first draw warms the code up; the next is timed.
+    rowsOf(files, touched, files[0] as string, 100, tree)
+    let started = performance.now()
+    const rows = rowsOf(files, touched, files[0] as string, 100, tree)
+    expect(performance.now() - started).toBeLessThan(60)
+    started = performance.now()
+    const counts = countsOf(touched, files, tracked)
+    expect(performance.now() - started).toBeLessThan(5)
+    // The same answer as built afresh.
+    expect(rows).toEqual(rowsOf(files, touched, files[0] as string, 100))
+    expect(counts).toEqual(countsOf(touched, files))
+  })
+
+  test('a touched path the list lacks is drawn, and the cached tree is left as it was', () => {
+    const tree = treeOf(FILES)
+    const once = rowsOf(FILES, { 'src/new.ts': { ...blank(1), edits: 1, isNew: true } }, null, 80, tree)
+    expect(once.map(row => row.text)).toContain('✚ new.ts  +0 −0  新規')
+    expect(rowsOf(FILES, {}, null, 80, tree)).toEqual(rowsOf(FILES, {}, null, 80))
   })
 
   test('warns of an edit made unread, and of importers of an edit never opened', () => {

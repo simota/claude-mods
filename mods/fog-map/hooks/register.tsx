@@ -1,4 +1,4 @@
-import { atom, read, update } from 'claude-code'
+import { atom, derive, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { FogFile, FogRepo } from '../types'
@@ -15,6 +15,7 @@ import {
   milestoneOf,
   rowsOf,
   statusOf,
+  treeOf,
   warningsOf,
   withEdit,
   withError,
@@ -30,6 +31,9 @@ const focus = atom({ plugin: 'fog-map', key: 'focus' } as const, null as string 
 const importers = atom({ plugin: 'fog-map', key: 'importers' } as const, {} as Record<string, string[]>)
 const areas = atom({ plugin: 'fog-map', key: 'areas' } as const, [] as string[])
 const milestone = atom({ plugin: 'fog-map', key: 'milestone' } as const, 0)
+// Built from the file list once each time it changes, not on every call or every draw.
+const tracked = derive([repo], known => new Set(known?.files ?? []))
+const tree = derive([repo], known => treeOf(known?.files ?? []))
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
 // Commands after which the repository's file list is read again.
@@ -78,7 +82,7 @@ async function mark($: EngineInterface, change: (all: Record<string, FogFile>) =
   if (last !== undefined) await update($, focus, () => last)
 
   const known = await read($, repo)
-  const counts = countsOf(after, known?.files ?? [])
+  const counts = countsOf(after, known?.files ?? [], await read($, tracked))
   const warnings = warningsOf(after, await read($, importers))
   $.ui.status(statusOf(counts, warnings.length, known !== null))
 
@@ -168,7 +172,7 @@ export const register: Register = on => {
   on('command.run', { command: 'map' }, async $ => {
     await $.ui.open({ id: PANE, title: TITLE })
     const known = await read($, repo)
-    const counts = countsOf(await read($, touched), known?.files ?? [])
+    const counts = countsOf(await read($, touched), known?.files ?? [], await read($, tracked))
     return { text: known === null ? `🗺 git リポジトリの外です（編集 ${counts.edited}）` : `🗺 探索率 ${counts.percent}% · ${counts.touched}/${counts.total}` }
   })
 
@@ -176,10 +180,10 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     const known = await read($, repo)
     const all = await read($, touched)
-    const counts = countsOf(all, known?.files ?? [])
+    const counts = countsOf(all, known?.files ?? [], await read($, tracked))
     const warnings = warningsOf(all, await read($, importers))
     const width = Math.max(30, e.props.bodyColumns - 2)
-    const rows = rowsOf(known?.files ?? [], all, await read($, focus), width)
+    const rows = rowsOf(known?.files ?? [], all, await read($, focus), width, await read($, tree))
     const room = Math.max(3, (e.viewport?.rows ?? e.props.scroll.bodyRows ?? 24) - 5 - Math.min(3, warnings.length))
     const color = { error: 'red', new: 'green', edit: 'yellow', 'focus-dir': 'cyan' } as Record<string, string>
 
