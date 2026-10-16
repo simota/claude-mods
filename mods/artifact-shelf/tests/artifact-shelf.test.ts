@@ -147,6 +147,31 @@ describe('artifact-shelf in a session', () => {
     }
   })
 
+  test('a credential in the request is masked before it is kept, and one kept before is masked when shown', async ($, on) => {
+    const w = world(on)
+    on('prompt.submit', ($, e) => ({ text: e.text }))
+    w.store['shelf:/w'] = [{ path: '/w/old.csv', kind: 'data', size: 1, at: 1, tool: 'Write', event: 'Write', purpose: 'export with API_KEY=hunter2secret', sessionId: 's0' }]
+    w.files['/w/old.csv'] = 1
+    await $.session.start(START)
+    await $.prompt.submit({ text: 'export users with GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789', origin: { kind: 'composer' }, wait: false })
+    await $.tool.call({ tool: 'Bash', command: 'pandoc a.md -o out.pdf' })
+    const stored = JSON.stringify(w.store)
+    expect(stored).toContain('GITHUB_TOKEN=***')
+    expect(stored).not.toContain('ghp_abcdefghij')
+    await $.command.run(shelfRun(''))
+    const ui = await $.ui.mount({
+      plugin: 'artifact-shelf',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'artifact-shelf',
+      props: { title: '成果物の棚', isFocused: true, bodyColumns: 160, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    expect(await ui.find({ type: 'Text', text: /hunter2secret/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /API_KEY=\*\*\*/ })).toBeDefined()
+    await ui.unmount()
+    expect((await $.command.run(shelfRun('hunter2secret'))).text).not.toContain('hunter2secret —')
+  })
+
   test('an item overwritten by another session at the same moment is shelved again', async ($, on) => {
     const w = world(on)
     await $.session.start(START)
