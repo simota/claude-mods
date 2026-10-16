@@ -1,6 +1,6 @@
 {
   "name": "loopback",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person, skipping rules hit-rate found mostly wrong; off by default",
   "author": {
     "name": "simota"
