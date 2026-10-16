@@ -11,7 +11,7 @@ export const isTestFile = (path: string, before: string): boolean => TEST_PATH.t
 const ASSERT =
   /(?:^|\W)(?:expect|assert\w*|XCTAssert\w*|XCTFail|should|require\.\w+)\s*[(.]|(?:^|\W)#(?:expect|require)\(|\bassert(?:_eq|_ne)?!\(|\bassert\s+\S|\bt\.(?:Errorf?|Fatalf?|Fail\w*)\(|\.should\b/
 const STRICT =
-  /\.(?:not\.)?(?:toBe|toEqual|toStrictEqual|toHaveBeenCalledWith|toHaveBeenNthCalledWith|toHaveBeenLastCalledWith|toHaveLength|toMatchSnapshot|toMatchInlineSnapshot|toHaveProperty)\(|\.toThrow(?:Error)?\(\s*[^)\s]|\.rejects\.toThrow\(\s*[^)\s]|\bassert(?:Equal|Equals|Is|IsNot|In|NotIn|Raises|RaisesRegex|CountEqual|DictEqual|ListEqual|AlmostEqual)\b|XCTAssert(?:Equal|Identical|ThrowsError)\b|\bassert_(?:eq|ne)!|\bassert\s+[^\n]*(?:==|!=|\bis\b|\bin\b)|\.(?:Equal|Exactly|EqualValues|ErrorIs|ErrorContains)\(/
+  /\.(?:not\.)?(?:toBe|toEqual|toStrictEqual|toHaveBeenCalledWith|toHaveBeenNthCalledWith|toHaveBeenLastCalledWith|toHaveLength|toMatchSnapshot|toMatchInlineSnapshot|toHaveProperty)\(|\.toThrow(?:Error)?\(\s*[^)\s]|\.rejects\.toThrow\(\s*[^)\s]|\bassert(?:Equal|Equals|Is|IsNot|In|NotIn|Raises|RaisesRegex|CountEqual|DictEqual|ListEqual|AlmostEqual)\b|XCTAssert(?:Equal|Identical|ThrowsError)\b|\bassert_(?:eq|ne)!|^assert\s+[^\n]*(?:==|!=|\bis\b|\bin\b)|\.(?:Equal|Exactly|EqualValues|ErrorIs|ErrorContains)\(/
 const WEAK =
   /\.(?:not\.)?(?:toBeTruthy|toBeDefined|toBeFalsy|toHaveBeenCalled|toMatchObject|toContain|toContainEqual|toBeGreaterThan|toBeGreaterThanOrEqual|toBeLessThan|toBeLessThanOrEqual|toBeInstanceOf|toBeCloseTo)\(|\.toThrow(?:Error)?\(\s*\)|\.not\.toBe(?:Null|Undefined|NaN)\(|expect\.(?:anything|any|objectContaining|arrayContaining|stringContaining)\(|\bassert(?:True|False|IsNotNone|IsNone|IsInstance|Greater|Less)\b|XCTAssert(?:True|False|NotNil|Nil)?\(|\bassert!\(|\.(?:NotNil|Nil|NotEmpty|True|False|NoError|Error)\(|\bassert\s+\w+\s*$/
 const SKIP =
@@ -20,9 +20,10 @@ const SKIP =
 // a comment line ends at its line break, `except` is read from the start of its line, and no
 // two quantifiers in a row take the same characters.
 const SWALLOW = [
-  /catch\s*(?:\([^)]*\))?\s*\{\s*(?:\/\/[^\n]*\n\s*)*\}/g,
-  /\.catch\(\s*(?:\(\s*\w*\s*\)|\w+)\s*=>\s*(?:\{\s*\}|undefined|null|void 0|false)\s*\)/g,
-  /^[ \t]*except\b(?:[ \t][^:\n]*)?:[ \t]*(?:#[^\n]*)?\s*(?:pass\b|\.\.\.)/gm,
+  /catch\s*(?:\([^()]*\)\s*)?\{\s*(?:\/\/[^\n]*\n\s*)*\}/g,
+  /\.catch\(\s*(?:\((?:\s*\w+)?\s*\)|\w+)\s*=>\s*(?:\{\s*\}|undefined|null|void 0|false)\s*\)/g,
+  // Comment lines may stand between the clause and its pass; an ellipsis is the clause's whole body, not prose.
+  /^[ \t]*except\b(?:[ \t][^:\n]*)?:(?:\s*#[^\n]*)*\s*(?:pass\b|\.\.\.(?![^\S\n]*\S))/gm,
   /\brescue\b(?:[ \t]+[\w:]+)?(?:[ \t]*=>[ \t]*\w+)?\s*nil\b/g,
   /\bif\s+err\s*!=\s*nil\s*\{\s*\}/g,
   /\b_\s*=\s*err\b/g,
@@ -34,25 +35,69 @@ const isAssertion = (line: string) => !isComment(line) && ASSERT.test(line)
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim()
 export const clip = (text: string, max = 120) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 
+// Files whose languages read 'a' and "a" alike; elsewhere (Rust, Go, C, Java, Kotlin, Swift…) one is a character.
+const QUOTES_ALIKE = /\.(?:[cm]?[jt]sx?|py|rb|php|exs?|lua|dart)$/
+const PUNCTUATION = new Set([',', '(', ')', '[', ']', '{', '}', ':', ';', '='])
+
 /**
- * A line as a formatter leaves its meaning: quote marks alike, no spaces around punctuation,
- * no closing `;` or `,`. Two lines of one shape are the same line.
+ * A line as a formatter leaves its meaning: outside strings no spaces around punctuation, no
+ * closing `;` or `,`; `'…'` and `"…"` alike where the language reads them alike. What is
+ * inside a string, and a template string's backticks, stay as written. One linear pass.
  */
-const shapeOf = (line: string): string =>
-  line
-    .replace(/["'`]/g, "'")
-    .replace(/\s*([,()[\]{}:;=])\s*/g, '$1')
-    .replace(/[;,]+$/, '')
+export function shapeOf(line: string, isQuotesAlike = true): string {
+  // Pieces joined once at the end, the last one held apart: reading back a growing string is quadratic.
+  const out: string[] = []
+  let last = ''
+  let quote: string | undefined
+  let space = false
+  const put = (piece: string) => {
+    out.push(piece)
+    last = piece.at(-1) ?? last
+  }
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i] as string
+    if (quote !== undefined) {
+      if (ch === '\\') {
+        put(line.slice(i, i + 2))
+        i += 1
+      } else if (ch === quote) {
+        put(isQuotesAlike && quote !== '`' ? "'" : quote)
+        quote = undefined
+      } else put(ch)
+      continue
+    }
+    if (/\s/.test(ch)) {
+      space = true
+      continue
+    }
+    if (space && last !== '' && !PUNCTUATION.has(last) && !PUNCTUATION.has(ch)) put(' ')
+    space = false
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch
+      put(isQuotesAlike && ch !== '`' ? "'" : ch)
+    } else put(ch)
+  }
+  const text = out.join('')
+  let end = text.length
+  while (end > 0 && (text[end - 1] === ';' || text[end - 1] === ',')) end -= 1
+  return text.slice(0, end)
+}
 
 /** Lines of `before` not matched by a line of the same shape in `after`, and the other way round, in order. */
-export function lineDiff(before: string, after: string): { removed: string[]; added: string[] } {
+export function lineDiff(before: string, after: string, isQuotesAlike = true): { removed: string[]; added: string[] } {
+  const shapes = new Map<string, string>()
+  const shape = (line: string): string => {
+    let one = shapes.get(line)
+    if (one === undefined) shapes.set(line, (one = shapeOf(line, isQuotesAlike)))
+    return one
+  }
   const lines = (text: string) => (text === '' ? [] : text.split('\n').map(line => line.trim()).filter(line => line !== ''))
   const unmatched = (from: string[], against: string[]): string[] => {
     const left = new Map<string, number>()
-    for (const line of against) left.set(shapeOf(line), (left.get(shapeOf(line)) ?? 0) + 1)
+    for (const line of against) left.set(shape(line), (left.get(shape(line)) ?? 0) + 1)
     return from.filter(line => {
-      const n = left.get(shapeOf(line)) ?? 0
-      if (n > 0) left.set(shapeOf(line), n - 1)
+      const n = left.get(shape(line)) ?? 0
+      if (n > 0) left.set(shape(line), n - 1)
       return n === 0
     })
   }
@@ -81,7 +126,29 @@ export function subjectOf(line: string): string {
 export function matcherOf(line: string): string {
   const chained = line.match(/\.((?:not\.|resolves\.|rejects\.)*to[A-Z]\w*)\(/)
   if (chained?.[1] !== undefined) return chained[1]
-  return line.match(/[#\w.]+!?(?=\s*\()/)?.[0] ?? squash(line).split(' ')[0] ?? ''
+  // The name right before the first `(`, read backwards: a regex from every start would be quadratic.
+  const open = line.indexOf('(')
+  let end = open
+  while (end > 0 && /\s/.test(line[end - 1] as string)) end -= 1
+  let start = end
+  while (start > 0 && /[#\w.!]/.test(line[start - 1] as string)) start -= 1
+  return open > 0 && start < end ? line.slice(start, end) : (squash(line).split(' ')[0] ?? '')
+}
+
+const positive = (matcher: string): string => matcher.replace(/(^|\.)not\./, '$1')
+
+const LITERAL = /^(?:true|false|True|False|None|nil|null|undefined|-?\d+(?:\.\d+)?|'[^'\\]*'|"[^"\\]*")$/
+
+/** Whether an assertion's first argument (the subject, after any `t,` or `self.`) is a bare literal. */
+function isAboutLiteral(line: string): boolean {
+  const open = line.indexOf('(')
+  if (open < 0) {
+    const bare = line.match(/^assert\s+(\S+)\s*$/)
+    return bare?.[1] !== undefined && LITERAL.test(bare[1])
+  }
+  const args = subjectOf(line).slice(open + 1).replace(/\)$/, '').split(',').map(one => one.trim())
+  const first = args[0] === 't' && args.length > 1 ? args[1] : args[0]
+  return first !== undefined && LITERAL.test(first)
 }
 
 function newMatches(pattern: RegExp, before: string, after: string): string[] {
@@ -106,7 +173,7 @@ function newMatches(pattern: RegExp, before: string, after: string): string[] {
 export function inspect(path: string, before: string, after: string): GuardFinding[] {
   const findings: GuardFinding[] = []
   if (isTestFile(path, before)) {
-    const { removed, added } = lineDiff(before, after)
+    const { removed, added } = lineDiff(before, after, QUOTES_ALIKE.test(path))
     const gone = removed.filter(isAssertion)
     const come = added.filter(isAssertion)
     const pairs: [string, string][] = []
@@ -121,8 +188,14 @@ export function inspect(path: string, before: string, after: string): GuardFindi
     while (unpaired.length > 0 && free.length > 0) pairs.push([unpaired.shift() as string, free.shift() as string])
     for (const line of unpaired) findings.push({ kind: 'removed', path, before: clip(line) })
     for (const [old, now] of pairs) {
-      if (STRICT.test(old) && WEAK.test(now) && !STRICT.test(now)) findings.push({ kind: 'loosened', path, before: clip(old), after: clip(now) })
-      else if (matcherOf(old) === matcherOf(now) && subjectOf(old) === subjectOf(now)) findings.push({ kind: 'rewritten', path, before: clip(old), after: clip(now) })
+      const isWeaker = STRICT.test(old) && WEAK.test(now) && !STRICT.test(now)
+      // `expect(true).toBe(true)` in place of `expect(total).toBe(10)` checks nothing.
+      const isLiteral = isAboutLiteral(now) && !isAboutLiteral(old)
+      if (isWeaker || isLiteral) findings.push({ kind: 'loosened', path, before: clip(old), after: clip(now) })
+      else if (positive(matcherOf(old)) === positive(matcherOf(now)) && subjectOf(old) === subjectOf(now)) {
+        // The same matcher, or its opposite (`toBe` → `not.toBe`), on the same subject.
+        findings.push({ kind: 'rewritten', path, before: clip(old), after: clip(now) })
+      }
     }
     for (const line of added) if (!isComment(line) && SKIP.test(line)) findings.push({ kind: 'skipped', path, after: clip(line) })
   }
