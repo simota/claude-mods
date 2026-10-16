@@ -266,6 +266,22 @@ describe('side-effect-ledger in a session', () => {
     expect(kept).not.toContain('zzz999')
   })
 
+  test('past 12 ledgers the store drops one whose undos were all looked at, before one still unchecked', async ($, on) => {
+    const w = world(on)
+    const entry = (repo: string, at: number, undoState: string) => ({ id: `${repo}:${at}`, at, kind: 'push', label: 'git push', source: 'git push', isOk: true, outcome: '', undo: 'x', reversibility: 'easy', undoState, sessionId: 's0' })
+    // Ledgers of 20 other repositories: /r0 is the oldest and still has an unchecked undo; the rest were checked.
+    for (let i = 0; i < 20; i += 1) w.kept[`ledger:/r${i}`] = [entry(`/r${i}`, 100 + i, i === 0 ? 'unchecked' : 'confirmed')]
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+    const ledgers = Object.keys(w.kept).filter(key => key.startsWith('ledger:'))
+    expect(ledgers).toHaveLength(12)
+    expect(ledgers).toContain("ledger:/w")
+    // Still unchecked: kept though oldest. The checked ones least recently written leave first.
+    expect(ledgers).toContain('ledger:/r0')
+    expect(ledgers).toContain('ledger:/r19')
+    expect(ledgers).not.toContain('ledger:/r1')
+  })
+
   test('an entry overwritten by another session at the same moment is written again', async ($, on) => {
     const w = world(on)
     await $.session.start(START)
