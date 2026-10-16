@@ -6,10 +6,29 @@ import { apply, changedLines, guessCommand, isMutable, mutantsOf, scoreLine, spr
 
 const PANE = 'mutation-tap'
 const TITLE = 'ミューテーション'
-const COPY_KEY = 'copy'
+// The store is one file for every session of the user: each copy is kept with when its run last
+// moved, so a session starting removes only copies whose run went quiet, never one running.
+const COPIES_KEY = 'copies'
+// The key an earlier version kept its single copy under.
+const LEGACY_KEY = 'copy'
 const DIR_NAME = 'claude-mutation-tap'
 // Copying a large tree (dependencies included) may take a while.
 const COPY_TIMEOUT_MS = 600_000
+// A live run moves at least this often: the copy and each test run are held to 10 minutes.
+const QUIET_MS = 30 * 60_000
+
+type Copies = Record<string, { at: number }>
+
+const copiesOf = async ($: EngineInterface): Promise<Copies> => {
+  const value = await $.store.get(COPIES_KEY)
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Copies) : {}
+}
+
+/** Marks a copy as in use now (or forgets it): read and written afresh, so other sessions' copies stay. */
+async function mark($: EngineInterface, dir: string, isGone = false): Promise<void> {
+  const { [dir]: _, ...others } = await copiesOf($)
+  await $.store.set(COPIES_KEY, isGone ? others : { ...others, [dir]: { at: await $.clock.now() } })
+}
 
 const run = atom({ plugin: 'mutation-tap', key: 'run' } as const, null as MutationRun | null)
 const isStopping = atom({ plugin: 'mutation-tap', key: 'isStopping' } as const, false)
@@ -32,8 +51,8 @@ async function makeCopy($: EngineInterface, root: string): Promise<string | unde
   const base = ((await $.env.get('TMPDIR')) || `${(await $.env.get('HOME')) ?? ''}/.cache`).replace(/\/+$/, '')
   if (base === '' || base === '/.cache') return undefined
   const dir = `${base}/${DIR_NAME}/${await $.clock.now()}`
-  // Kept first, so a reload or a crash mid-copy still removes it at the next start.
-  await $.store.set(COPY_KEY, dir)
+  // Kept first, so a reload or a crash mid-copy still removes it at a later start.
+  await mark($, dir)
   const made = await $.process
     .run(
       [
@@ -47,7 +66,10 @@ async function makeCopy($: EngineInterface, root: string): Promise<string | unde
       { timeoutMs: COPY_TIMEOUT_MS },
     )
     .catch(() => undefined)
-  if (made?.exitCode === 0) return dir
+  if (made?.exitCode === 0) {
+    await mark($, dir)
+    return dir
+  }
   await removeCopy($, dir)
   return undefined
 }
@@ -55,7 +77,7 @@ async function makeCopy($: EngineInterface, root: string): Promise<string | unde
 /** Removes a copy this module made: only a folder under its own name, found again from the store. */
 async function removeCopy($: EngineInterface, dir: string): Promise<void> {
   if (dir.includes(`/${DIR_NAME}/`) && !dir.includes('..')) await $.process.run(['rm', '-rf', '--', dir], { timeoutMs: 120_000 }).catch(() => undefined)
-  await $.store.delete(COPY_KEY)
+  await mark($, dir, true)
 }
 
 async function testCommand($: EngineInterface, root: string, given: string): Promise<string | undefined> {
@@ -123,17 +145,22 @@ async function mutateAll($: EngineInterface, options: Options, given: string): P
         return
       }
       const file = `${copy}/${mutant.path}`
+      await mark($, copy)
       const original = await $.fs.read(file).then(String).catch(() => undefined)
       const mutated = original === undefined ? undefined : apply(original, mutant)
       let outcome: Mutant['outcome'] = 'skipped'
       if (original !== undefined && mutated !== undefined) {
         await $.fs.write(file, mutated)
+        let isThere = true
         try {
           const result = await runTests($, copy, command, options.timeoutMs)
+          // Tests fail in a copy taken away from under them: that is no mutant caught.
+          isThere = (await $.fs.read(file).then(String).catch(() => undefined)) === mutated
           outcome = result === 'pass' ? 'survived' : result === 'fail' ? 'killed' : 'timeout'
         } finally {
-          await $.fs.write(file, original)
+          if (isThere) await $.fs.write(file, original)
         }
+        if (!isThere) return void (await fail('実行中にリポジトリの複製が消えました（別の処理が削除した可能性）。結果は数えていません', command))
       }
       const done = await patch($, old => ({ ...old, ran: index + 1, mutants: old.mutants.map((one, i) => (i === index ? { ...one, outcome } : one)), note: undefined }))
       const t = tallyOf(done?.mutants ?? [])
@@ -164,9 +191,15 @@ export const register: Register = (on, options) => {
       argumentHint: '[テストコマンド | show | stop]',
     })
     const started = await next(e)
-    // A copy left behind by a run cut short (a reload, a crash) is removed.
-    const left = await $.store.get(COPY_KEY)
-    if (typeof left === 'string') await removeCopy($, left)
+    // A copy left behind by a run cut short (a reload, a crash) is removed once its run went
+    // quiet; one another session is running in is left alone.
+    const now = await $.clock.now()
+    for (const [dir, { at }] of Object.entries(await copiesOf($))) if (now - at > QUIET_MS) await removeCopy($, dir)
+    const legacy = await $.store.get(LEGACY_KEY)
+    if (typeof legacy === 'string') {
+      if (legacy.includes(`/${DIR_NAME}/`) && !legacy.includes('..')) await $.process.run(['rm', '-rf', '--', legacy], { timeoutMs: 120_000 }).catch(() => undefined)
+      await $.store.delete(LEGACY_KEY)
+    }
     const last = await read($, run)
     if (last?.status === 'running') await patch($, old => ({ ...old, status: 'stopped', note: '再読み込みで中断されました' }))
     return started

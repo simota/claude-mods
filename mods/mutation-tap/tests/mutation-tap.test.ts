@@ -67,6 +67,7 @@ type World = {
   files: Record<string, string>
   runs: { cwd: string; source: string; tree: string }[]
   toasts: string[]
+  onRun?: (n: number) => void
   clock: ReturnType<typeof mock.clock>
   editDuring?: (text: string) => string
 }
@@ -117,6 +118,7 @@ function world(on: On, store: Record<string, unknown> = {}): World {
     const cwd = e.init?.cwd ?? ''
     const source = w.files[`${cwd}/src/max.ts`] ?? ''
     w.runs.push({ cwd, source, tree: w.files[`${ROOT}/src/max.ts`] ?? '' })
+    w.onRun?.(w.runs.length)
     if (w.editDuring !== undefined && w.runs.length === 2) w.files[`${ROOT}/src/max.ts`] = w.editDuring(w.files[`${ROOT}/src/max.ts`] ?? '')
     return ok('', /return a >=? b \? a : b [-+] 0$/.test(source.split('\n')[1] ?? '') ? 0 : 1)
   })
@@ -163,6 +165,36 @@ describe('mutation-tap in a session', () => {
     await w.clock.settle()
     expect(w.files[`${ROOT}/src/max.ts`]).toBe(`// edited meanwhile\n${SOURCE}`)
     expect(w.runs.slice(1).every(one => !one.source.startsWith('// edited'))).toBe(true)
+  })
+
+  test('a copy another session is running in is left alone; one gone quiet is removed', async ($, on) => {
+    // The store is one file for every session of the user: another session's run is live in 500.
+    const w = world(on, { copies: { '/t/claude-mutation-tap/500': { at: 1_000 }, '/t/claude-mutation-tap/400': { at: 1_000 - 31 * 60_000 } } })
+    w.files['/t/claude-mutation-tap/500/src/max.ts'] = SOURCE
+    w.files['/t/claude-mutation-tap/400/src/max.ts'] = SOURCE
+    await $.session.start(START)
+    expect(copies(w)).toEqual(['/t/claude-mutation-tap/500/src/max.ts'])
+  })
+
+  test('a run whose copy is taken away fails, rather than counting its mutants as caught', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    w.onRun = n => {
+      if (n === 2) for (const path of copies(w)) delete w.files[path]
+    }
+    await $.command.run(run(''))
+    await w.clock.settle()
+    const ui = await $.ui.mount({
+      plugin: 'mutation-tap',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'mutation-tap',
+      props: { title: 'ミューテーション', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+    })
+    expect(await ui.find({ type: 'Text', text: /実行できませんでした/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /複製が消えました/ })).toBeDefined()
+    await ui.unmount()
+    expect(w.toasts.join('\n')).not.toContain('すべての改変をテストが検出')
   })
 
   test('removes a copy a run cut short left behind', async ($, on) => {
