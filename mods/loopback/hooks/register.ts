@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { LoopbackLast, LoopbackPending } from '../types'
-import { addOutcome, collect, contextOf, fresh, fromStore, gate, rateLine, settle, summaryOf } from './findings'
+import { addOutcome, collect, contextOf, fresh, fromStore, gate, rateLine, settle, summaryOf, UNVERIFIED } from './findings'
 
 const STORE_KEY = 'outcomes'
 
@@ -94,6 +94,22 @@ export const register: Register = (on, options) => {
     }
     return ran
   }).catch(($, e, next) => next(e))
+
+  // done-gate takes its flag down when a check passes and raises it again at the end of a turn
+  // with new edits unverified, both possibly between two prompts. Seen down after any tool call,
+  // the episode fed is over, so the next one is fed again rather than taken for the same.
+  on('tool.call', async ($, e, next) => {
+    const ran = await next(e)
+    if (!isEnabled) return ran
+    try {
+      if ((await read($, fed)).includes(UNVERIFIED) && (await $.state.get(unverified)).value !== true) {
+        await update($, fed, keys => keys.filter(key => key !== UNVERIFIED))
+      }
+    } catch (err) {
+      $.ui.log(`loopback: ${String(err)}`, { to: 'debug' })
+    }
+    return ran
+  })
 
   on('command.run', { command: 'loopback' }, async $ => {
     const shown = await read($, last)
