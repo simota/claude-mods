@@ -110,6 +110,8 @@ describe('helpers', () => {
     expect(summarize({ action: 'form_input', ref: 'ref_3', value: 'p@ss w0rd' })).toBe('form_input ‹9文字›')
     // Characters as a reader counts them, emoji and flags included.
     expect(summarize({ action: 'type', text: '👩‍💻🇯🇵a' })).toBe('type ‹3文字›')
+    // A key action's text names keys, not what was typed: it stays readable.
+    expect(summarize({ action: 'key', text: 'ctrl+a' })).toBe('key "ctrl+a"')
   })
 
   test('a URL is shown with its secrets masked, in the action and on the page line', () => {

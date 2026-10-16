@@ -68,7 +68,9 @@ export function summarize(input: Record<string, unknown>): string {
   if (typeof input.url === 'string') parts.push(clip(maskedOf(input.url), 60))
   for (const field of ['text', 'value']) {
     const value = input[field]
-    if (typeof value === 'string' && value !== '') parts.push(`‹${graphemes(value).length}文字›`)
+    if (typeof value !== 'string' || value === '') continue
+    // A key action's text names keys (`ctrl+a`, `Enter`), not what was typed.
+    parts.push(field === 'text' && input.action === 'key' ? `"${clip(value, 30)}"` : `‹${graphemes(value).length}文字›`)
   }
   if (typeof input.query === 'string' && input.query !== '') parts.push(`"${clip(maskedOf(input.query), 30)}"`)
   return parts.join(' ')
