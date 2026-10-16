@@ -27,26 +27,37 @@ export const OPTION_HOTKEYS = ['a', 'b', 'd'] as const
 
 const DROP_REASON = 'prompt-coach: 依頼が曖昧なため送信を保留しました（入力欄の上の案内を参照）'
 
-/** Takes the held prompt down and hands back its text. */
-const release = async ($: EngineInterface): Promise<string | undefined> => {
-  const prompt = await read($, held)
-  await update($, held, () => null)
-  return prompt?.text
+/**
+ * Takes the held prompt down and hands it back, taken inside the write: of two takers at once
+ * (two presses, a press and a new prompt), only one gets it.
+ */
+const take = async ($: EngineInterface): Promise<PromptCoachHeld | null> => {
+  let taken: PromptCoachHeld | null = null
+  await update($, held, prompt => {
+    taken = prompt
+    return null
+  })
+  // Assigned inside the callback, which narrowing does not follow.
+  return taken as PromptCoachHeld | null
+}
+
+/** Holds a taken prompt again, unless another has been held since: then its words are only shown. */
+const holdAgain = async ($: EngineInterface, prompt: PromptCoachHeld): Promise<void> => {
+  await update($, held, now => now ?? prompt)
+  $.ui.toast(`prompt-coach: 入力欄へ戻せませんでした。保留中の依頼: ${prompt.text}`)
 }
 
 /**
  * Hands the held prompt to `act` (send it, or put words in the box). The hold emptied the box, so
- * the held text is the only copy: when `act` throws or the box could not be filled, it is held
- * again, band and all, and its words are shown, so the person never loses what they typed.
+ * the held text is the only copy: when `act` throws, is dropped beneath, or the box could not be
+ * filled, it is held again, band and all, and its words are shown, so the person never loses what
+ * they typed.
  */
 const handOver = async ($: EngineInterface, act: (text: string) => Promise<boolean>): Promise<void> => {
-  const prompt = await read($, held)
+  const prompt = await take($)
   if (prompt === null) return
-  await update($, held, () => null)
   const isDone = await act(prompt.text).catch(() => false)
-  if (isDone) return
-  await update($, held, () => prompt)
-  $.ui.toast(`prompt-coach: 入力欄へ戻せませんでした。保留中の依頼: ${prompt.text}`)
+  if (!isDone) await holdAgain($, prompt)
 }
 
 export const register: Register = (on, options) => {
@@ -64,9 +75,17 @@ export const register: Register = (on, options) => {
     // A new prompt while one is held: send the new one, and put the held words back in
     // the box rather than drop them (the drop had emptied the box).
     // What was sent may be the held text itself, recalled from history: then nothing goes back.
-    const before = await release($)
-    if (before !== undefined) {
-      const ran = await next(e)
+    const taken = await take($)
+    if (taken !== null) {
+      let ran: Awaited<ReturnType<typeof next>>
+      try {
+        ran = await next(e)
+      } catch (err) {
+        // The new prompt did not go: the held one stays held.
+        await update($, held, now => now ?? taken)
+        throw err
+      }
+      const before = taken.text
       if (shouldRestore(e.text, before)) {
         // The prompt has entered: nothing here may throw into the .catch below, and the held words are shown if they cannot go back.
         const filled = await $.prompt.fill({ text: before, mode: 'insert' }).catch(() => ({ isFilled: false }))
@@ -93,29 +112,33 @@ export const register: Register = (on, options) => {
     return { drop: DROP_REASON }
   }).catch(($, e, next) => next(e)) // Fail open: a coach never loses a prompt.
 
+  // A prompt still held when the session ends (quit, /clear) is shown, not lost with the session.
+  on('session.end', async ($, e, next) => {
+    const prompt = await take($).catch(() => null)
+    if (prompt !== null) $.ui.toast(`prompt-coach: 保留していた依頼（送信されていません）: ${prompt.text}`)
+    return next(e)
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const prompt = await read($, held)
     if (e.props.hasSurvey || prompt === null) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const sendAsIs = () =>
-      handOver($, async text => {
-        await $.prompt.submit({ text, asUser: true })
-        return true
-      })
+    // Sent only when it entered: a hook beneath that drops the resend leaves it held.
+    const sendAsIs = () => handOver($, async text => (await $.prompt.submit({ text, asUser: true })).drop === undefined)
     const addCondition = () =>
       handOver($, async text => {
         // What comes back completed is the person's answer to the coach: never held again.
         await update($, followUps, list => remember(list, text))
-        return (await $.prompt.fill({ text: `${text}${FOLLOW_UP}`, mode: 'replace' })).isFilled
+        return (await $.prompt.fill({ text: `${text}${FOLLOW_UP}`, mode: 'insert' })).isFilled
       })
     // A guess goes into the box to edit and send, and is not held again once sent.
     const choose = (option: string) => () =>
       handOver($, async () => {
         await update($, followUps, list => remember(list, option))
-        return (await $.prompt.fill({ text: option, mode: 'replace' })).isFilled
+        return (await $.prompt.fill({ text: option, mode: 'insert' })).isFilled
       })
-    const dismiss = () => handOver($, async text => (await $.prompt.fill({ text, mode: 'replace' })).isFilled)
+    const dismiss = () => handOver($, async text => (await $.prompt.fill({ text, mode: 'insert' })).isFilled)
 
     const mine = (
       <Box key="prompt-coach" flexDirection="column">
