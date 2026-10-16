@@ -21,8 +21,55 @@ export function refsOf(text: string): Record<string, { role?: string; name?: str
   return out
 }
 
-/** The steps one browser call makes, read from its input. */
-export function stepsOf(tool: string, input: Record<string, unknown>, refs: Readonly<Record<string, { role?: string; name?: string }>>, url: string, at: number): JourneyStep[] {
+// A field that takes a secret, by the name the page gave it.
+const SECRET_FIELD = /pass(?:word|code|phrase)?|パスワード|暗証|secret|token|otp\b|one[- ]?time|ワンタイム|\bpin\b|cvv|cvc|security code|セキュリティコード|api[ _-]?key|認証コード|確認コード/i
+// Text shaped like a credential wherever it is typed.
+const SECRET_SHAPE = /\b(?:sk-(?:ant-)?[\w-]{16,}|gh[pousr]_[A-Za-z0-9]{10,}|github_pat_\w{10,}|xox[abprs]-[\w-]{8,}|AKIA[0-9A-Z]{16}|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}|AIza[\w-]{35})|(?<![\w-])eyJ[\w-]{8,}\.eyJ[\w-]{8,}\./
+// Query parameters that carry a secret: an OAuth code, a token, a signature.
+const SECRET_PARAM = /^(?:.*(?:token|secret|password|passwd|signature|api[_-]?key|session|otp)|code|sig|key|auth|state)$/i
+
+export const SECRET = '***'
+
+/** A URL as kept: credentials in its user part and secret query parameters masked. */
+export function maskedUrl(url: string): string {
+  const [head = '', ...rest] = url.split('?')
+  const base = head.replace(/^(\w[\w+.-]*:\/\/[^/@\s:]+):[^/@\s]+@/, `$1:${SECRET}@`)
+  if (rest.length === 0) return base
+  const [query = '', ...hash] = rest.join('?').split('#')
+  const masked = query
+    .split('&')
+    .map(pair => {
+      const at = pair.indexOf('=')
+      return at > 0 && SECRET_PARAM.test(decodeURIComponentSafe(pair.slice(0, at))) ? `${pair.slice(0, at)}=${SECRET}` : pair
+    })
+    .join('&')
+  return `${base}?${masked}${hash.length > 0 ? `#${hash.join('#')}` : ''}`
+}
+
+function decodeURIComponentSafe(text: string): string {
+  try {
+    return decodeURIComponent(text)
+  } catch {
+    return text
+  }
+}
+
+const isSecretTarget = (t: JourneyTarget | undefined) => t?.name !== undefined && SECRET_FIELD.test(t.name)
+
+/**
+ * The steps one browser call makes, read from its input. A value filled into a field named as a
+ * secret, text typed while one has the focus (`focus`: the element last clicked or filled), and
+ * text shaped like a credential are kept as `***`: the journey is copied out as a report or a test.
+ */
+export function stepsOf(
+  tool: string,
+  input: Record<string, unknown>,
+  refs: Readonly<Record<string, { role?: string; name?: string }>>,
+  url: string,
+  at: number,
+  focus?: JourneyTarget,
+): JourneyStep[] {
+  url = maskedUrl(url)
   const str = (key: string) => (typeof input[key] === 'string' ? (input[key] as string) : undefined)
   const target = (): JourneyTarget => {
     const ref = str('ref')
@@ -42,9 +89,15 @@ export function stepsOf(tool: string, input: Record<string, unknown>, refs: Read
     // navigation's answer); failing that, a local host is http and anything else https.
     const isLocal = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[\w.-]+\.(?:localhost|local|test))(?::\d+)?(?:\/|$)/.test(to)
     const landed = /^https?:\/\//.test(url) && url.replace(/^https?:\/\//, '').startsWith(to.replace(/\/+$/, '')) ? url : undefined
-    return [{ kind: 'goto', url: /^https?:\/\//.test(to) ? to : (landed ?? `${isLocal ? 'http' : 'https'}://${to}`), at }]
+    return [{ kind: 'goto', url: maskedUrl(/^https?:\/\//.test(to) ? to : (landed ?? `${isLocal ? 'http' : 'https'}://${to}`)), at }]
   }
-  if (tool === 'form_input') return [{ kind: 'fill', target: target(), value: String(input.value ?? ''), url, at }]
+  if (tool === 'form_input') {
+    const value = String(input.value ?? '')
+    const where = target()
+    return isSecretTarget(where) || SECRET_SHAPE.test(value)
+      ? [{ kind: 'fill', target: where, value: SECRET, url, at, isSecret: true }]
+      : [{ kind: 'fill', target: where, value, url, at }]
+  }
   if (tool !== 'computer') return []
   switch (str('action')) {
     case 'left_click':
@@ -55,7 +108,10 @@ export function stepsOf(tool: string, input: Record<string, unknown>, refs: Read
     case 'triple_click':
       return [{ kind: 'click', target: target(), button: 'double', url, at }]
     case 'type':
-      return str('text') === undefined ? [] : [{ kind: 'type', text: str('text') as string, url, at }]
+      if (str('text') === undefined) return []
+      return isSecretTarget(focus) || SECRET_SHAPE.test(str('text') as string)
+        ? [{ kind: 'type', text: SECRET, url, at, isSecret: true }]
+        : [{ kind: 'type', text: str('text') as string, url, at }]
     case 'key':
       return str('text') === undefined ? [] : [{ kind: 'key', key: str('text') as string, url, at }]
     case 'scroll':
@@ -82,11 +138,11 @@ export function stepText(step: JourneyStep): string {
     case 'click':
       return `${describeTarget(step.target)}を${step.button === 'right' ? '右クリック' : step.button === 'double' ? 'ダブルクリック' : 'クリック'}`
     case 'type':
-      return `「${step.text}」と入力`
+      return step.isSecret === true ? '秘密の値を入力（記録していません）' : `「${step.text}」と入力`
     case 'key':
       return `${KEY_JA[step.key] ?? step.key} キーを押す`
     case 'fill':
-      return `${describeTarget(step.target)}に「${step.value}」を入力`
+      return step.isSecret === true ? `${describeTarget(step.target)}に秘密の値を入力（記録していません）` : `${describeTarget(step.target)}に「${step.value}」を入力`
     case 'scroll':
       return `${step.direction === 'up' ? '上' : step.direction === 'left' ? '左' : step.direction === 'right' ? '右' : '下'}へスクロール`
     case 'expect':
@@ -133,6 +189,9 @@ const pwKey = (key: string) => key.split('+').map(part => PW_KEY[part] ?? PW_KEY
 /** The journey as a Playwright test: what it could not pin to an element is a TODO. */
 export function playwrightOf(j: Journey): string {
   const lines: string[] = []
+  // A secret was never kept: the test reads each from the environment.
+  let secrets = 0
+  const secret = () => `process.env.JOURNEY_SECRET_${(secrets += 1)} ?? ''`
   if (j.viewport !== undefined) lines.push(`  await page.setViewportSize({ width: ${j.viewport.width}, height: ${j.viewport.height} })`)
   for (const step of j.steps) {
     switch (step.kind) {
@@ -150,14 +209,15 @@ export function playwrightOf(j: Journey): string {
         break
       }
       case 'type':
-        lines.push(`  await page.keyboard.type(${q(step.text)})`)
+        lines.push(step.isSecret === true ? `  await page.keyboard.type(${secret()}) // 秘密の値: 環境変数で渡す` : `  await page.keyboard.type(${q(step.text)})`)
         break
       case 'key':
         lines.push(`  await page.keyboard.press(${q(pwKey(step.key))})`)
         break
       case 'fill': {
         const where = locator(step.target)
-        lines.push(where === undefined ? `  // TODO: ${step.target.ref ?? '入力欄'} に ${q(step.value)} を入れる` : `  await ${where}.fill(${q(step.value)})`)
+        const value = step.isSecret === true ? secret() : q(step.value)
+        lines.push(where === undefined ? `  // TODO: ${step.target.ref ?? '入力欄'} に ${value} を入れる` : `  await ${where}.fill(${value})${step.isSecret === true ? ' // 秘密の値: 環境変数で渡す' : ''}`)
         break
       }
       case 'scroll':

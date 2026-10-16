@@ -80,7 +80,9 @@ export const register: Register = on => {
     if (!j.isRecording) return ran
     const at = await $.clock.now()
     const page = await read($, url)
-    const steps = stepsOf(name, input, await read($, refs), page, at)
+    // The element last clicked or filled has the focus: text typed next goes into it.
+    const focus = [...j.steps].reverse().find(one => one.kind === 'click' || one.kind === 'fill')
+    const steps = stepsOf(name, input, await read($, refs), page, at, focus?.kind === 'click' || focus?.kind === 'fill' ? focus.target : undefined)
     if (steps.length > 0) await update($, journey, old => ({ ...old, steps: [...old.steps, ...steps].slice(-KEEP_STEPS) }))
     return ran
   }).catch(($, e, next) => next(e)) // an observer: a failure here never changes the call

@@ -1,6 +1,6 @@
 {
   "name": "journey-trace",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Records what Claude does in the browser (pages opened, clicks, typing, keys, form fills) and the states expected along the way as a recipe to replay; /journey turns it into a bug report's steps in Markdown or a Playwright test draft",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"
