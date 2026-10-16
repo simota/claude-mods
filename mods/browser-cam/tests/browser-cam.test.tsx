@@ -100,9 +100,23 @@ describe('helpers', () => {
   test('summarizes the key input of a call, cutting between code points', () => {
     expect(summarize({ action: 'left_click', coordinate: [512, 300] })).toBe('left_click (512,300)')
     expect(summarize({ url: 'https://example.com/a' })).toBe('https://example.com/a')
-    expect(summarize({ action: 'type', text: 'hello   world' })).toBe('type "hello world"')
+    expect(summarize({ action: 'find', query: 'login   button' })).toBe('find "login button"')
     // 30 code points at most: 29 emoji and the ellipsis, no half of a surrogate pair.
-    expect(summarize({ text: '😀'.repeat(40) })).toBe(`"${'😀'.repeat(29)}…"`)
+    expect(summarize({ query: '😀'.repeat(40) })).toBe(`"${'😀'.repeat(29)}…"`)
+  })
+
+  test('typed or filled text is shown as its length only: the field may be a password', () => {
+    expect(summarize({ action: 'type', text: 'hunter2' })).toBe('type ‹7文字›')
+    expect(summarize({ action: 'form_input', ref: 'ref_3', value: 'p@ss w0rd' })).toBe('form_input ‹9文字›')
+    // Characters as a reader counts them, emoji and flags included.
+    expect(summarize({ action: 'type', text: '👩‍💻🇯🇵a' })).toBe('type ‹3文字›')
+  })
+
+  test('a URL is shown with its secrets masked, in the action and on the page line', () => {
+    const summary = summarize({ url: 'https://app.example/cb?access_token=abcdef123456&x=1' })
+    expect(summary).not.toContain('abcdef123456')
+    expect(summary).toContain('access_token=***')
+    expect(nextPage({}, { url: 'https://me:hunter2@app.example/' }).url).not.toContain('hunter2')
   })
 
   test('knows the browser tools, the remote one included', () => {
@@ -157,8 +171,8 @@ describe('helpers', () => {
 
   test('the summary is cut between whole characters, ZWJ emoji and flags included', () => {
     // 👩‍💻 is three code points and 🇯🇵 two: one character each, 29 of them before the ellipsis.
-    expect(summarize({ text: '👩‍💻'.repeat(40) })).toBe(`"${'👩‍💻'.repeat(29)}…"`)
-    expect(summarize({ text: '🇯🇵'.repeat(40) })).toBe(`"${'🇯🇵'.repeat(29)}…"`)
+    expect(summarize({ query: '👩‍💻'.repeat(40) })).toBe(`"${'👩‍💻'.repeat(29)}…"`)
+    expect(summarize({ query: '🇯🇵'.repeat(40) })).toBe(`"${'🇯🇵'.repeat(29)}…"`)
     expect(graphemesFallback('a👩‍💻🇯🇵🇺🇸1️⃣é')).toEqual(['a', '👩‍💻', '🇯🇵', '🇺🇸', '1️⃣', 'é'])
   })
 

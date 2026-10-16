@@ -149,7 +149,7 @@ Off by default. When on, the skill listing is trimmed to what the project kind n
 
 ### browser-cam
 
-- While Claude drives a browser (Claude in Chrome, Claude Browser, or a remote device's browser), a pane shows the latest screenshot, the page title and URL, and the last 8 actions with ✓/✗. The URL comes only from the navigate call or the tab tools' own header, never from page text.
+- While Claude drives a browser (Claude in Chrome, Claude Browser, or a remote device's browser), a pane shows the latest screenshot, the page title and URL, and the last 8 actions with ✓/✗. The URL comes only from the navigate call or the tab tools' own header, never from page text. Text typed or filled in is shown as its length only (`type ‹7文字›`), since the field may be a password; a URL's secrets (token parameters, userinfo, key-shaped parts) are masked.
 - `/cam` toggles the pane; in a fullscreen terminal it opens by itself once per session, on the first browser call. Screenshots are decoded only while the pane is open, and written to a private per-session folder that is removed at session end. A killed session's folder is removed by a later session's start once a day untouched; a running session touches its own every hour (again after a plugin reload), so it is kept while idle, though not across a day the machine sleeps.
 - The desktop app shows the title and URL, a caption and the actions, without the picture.
 

@@ -1,5 +1,7 @@
 // Pure helpers: reading a browser tool's call and result, sizing the picture in cells.
 
+import { maskedOf } from './mask'
+
 // Claude in Chrome, the desktop app's browser, and that browser reached from a cloud session.
 export const BROWSER_TOOL = /^mcp__(?:remote-devices__)?(?:claude-in-chrome|Claude_Browser)__/
 
@@ -53,17 +55,22 @@ export function clip(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1).join('')}…` : flat.join('')
 }
 
-/** The call's key input in one short line: action, coordinate, url, text or query. */
+/**
+ * The call's key input in one short line: action, coordinate, url, typed text or query.
+ * Text typed or filled in is shown as its length only: the pane cannot tell a password field,
+ * and the screenshot beside it shows such a field as dots. A URL's secrets are masked.
+ */
 export function summarize(input: Record<string, unknown>): string {
   const parts: string[] = []
   if (typeof input.action === 'string') parts.push(input.action)
   const at = input.coordinate
   if (Array.isArray(at) && at.length === 2 && at.every(n => typeof n === 'number')) parts.push(`(${at[0]},${at[1]})`)
-  if (typeof input.url === 'string') parts.push(clip(input.url, 60))
-  for (const field of ['text', 'query', 'value']) {
+  if (typeof input.url === 'string') parts.push(clip(maskedOf(input.url), 60))
+  for (const field of ['text', 'value']) {
     const value = input[field]
-    if (typeof value === 'string' && value !== '') parts.push(`"${clip(value, 30)}"`)
+    if (typeof value === 'string' && value !== '') parts.push(`‹${graphemes(value).length}文字›`)
   }
+  if (typeof input.query === 'string' && input.query !== '') parts.push(`"${clip(maskedOf(input.query), 30)}"`)
   return parts.join(' ')
 }
 
@@ -177,7 +184,9 @@ export function pageFrom(tool: string, input: Record<string, unknown>, text: str
 }
 
 /** The page as it stands after a call: a new address drops the old address's title. */
-export function nextPage(old: { url?: string; title?: string }, seen: { url?: string; title?: string }): { url?: string; title?: string } {
+export function nextPage(old: { url?: string; title?: string }, shown: { url?: string; title?: string }): { url?: string; title?: string } {
+  // The page line is kept and drawn masked: a callback's token or a URL's userinfo stays out.
+  const seen = shown.url === undefined ? shown : { ...shown, url: maskedOf(shown.url) }
   if (seen.url !== undefined && seen.url !== old.url) return { url: seen.url, ...(seen.title !== undefined ? { title: seen.title } : {}) }
   return { ...old, ...(seen.title !== undefined ? { title: seen.title } : {}) }
 }

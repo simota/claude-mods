@@ -1,6 +1,6 @@
 {
   "name": "browser-cam",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",
