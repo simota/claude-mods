@@ -16,6 +16,14 @@ const DIR_NAME = 'claude-mutation-tap'
 const COPY_TIMEOUT_MS = 600_000
 // A live run moves at least this often: the copy and each test run are held to 10 minutes.
 const QUIET_MS = 30 * 60_000
+// An earlier version's copy carries only when it was made, never when its run last moved.
+const LEGACY_MS = 3 * 60 * 60_000
+// What is read of files not yet added: a scratch script or a bundle never ignored is no reason to wait.
+const MAX_NEW_FILES = 20
+const MAX_NEW_BYTES = 200_000
+// A line as kept for the pane: a minified one would otherwise ride whole, twice per mutant, in state.
+const SHOWN = 300
+const shown = (one: Mutant): Mutant => ({ ...one, original: one.original.slice(0, SHOWN), mutated: one.mutated.slice(0, SHOWN) })
 // Written at the copy's root once it is whole; a copy being removed loses it first (the folder is
 // moved aside in one step before it is deleted), so its absence says the copy is no longer whole.
 const SENTINEL = '.claude-mutation-tap'
@@ -124,7 +132,10 @@ async function mutateAll($: EngineInterface, options: Options, given: string): P
   if (diff === undefined || diff.exitCode !== 0) return void (await fail('git diff を取れませんでした（git リポジトリの外？）'))
   // A new file not yet added is changed whole: an empty list stands for every line.
   const untracked = await sh($, root, ['git', 'ls-files', '--others', '--exclude-standard', '-z'])
-  const added: [string, number[]][] = (untracked?.exitCode === 0 ? untracked.stdout.split('\0') : []).filter(path => path !== '').map(path => [path, []])
+  const added: [string, number[]][] = (untracked?.exitCode === 0 ? untracked.stdout.split('\0') : [])
+    .filter(path => path !== '' && isMutable(path))
+    .slice(0, MAX_NEW_FILES)
+    .map(path => [path, []])
   const changed = [...changedLines(diff.stdout), ...added].filter(([path]) => isMutable(path))
   if (changed.length === 0) return void (await fail('HEAD からの変更行に、改変できるソースの行がありません（テストファイル・コメント・import は対象外）'))
 
@@ -145,14 +156,14 @@ async function mutateAll($: EngineInterface, options: Options, given: string): P
     const byLine: Mutant[][] = []
     for (const [path, lines] of changed) {
       const text = await $.fs.read(`${copy}/${path}`).then(String).catch(() => undefined)
-      if (text === undefined) continue
+      if (text === undefined || (lines.length === 0 && text.length > MAX_NEW_BYTES)) continue
       const all = text.split('\n')
       for (const n of lines.length > 0 ? lines : all.map((_, i) => i + 1)) byLine.push(mutantsOf(path, n, all[n - 1] ?? ''))
     }
     const mutants = spread(byLine.filter(list => list.length > 0), options.max)
     if (mutants.length === 0) return void (await fail('HEAD からの変更行に、改変できるソースの行がありません（テストファイル・コメント・import は対象外）', command))
 
-    await patch($, old => ({ ...old, mutants, note: '変更前のテストを実行中' }))
+    await patch($, old => ({ ...old, mutants: mutants.map(shown), note: '変更前のテストを実行中' }))
     $.ui.status('🧬 ベースライン実行中')
     const baseline = await runTests($, copy, command, options.timeoutMs)
     if (baseline !== 'pass') {
@@ -230,8 +241,8 @@ export const register: Register = (on, options) => {
     if (typeof legacy === 'string') {
       const made = Number(legacy.match(/\/(\d+)$/)?.[1] ?? 0)
       if (legacy.includes(`/${DIR_NAME}/`) && !legacy.includes('..')) {
-        if (now - made > QUIET_MS) await removeTree($, legacy)
-        else await $.store.set(COPIES_KEY, { ...(await copiesOf($)), [legacy]: { at: made } })
+        if (now - made > LEGACY_MS) await removeTree($, legacy)
+        else await $.store.set(COPIES_KEY, { ...(await copiesOf($)), [legacy]: { at: made + LEGACY_MS - QUIET_MS } })
       }
       await $.store.delete(LEGACY_KEY)
     }

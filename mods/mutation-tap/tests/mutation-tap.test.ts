@@ -277,6 +277,22 @@ describe('mutation-tap in a session', () => {
     await ui.unmount()
   })
 
+  test('a minified line is kept for the pane clipped, and still mutated whole', async ($, on) => {
+    const w = world(on)
+    const long = `  return a > b ? a : b - 0 ${'/* x */'.repeat(2_000)}`
+    w.files[`${ROOT}/src/max.ts`] = ['export function max(a: number, b: number) {', long, '}'].join('\n')
+    w.isAllPass = true
+    await $.session.start(START)
+    await $.command.run(run(''))
+    await w.clock.settle()
+    const ui = await pane($)
+    const row = await ui.find({ type: 'Text', text: /^ {2}- / })
+    expect(row).toBeDefined()
+    expect(JSON.stringify(row).length).toBeLessThan(2_000)
+    await ui.unmount()
+    expect(w.runs.length).toBeGreaterThan(1)
+  })
+
   test('when every mutant survives, the pane says the tests may be reading the original tree', async ($, on) => {
     const w = world(on)
     w.isAllPass = true
@@ -291,7 +307,7 @@ describe('mutation-tap in a session', () => {
   test('removes a copy a run cut short left behind', async ($, on) => {
     const w = world(on, { copy: '/t/claude-mutation-tap/123' })
     w.files['/t/claude-mutation-tap/123/src/max.ts'] = SOURCE
-    await w.clock.advance(31 * 60_000)
+    await w.clock.advance(3 * 60 * 60_000 + 60_000)
     await $.session.start(START)
     expect(copies(w)).toEqual([])
   })
