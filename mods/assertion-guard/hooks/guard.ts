@@ -16,11 +16,14 @@ const WEAK =
   /\.(?:not\.)?(?:toBeTruthy|toBeDefined|toBeFalsy|toHaveBeenCalled|toMatchObject|toContain|toContainEqual|toBeGreaterThan|toBeGreaterThanOrEqual|toBeLessThan|toBeLessThanOrEqual|toBeInstanceOf|toBeCloseTo)\(|\.toThrow(?:Error)?\(\s*\)|\.not\.toBe(?:Null|Undefined|NaN)\(|expect\.(?:anything|any|objectContaining|arrayContaining|stringContaining)\(|\bassert(?:True|False|IsNotNone|IsNone|IsInstance|Greater|Less)\b|XCTAssert(?:True|False|NotNil|Nil)?\(|\bassert!\(|\.(?:NotNil|Nil|NotEmpty|True|False|NoError|Error)\(|\bassert\s+\w+\s*$/
 const SKIP =
   /\b(?:it|test|describe|context|suite)\.(?:skip|only|todo|fixme)\b|\b(?:xit|xdescribe|xtest|xcontext|fit|fdescribe)\s*\(|@pytest\.mark\.(?:skip|skipif|xfail)\b|@unittest\.(?:skip|expectedFailure)\b|#\[ignore\b|\bt\.Skip(?:Now|f)?\(|\bXCTSkip\w*\(|\bpending\(|@Disabled\b|@Ignore\b|\.disabled\(|\.enabled\(if:\s*false/
+// Each runs over the whole file at every edit, so none may backtrack on what it cannot match:
+// a comment line ends at its line break, `except` is read from the start of its line, and no
+// two quantifiers in a row take the same characters.
 const SWALLOW = [
-  /catch\s*(?:\([^)]*\))?\s*\{\s*(?:\/\/[^\n]*\s*)*\}/g,
+  /catch\s*(?:\([^)]*\))?\s*\{\s*(?:\/\/[^\n]*\n\s*)*\}/g,
   /\.catch\(\s*(?:\(\s*\w*\s*\)|\w+)\s*=>\s*(?:\{\s*\}|undefined|null|void 0|false)\s*\)/g,
-  /except(?:\s+[\w.,() ]+?)?(?:\s+as\s+\w+)?\s*:\s*(?:#[^\n]*)?\n?\s*(?:pass|\.\.\.)\b/g,
-  /rescue(?:\s+[\w:]+)?(?:\s*=>\s*\w+)?\s*\n?\s*nil\b/g,
+  /^[ \t]*except\b(?:[ \t][^:\n]*)?:[ \t]*(?:#[^\n]*)?\s*(?:pass\b|\.\.\.)/gm,
+  /\brescue\b(?:[ \t]+[\w:]+)?(?:[ \t]*=>[ \t]*\w+)?\s*nil\b/g,
   /\bif\s+err\s*!=\s*nil\s*\{\s*\}/g,
   /\b_\s*=\s*err\b/g,
   /\|\|\s*true\b/g,
@@ -31,28 +34,31 @@ const isAssertion = (line: string) => !isComment(line) && ASSERT.test(line)
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim()
 export const clip = (text: string, max = 120) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 
-/** Lines of `before` not matched by an equal line of `after`, and the other way round, in order. */
+/**
+ * A line as a formatter leaves its meaning: quote marks alike, no spaces around punctuation,
+ * no closing `;` or `,`. Two lines of one shape are the same line.
+ */
+const shapeOf = (line: string): string =>
+  line
+    .replace(/["'`]/g, "'")
+    .replace(/\s*([,()[\]{}:;=])\s*/g, '$1')
+    .replace(/[;,]+$/, '')
+
+/** Lines of `before` not matched by a line of the same shape in `after`, and the other way round, in order. */
 export function lineDiff(before: string, after: string): { removed: string[]; added: string[] } {
   const lines = (text: string) => (text === '' ? [] : text.split('\n').map(line => line.trim()).filter(line => line !== ''))
+  const unmatched = (from: string[], against: string[]): string[] => {
+    const left = new Map<string, number>()
+    for (const line of against) left.set(shapeOf(line), (left.get(shapeOf(line)) ?? 0) + 1)
+    return from.filter(line => {
+      const n = left.get(shapeOf(line)) ?? 0
+      if (n > 0) left.set(shapeOf(line), n - 1)
+      return n === 0
+    })
+  }
   const old = lines(before)
   const now = lines(after)
-  const left = new Map<string, number>()
-  for (const line of now) left.set(line, (left.get(line) ?? 0) + 1)
-  const removed: string[] = []
-  for (const line of old) {
-    const n = left.get(line) ?? 0
-    if (n > 0) left.set(line, n - 1)
-    else removed.push(line)
-  }
-  const right = new Map<string, number>()
-  for (const line of old) right.set(line, (right.get(line) ?? 0) + 1)
-  const added: string[] = []
-  for (const line of now) {
-    const n = right.get(line) ?? 0
-    if (n > 0) right.set(line, n - 1)
-    else added.push(line)
-  }
-  return { removed, added }
+  return { removed: unmatched(old, now), added: unmatched(now, old) }
 }
 
 /** What an assertion checks: `expect(total)`, `assertEqual(total`, `assert_eq!(total`. */

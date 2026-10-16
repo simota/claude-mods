@@ -1,6 +1,6 @@
 {
   "name": "assertion-guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Catches edits that weaken tests to make them pass: assertions removed, expectations loosened or rewritten, tests skipped, exceptions swallowed; asks Claude for the reason beside the tool's result and keeps a band until the person has checked it",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"
