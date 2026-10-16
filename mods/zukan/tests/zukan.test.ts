@@ -117,8 +117,23 @@ describe('book', () => {
     expect(programOf('git -c core.x=1 --no-pager fetch')).toBe('git fetch')
     expect(programOf('npm install 2>&1 | tail -5')).toBe('npm install')
     expect(programOf('timeout 30 curl -s https://x.io')).toBe('curl')
-    // A cd alone is the program.
+    expect(programOf('git --config-env n=E push')).toBe('git push')
+    // Markers and pauses between the steps do not stand for it either.
+    expect(programOf('cd app && echo "=== build ===" && npm run build')).toBe('npm run')
+    expect(programOf('cd app && pwd && sleep 2 && curl -s x')).toBe('curl')
+    expect(programOf('cd app || exit 1; npm i')).toBe('npm i')
+    expect(programOf('if [ -f x ]; then npm i; fi')).toBe('npm i')
+    expect(programOf('bash -c "cd a && make build"')).toBe('make build')
+    // A substitution names it only when nothing else runs; a cd alone is the program.
+    expect(programOf('cd $(dirname foo)')).toBe('cd')
+    expect(programOf('cd "$(git rev-parse --show-toplevel)" && npm ci')).toBe('npm ci')
+    expect(programOf('X=$(git rev-parse HEAD)')).toBe('git rev-parse')
     expect(programOf('cd /nope')).toBe('cd')
+  })
+
+  test('a line the shell reader cannot hold is named by its first word, without throwing', () => {
+    expect(programOf(`echo ${'"$('.repeat(20_000)}`)).toBe('echo')
+    expect(programOf(`npm install ${'"$('.repeat(3_000)}`)).toBe('npm install')
   })
 
   test('leaves check failures alone', () => {
@@ -141,6 +156,8 @@ describe('book', () => {
     expect(errorLine(SSH_PUSH)).toContain('This proxy requires authentication')
     // Colour codes and other controls would be drawn raw in the toast and the pane.
     expect(errorLine('\u001b[1m\u001b[31merror\u001b[0m: could not compile `app`\u0007')).toBe('error: could not compile `app`')
+    // An unclosed title sequence ends at its line, not at the end of the output.
+    expect(errorLine('ok line\n\u001b]0;title\nerror: build failed\nmore')).toBe('error: build failed')
     expect(errorLine('Exit code 1\nsomething odd\n')).toBe('something odd')
     expect(errorLine('')).toBeUndefined()
   })

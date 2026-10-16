@@ -2,7 +2,7 @@
 // adding sightings and fixes to the entries, and the words shown and fed to the model.
 
 import type { ZukanEntry, ZukanFix, ZukanPending } from '../types'
-import { allCommands, base, isVerification, program } from './shell'
+import { allCommands, base, innerText, isVerification, parse, program } from './shell'
 
 export const MAX_ENTRIES = 300
 export const MAX_LINE = 160
@@ -17,20 +17,47 @@ const clip = (text: string, max = MAX_LINE): string => {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
-// Builtins that set up the shell for the command after them; they name what ran only alone.
-const SETUP = new Set(['cd', 'pushd', 'popd', 'export', 'source', '.', 'set', 'unset', 'shopt', 'umask', 'ulimit', 'alias', 'declare', 'typeset', 'local', 'readonly'])
-// git's own options that take the next word, before its subcommand (`git -C dir push`).
-const GIT_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path'])
+// Commands that set up for, mark or wait on the command after them (`cd app && …`,
+// `echo "== build ==" && …`, `[ -f x ] && …`): they name what ran only when nothing else runs.
+const LEADING = new Set([
+  'cd', 'pushd', 'popd', 'export', 'source', '.', 'set', 'unset', 'shopt', 'umask', 'ulimit', 'alias', 'declare', 'typeset',
+  'local', 'readonly', 'echo', 'printf', 'pwd', 'true', ':', 'sleep', 'exit', '[', '[[', 'test',
+])
+// git's own options that take the next word, before its subcommand (`git -C dir push`), as shell.ts reads them.
+const GIT_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'])
+// Past this the shell reader is not asked: its recursion is bounded by the stack, not by length.
+const MAX_PARSED = 10_000
+
+type Run = { name: string; args: string[] }
+
+/** The programs a command line runs at its top level (a `bash -c` text read through), and those of its substitutions. */
+function runsOf(command: string): { top: Run[]; nested: Run[] } {
+  const { commands, nested } = parse(command)
+  const top = commands.flatMap(one => {
+    const inner = innerText(one.words)
+    if (inner !== undefined) return allCommands(inner).flatMap(each => program(each.words) ?? [])
+    return program(one.words) ?? []
+  })
+  return { top, nested: nested.flatMap(text => allCommands(text)).flatMap(one => program(one.words) ?? []) }
+}
 
 /**
  * The program and, when it has one, its subcommand: `git push`, `pnpm install`, `curl`. Read as
  * done-gate reads a command (assignments, wrappers and runners skipped), from the first command
- * that is not a `cd`, `export` or `source` setting up for it: `cd app && npm install` is
- * `npm install`, so that it is settled by `npm install` succeeding, not by any `cd app && …`.
+ * that is not setting up for the next: `cd app && npm install` is `npm install`, so that it is
+ * settled by `npm install` succeeding, not by any `cd app && …`. A substitution's program
+ * (`cd $(dirname x)`) names it only when the line runs nothing else.
  */
 export function programOf(command: string): string {
-  const runs = allCommands(command).flatMap(one => program(one.words) ?? [])
-  const run = runs.find(one => !SETUP.has(one.name)) ?? runs[0]
+  let run: Run | undefined
+  if (command.length <= MAX_PARSED) {
+    try {
+      const { top, nested } = runsOf(command)
+      run = top.find(one => !LEADING.has(one.name)) ?? top[0] ?? nested[0]
+    } catch {
+      // A line the reader cannot hold: named by its first word below.
+    }
+  }
   if (run === undefined) return base(command.trim().split(/\s+/)[0] ?? '')
   let k = 0
   if (run.name === 'git') {
@@ -55,7 +82,7 @@ export function errorLine(output: string): string | undefined {
   const lines = output
     .replace(/<\/?sandbox_violations>/g, '')
     // Colour and cursor codes, then the other controls: drawn raw in the toast and the pane.
-    .replace(/\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|[@-Z\\-_])/g, '')
+    .replace(/\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b\n]*(?:\u0007|\u001b\\)?|[@-Z\\-_])/g, '')
     .replace(/\r\n?/g, '\n')
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
     .split('\n')
