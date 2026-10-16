@@ -141,6 +141,27 @@ describe('findImageCandidates', () => {
   test('two paths side by side stay two', () => {
     expect(findImageCandidates('cp /a/b.png out/c.png')).toEqual([['/a/b.png'], ['out/c.png']])
   })
+
+  test('reads a long output in linear time: it runs before every Bash result', () => {
+    // An echoed glob of many paths, and a long run of `=`: each took most of a second or more.
+    for (const text of ['/a '.repeat(7_000) + '/x.png', '='.repeat(60_000), `${':'.repeat(30_000)}x.png`]) {
+      const started = performance.now()
+      findImageCandidates(text)
+      expect(performance.now() - started).toBeLessThan(100)
+    }
+  })
+
+  test('joins a bounded number of split pieces, so a long argument list is not offered whole', () => {
+    const [group] = findImageCandidates(`ls ${'/a '.repeat(7_000)}/x.png`)
+    expect(group?.length).toBeLessThanOrEqual(9)
+    expect(group?.at(-1)).toBe('/x.png')
+    expect(group?.[0]).toBe(`${'/a '.repeat(8)}/x.png`)
+  })
+
+  test('a word after a space is read whole, one glued to a quote from its `=`; a word holds one path at most', () => {
+    expect(findImageCandidates('--out=img/a.png PATH=x:/b.png')).toEqual([['--out=img/a.png'], ['PATH=x:/b.png']])
+    expect(findImageCandidates('"q"z=/c.png x=/a.png:/b.png')).toEqual([['/c.png'], ['x=/a.png:/b.png']])
+  })
 })
 
 describe('helpers', () => {

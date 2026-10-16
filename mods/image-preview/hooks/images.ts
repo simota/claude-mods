@@ -5,20 +5,67 @@ export const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i
 // A quoted path may hold spaces: "…", '…' or `…`.
 const QUOTED = /(["'`])([^"'`\n]*?\.(?:png|jpe?g|webp|gif))\1/gi
 // A bare path holds none, and may end a sentence: `out/cat.png.`, `out/cat.png。`, `(out/cat.png)`.
-const BARE =
-  /(?:^|[\s(=:,\[「『])((?:~|\.{1,2})?\/?[^\s'"`()<>|;,\[\]「」『』。、：]*\.(?:png|jpe?g|webp|gif))(?=$|[\s'"`),;:：\].。、」』!?！？])/gim
+// It lies inside one word: a run of characters a bare path may hold.
+const WORD = /[^\s'"`()<>|;,\[\]「」『』。、：]+/g
+const EXTENSION_AT = /\.(?:png|jpe?g|webp|gif)/gi
+// What may follow a bare path's extension, and what may stand before the word it starts.
+const AFTER = /[\s'"`),;:：\].。、」』!?！？]/
+const BEFORE = /[\s(,\[「『]/
+// A path that starts inside a word starts after one of these: `--out=a.png`, `x:/b.png`.
+const INNER_START = /[=:]/g
 // The token before a bare match, when it may be the head of a path split at a
 // space (`/tmp/a` before `b/x.jpg`): a path start, no file extension of its own.
-const SPLIT_HEAD = /(?:^|\s)((?:~|\.{1,2})?\/[^\s'"`]*) $/
+const PATH_START = /^(?:~|\.{1,2})?\//
+const NOT_TOKEN = /[\s'"`]/
 const HAS_EXTENSION = /\.\w{1,5}$/
 // Punctuation that ends a list item or a clause: `a.png, b.png` is two paths, never one.
 const SEPARATOR_END = /[,;:)\]]$/
+// How far back a split path is followed: a long argument list (`ls /a /b … /x.png`) is
+// not offered as one path per argument, nor one longer than a path can be.
+const MAX_PIECES = 8
+const MAX_PATH = 4096
+
+/**
+ * The bare image path in one word, at most one: from the word's first place a path may start
+ * to its last image extension that ends a path. As the regex it replaces read it, and linear.
+ */
+function pathInWord(text: string, from: number, word: string): { at: number; path: string } | undefined {
+  let end = -1
+  let extensionAt = -1
+  for (const match of word.matchAll(EXTENSION_AT)) {
+    const after = from + match.index + match[0].length
+    if (after === text.length || AFTER.test(text.charAt(after))) {
+      end = after
+      extensionAt = from + match.index
+    }
+  }
+  if (end < 0) return undefined
+  let at = from === 0 || BEFORE.test(text.charAt(from - 1)) ? from : -1
+  if (at < 0) {
+    INNER_START.lastIndex = 0
+    const inner = INNER_START.exec(word)
+    if (inner !== null) at = from + inner.index + 1
+  }
+  if (at < 0 || at > extensionAt) return undefined
+  return { at, path: text.slice(at, end) }
+}
+
+/** The token that ends one space before `end`, when one may head a split path. */
+function headBefore(text: string, end: number): string | undefined {
+  if (text.charAt(end - 1) !== ' ') return undefined
+  let from = end - 1
+  while (from > 0 && !NOT_TOKEN.test(text.charAt(from - 1)) && end - from <= MAX_PATH) from -= 1
+  if (from > 0 && !/\s/.test(text.charAt(from - 1))) return undefined
+  const piece = text.slice(from, end - 1)
+  return PATH_START.test(piece) ? piece : undefined
+}
 
 /**
  * Image-looking paths in a command or its output, in order, each as its candidates,
  * longest first. Text alone cannot tell `/tmp/a b/x.jpg` (one path with a space) from
  * `convert /tmp/a /tmp/b.png` (two arguments): each joined reading is offered with the
- * plain tail last, and the one that exists on disk is the path.
+ * plain tail last, and the one that exists on disk is the path. Linear in the text: it
+ * runs on every Bash result before the result goes back.
  */
 export function findImageCandidates(text: string): string[][] {
   const found: { at: number; candidates: string[] }[] = []
@@ -27,17 +74,16 @@ export function findImageCandidates(text: string): string[][] {
   }
   // Quoted spans are blanked out, so a space inside one is never read as a split.
   const bare = text.replace(QUOTED, span => ' '.repeat(span.length))
-  for (const match of bare.matchAll(BARE)) {
-    const tail = match[1]
-    if (tail === undefined) continue
-    let start = match.index + match[0].length - tail.length
-    const candidates = [tail]
-    let path = tail
-    for (let head = SPLIT_HEAD.exec(bare.slice(0, start)); head?.[1] !== undefined; head = SPLIT_HEAD.exec(bare.slice(0, start))) {
-      const piece = head[1]
-      if (SEPARATOR_END.test(piece) || HAS_EXTENSION.test(piece)) break
-      path = `${piece} ${path}`
-      start -= piece.length + 1
+  for (const word of bare.matchAll(WORD)) {
+    const one = pathInWord(bare, word.index, word[0])
+    if (one === undefined) continue
+    let start = one.at
+    const candidates = [one.path]
+    let path = one.path
+    for (let head = headBefore(bare, start); head !== undefined && candidates.length <= MAX_PIECES; head = headBefore(bare, start)) {
+      if (SEPARATOR_END.test(head) || HAS_EXTENSION.test(head) || path.length + head.length + 1 > MAX_PATH) break
+      path = `${head} ${path}`
+      start -= head.length + 1
       candidates.unshift(path)
     }
     found.push({ at: start, candidates })
