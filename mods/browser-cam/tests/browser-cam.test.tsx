@@ -450,3 +450,22 @@ test('session.start sweeps folders a killed session left over a day ago, never t
 
   expect(runs.filter(run => run.argv[0] === 'rm').map(run => run.argv.at(-1))).toEqual([`${DIR}/old`])
 })
+
+test('a live session touches its folder every hour, so a long idle one is never swept as killed', async ($, on) => {
+  const HOUR = 60 * 60 * 1000
+  const clock = mock.clock(on)
+  const { runs } = beneath(on, { [TOOL]: [shotAnswer()] })
+  const touches = () => runs.filter(run => run.argv[0] === 'touch').map(run => run.argv)
+
+  await $.tool.call({ tool: TOOL, tool_use_id: 't1', action: 'screenshot' })
+  await clock.settle()
+  expect(touches()).toEqual([])
+
+  await clock.advance(24 * HOUR)
+  expect(touches()).toHaveLength(24)
+  expect(touches()[0]).toEqual(['touch', '-c', '--', SESSION_DIR])
+
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: { id: 'sess-1' } })
+  await clock.advance(2 * HOUR)
+  expect(touches()).toHaveLength(24)
+})

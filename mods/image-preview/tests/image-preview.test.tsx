@@ -476,3 +476,29 @@ test('session.end removes the session cache; session.start sweeps a day-old one 
   await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: { id: 'sess-1' } })
   expect(runs.filter(argv => argv[0] === 'rm').map(argv => argv.at(-1))).toEqual(['/tmpdir/claude-image-preview/old', CACHE])
 })
+
+test('a live session touches its cache every hour, so a long idle one is never swept as killed', async ($, on) => {
+  const HOUR = 60 * 60 * 1000
+  const clock = mock.clock(on, { now: 100_000 })
+  const files = { '/work/app/gen/new.jpg': { size: 5000, mtimeMs: 100_500 } }
+  const { runs } = beneath(on, files, { hasSips: true })
+  on('tool.call', { tool: 'Bash' }, async () => {
+    await clock.advance(1_000)
+    return { result: { stdout: 'wrote gen/new.jpg', stderr: '', interrupted: false } } as never
+  })
+  const touches = () => runs.filter(argv => argv[0] === 'touch')
+
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: 'python gen.py', description: 'gen' })
+  await clock.settle()
+  expect(touches()).toEqual([])
+
+  // A day idle: 24 touches, each moving the folder's mtime past another session's cutoff.
+  await clock.advance(24 * HOUR)
+  expect(touches()).toHaveLength(24)
+  expect(touches()[0]).toEqual(['touch', '-c', '--', CACHE])
+
+  // Ended: its folder is gone and is touched no more.
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: { id: 'sess-1' } })
+  await clock.advance(2 * HOUR)
+  expect(touches()).toHaveLength(24)
+})
