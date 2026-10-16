@@ -1,4 +1,5 @@
 import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { apply, changedLines, codeMask, guessCommand, isMutable, mutantsOf, spread, tallyOf } from '../hooks/mutate'
@@ -65,11 +66,14 @@ const DIFF = ['+++ b/src/max.ts', '@@ -2 +2 @@'].join('\n')
 // `editDuring` stands for someone editing the working tree while the first mutant's tests run.
 type World = {
   files: Record<string, string>
-  runs: { cwd: string; source: string; tree: string }[]
+  runs: { cwd: string; source: string; tree: string; command: string }[]
+  git: string[][]
+  untracked?: string
   toasts: string[]
   onRun?: (n: number) => void
   clock: ReturnType<typeof mock.clock>
   editDuring?: (text: string) => string
+  isAllPass?: boolean
 }
 
 const ok = (stdout = '', exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -79,7 +83,7 @@ const ok = (stdout = '', exitCode = 0) => ({ value: { exitCode, stdout, stderr: 
 // in-memory tree to the folder it is given; `rm -rf` removes it.
 function world(on: On, store: Record<string, unknown> = {}): World {
   const clock = mock.clock(on, { now: 1_000 })
-  const w: World = { files: { [`${ROOT}/src/max.ts`]: SOURCE, [`${ROOT}/package.json`]: '{"scripts":{"test":"vitest run"}}' }, runs: [], toasts: [], clock }
+  const w: World = { files: { [`${ROOT}/src/max.ts`]: SOURCE, [`${ROOT}/package.json`]: '{"scripts":{"test":"vitest run"}}' }, runs: [], git: [], toasts: [], clock }
   mock.store(on, store)
   mock.env(on, { TMPDIR: '/t' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -98,13 +102,22 @@ function world(on: On, store: Record<string, unknown> = {}): World {
     if (text === undefined) throw new Error('ENOENT')
     return { value: text } as never
   })
+  on('fs.exists', ($, e) => ({ value: String(e.path) in w.files }) as never)
   on('fs.write', ($, e) => {
     w.files[String(e.path)] = e.text
     return { value: undefined }
   })
   on('process.run', ($, e) => {
     const argv = e.argv
-    if (argv[0] === 'git') return ok(DIFF)
+    if (argv[0] === 'git') {
+      w.git.push([...argv])
+      return argv.includes('ls-files') ? ok(w.untracked ?? '') : ok(DIFF)
+    }
+    if (argv[0] === '/bin/sh' && String(argv[2]).includes('mv --')) {
+      const dir = argv[4] as string
+      for (const path of Object.keys(w.files)) if (path.startsWith(`${dir}/`)) delete w.files[path]
+      return ok()
+    }
     if (argv[0] === '/bin/sh' && String(argv[2]).includes('cp -cR')) {
       const [dir, from] = [argv[4] as string, argv[5] as string]
       for (const [path, text] of Object.entries(w.files)) if (path.startsWith(`${from}/`)) w.files[`${dir}${path.slice(from.length)}`] = text
@@ -117,10 +130,10 @@ function world(on: On, store: Record<string, unknown> = {}): World {
     }
     const cwd = e.init?.cwd ?? ''
     const source = w.files[`${cwd}/src/max.ts`] ?? ''
-    w.runs.push({ cwd, source, tree: w.files[`${ROOT}/src/max.ts`] ?? '' })
+    w.runs.push({ cwd, source, tree: w.files[`${ROOT}/src/max.ts`] ?? '', command: String(argv[2]) })
     w.onRun?.(w.runs.length)
     if (w.editDuring !== undefined && w.runs.length === 2) w.files[`${ROOT}/src/max.ts`] = w.editDuring(w.files[`${ROOT}/src/max.ts`] ?? '')
-    return ok('', /return a >=? b \? a : b [-+] 0$/.test(source.split('\n')[1] ?? '') ? 0 : 1)
+    return ok('', w.isAllPass === true || /return a >=? b \? a : b [-+] 0$/.test(source.split('\n')[1] ?? '') ? 0 : 1)
   })
   return w
 }
@@ -128,6 +141,17 @@ function world(on: On, store: Record<string, unknown> = {}): World {
 const START = { cwd: ROOT, surface: 'terminal', isInteractive: true } as const
 const run = (args: string) => ({ command: 'mutate', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } }) as const
 const copies = (w: World) => Object.keys(w.files).filter(path => path.startsWith('/t/claude-mutation-tap/'))
+
+const pane = async ($: Engine) => {
+  const ui = await $.ui.mount({
+    plugin: 'mutation-tap',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'mutation-tap',
+    props: { title: 'ミューテーション', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  })
+  return ui
+}
 
 describe('mutation-tap in a session', () => {
   test('runs each mutant in a copy, never in the working tree, and shows what survived', async ($, on) => {
@@ -197,9 +221,77 @@ describe('mutation-tap in a session', () => {
     expect(w.toasts.join('\n')).not.toContain('すべての改変をテストが検出')
   })
 
+  test('a test command that rewrites the mutated file (a formatter) is no vanished copy', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    w.onRun = n => {
+      const copy = copies(w).find(path => path.endsWith('/src/max.ts'))
+      if (n === 2 && copy !== undefined) w.files[copy] = `${w.files[copy]}\n`
+    }
+    await $.command.run(run(''))
+    await w.clock.settle()
+    const ui = await pane($)
+    expect(await ui.find({ type: 'Text', text: /完了 3件/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const cut of ['between', 'half'] as const) {
+    test(`a copy ${cut === 'between' ? 'gone between mutants' : 'half removed'} ends the run as failed with no score`, async ($, on) => {
+      const w = world(on)
+      await $.session.start(START)
+      w.onRun = n => {
+        if (n !== 2) return
+        // Half: the copy's root marker and its dependencies gone, the mutated file still there.
+        for (const path of copies(w)) if (cut === 'between' || !path.endsWith('/src/max.ts')) delete w.files[path]
+      }
+      await $.command.run(run(''))
+      await w.clock.settle()
+      const ui = await pane($)
+      expect(await ui.find({ type: 'Text', text: /実行できませんでした/ })).toBeDefined()
+      await ui.unmount()
+      expect(w.toasts.join('\n')).not.toContain('すべての改変をテストが検出')
+    })
+  }
+
+  test('a copy an earlier version left is removed only once it is old, and is then kept track of', async ($, on) => {
+    const young = '/t/claude-mutation-tap/1000'
+    const w = world(on, { copy: young })
+    w.files[`${young}/src/max.ts`] = SOURCE
+    await $.session.start(START)
+    expect(copies(w)).toEqual([`${young}/src/max.ts`])
+  })
+
+  test('git paths read the same whatever the diff prefixes, new files are mutated too, and Python reads no stale bytecode', async ($, on) => {
+    const w = world(on)
+    w.untracked = 'src/min.ts\0'
+    w.files[`${ROOT}/src/min.ts`] = 'export function min(a: number, b: number) {\n  return a < b ? a : b\n}'
+    await $.session.start(START)
+    await $.command.run(run(''))
+    await w.clock.settle()
+    const diff = w.git.find(argv => argv.includes('diff')) ?? []
+    expect(diff).toEqual(expect.arrayContaining(['--src-prefix=a/', '--dst-prefix=b/']))
+    expect(diff.slice(0, 3)).toEqual(['git', '-c', 'core.quotePath=false'])
+    expect(w.runs.every(one => one.command.startsWith('export PYTHONDONTWRITEBYTECODE=1;'))).toBe(true)
+    const ui = await pane($)
+    expect(await ui.find({ type: 'Text', text: /src\/min\.ts:2/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('when every mutant survives, the pane says the tests may be reading the original tree', async ($, on) => {
+    const w = world(on)
+    w.isAllPass = true
+    await $.session.start(START)
+    await $.command.run(run(''))
+    await w.clock.settle()
+    const ui = await pane($)
+    expect(await ui.find({ type: 'Text', text: /元のツリー/ })).toBeDefined()
+    await ui.unmount()
+  })
+
   test('removes a copy a run cut short left behind', async ($, on) => {
     const w = world(on, { copy: '/t/claude-mutation-tap/123' })
     w.files['/t/claude-mutation-tap/123/src/max.ts'] = SOURCE
+    await w.clock.advance(31 * 60_000)
     await $.session.start(START)
     expect(copies(w)).toEqual([])
   })
