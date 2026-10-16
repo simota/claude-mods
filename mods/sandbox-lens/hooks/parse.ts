@@ -64,12 +64,16 @@ function trailingBlock(output: string): string | undefined {
   return last[1] ?? ''
 }
 
-/** Denials named in one command's output, each (kind, target) once; relative paths resolved against cwd. */
-export function parseDenials(output: string, command = '', cwd = ''): Hit[] {
+/**
+ * Denials named in one command's output, each (kind, target) once; relative paths resolved against cwd.
+ * `harness` is where the harness's block may be: the result's own `stderr` when the command
+ * succeeded (the engine keeps the command's output apart, in `stdout`), else the whole output.
+ */
+export function parseDenials(output: string, command = '', cwd = '', harness = output): Hit[] {
   const seen = new Map<string, Hit>()
   const add = (hit: Hit) => seen.set(`${hit.kind} ${hit.target}`, hit)
 
-  for (const line of (trailingBlock(output) ?? '').split(/\r?\n/)) {
+  for (const line of (trailingBlock(harness) ?? '').split(/\r?\n/)) {
     const match = VIOLATION.exec(line)
     if (!match) continue
     const [, operation = '', rest = ''] = match
