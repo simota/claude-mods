@@ -26,6 +26,9 @@ const BAND = {
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 
 type Calls = {
+  /** Set to make the next submission or fill fail, as an engine that cannot take it. */
+  fails?: 'submit' | 'fill' | 'fill-unplaced'
+  toasts: string[]
   judged: string[]
   models: string[]
   entered: string[]
@@ -37,7 +40,11 @@ type Calls = {
 // Stands for the engine beneath the plugin: a judge that calls only VAGUE ambiguous,
 // or never answers in time when `isSlow`.
 const engine = (on: On, isSlow = false): Calls => {
-  const calls: Calls = { judged: [], models: [], entered: [], filled: [], modes: [], timeouts: [] }
+  const calls: Calls = { toasts: [], judged: [], models: [], entered: [], filled: [], modes: [], timeouts: [] }
+  on('ui.toast', ($, e) => {
+    calls.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('model.complete', ($, e) => {
     calls.judged.push(e.prompt)
     calls.models.push(e.model)
@@ -50,10 +57,22 @@ const engine = (on: On, isSlow = false): Calls => {
     return { value: { isAnswered: true, text, usage: USAGE } as const }
   })
   on('prompt.submit', ($, e) => {
+    if (calls.fails === 'submit') {
+      calls.fails = undefined
+      throw new Error('the engine could not take the prompt')
+    }
     calls.entered.push(e.text)
     return { text: e.text }
   })
   on('prompt.fill', ($, e) => {
+    if (calls.fails === 'fill') {
+      calls.fails = undefined
+      throw new Error('no box')
+    }
+    if (calls.fails === 'fill-unplaced') {
+      calls.fails = undefined
+      return { isFilled: false }
+    }
     calls.filled.push(e.text)
     calls.modes.push(e.mode)
     return { isFilled: true, box: { text: e.text, cursor: e.text.length } }
@@ -215,6 +234,40 @@ test('add a condition fills the prompt; dismiss puts the original back', ON, asy
     `${VAGUE} 2 desktop`,
   ])
   expect(calls.entered).toEqual([])
+})
+
+test('a held prompt is never lost: a send or a fill that fails keeps it held or shows its words', ON, async ($, on) => {
+  const calls = engine(on)
+  for (const [key, fails] of [['send', 'submit'], ['coach-dismiss', 'fill'], ['option-0', 'fill'], ['add', 'fill']] as const) {
+    const text = `${VAGUE} (${key})`
+    await typed($, text)
+    calls.fails = fails
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    await ui.press({ key })
+    // Still held, with its band, so the person can try again.
+    expect(await ui.find({ key: 'send' })).toBeDefined()
+    await ui.press({ key: 'coach-dismiss' })
+    await ui.unmount()
+  }
+  expect(calls.filled).toContain(`${VAGUE} (send)`)
+  expect(calls.filled).toContain(`${VAGUE} (add)`)
+
+  // A box that cannot be filled (no room to place it): the words are shown rather than gone.
+  await typed($, `${VAGUE} (unplaced)`)
+  calls.fails = 'fill-unplaced'
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'coach-dismiss' })
+  expect(calls.toasts.join('\n')).toContain(`${VAGUE} (unplaced)`)
+  await ui.unmount()
+})
+
+test('a new prompt while one is held is sent once, even when the held words cannot go back', ON, async ($, on) => {
+  const calls = engine(on)
+  await typed($, VAGUE)
+  calls.fails = 'fill'
+  await typed($, CLEAR)
+  expect(calls.entered).toEqual([CLEAR])
+  expect(calls.toasts.join('\n')).toContain(VAGUE)
 })
 
 test('a prompt with pasted items or an @mention is never judged', ON, async ($, on) => {
