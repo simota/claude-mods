@@ -2,6 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
+import { isVerification } from '../hooks/shell'
+
 const SURFACES = ['terminal', 'desktop'] as const
 
 type Bottom = { isError: boolean; text: string }
@@ -485,4 +487,15 @@ test('a command that only mentions the flag runs', async ($, on) => {
     expect(ran.deny).toBeUndefined()
   }
   expect(bottom.ran.length).toBe(commands.length)
+})
+
+test('the shell reader judges a command of thousands of checks in linear time', () => {
+  // Read after every Bash call, before its result goes back (here and in hit-rate and zukan).
+  const many = Array.from({ length: 8000 }, (_, n) => `pytest tests/test_${n}.py`).join('\n')
+  const started = performance.now()
+  expect(isVerification(many)).toBe(true)
+  expect(isVerification('tsc;'.repeat(30_000))).toBe(true)
+  expect(isVerification(`${'tsc && '.repeat(5000)}tsc || true`)).toBe(false)
+  expect(isVerification(`${'tsc && '.repeat(5000)}tsc`)).toBe(true)
+  expect(performance.now() - started).toBeLessThan(300)
 })

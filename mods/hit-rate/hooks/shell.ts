@@ -590,13 +590,17 @@ const CARRIES_FAILURE = new Set<Op>(['&&', '|', '|&'])
 
 function verifies(command: string, depth: number): boolean {
   const { commands } = parse(command)
+  const last = commands.length - 1
+  // carries[i]: every command from i up to the last one passes a failure on. Built once from
+  // the end, so a command of thousands of checks is not read again after each one.
+  const carries: boolean[] = new Array(commands.length + 1).fill(true)
+  for (let i = last - 1; i >= 0; i -= 1) carries[i] = CARRIES_FAILURE.has((commands[i] as Simple).after) && (carries[i + 1] as boolean)
   return commands.some((one, k) => {
     if (!isCheckCommand(one, depth)) return false
-    const later = commands.slice(k + 1)
-    if (later.length === 0) return one.after === '' || one.after === ';' || one.after === '\n'
+    if (k === last) return one.after === '' || one.after === ';' || one.after === '\n'
     // `npm test | tail`, `npm test || true`, `npm test; git status`: the exit status is not the check's.
     if (one.after !== '&&') return false
-    return later.slice(0, -1).every(next => CARRIES_FAILURE.has(next.after))
+    return carries[k + 1] as boolean
   })
 }
 
