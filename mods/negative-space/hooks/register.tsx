@@ -114,9 +114,10 @@ export const register: Register = on => {
             label="不要"
             role="dismiss"
             onPress={async () => {
-              // What is open now, not what was drawn: a candidate come since is not hidden undismissed.
-              const now = await open($)
-              await update($, dismissed, keys => [...new Set([...keys, ...now.map(one => one.key)])])
+              // What was drawn and is still open: one closed since is not dismissed, one come since not unseen.
+              const still = new Set((await open($)).map(one => one.key))
+              const drawn = list.map(one => one.key).filter(key => still.has(key))
+              await update($, dismissed, keys => [...new Set([...keys, ...drawn])])
               await update($, isShown, () => false)
             }}
           />

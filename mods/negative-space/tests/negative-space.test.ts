@@ -70,6 +70,24 @@ describe('space', () => {
     expect(withTest(part, 'tests/api.test.ts', digestOf('fresh'), true, found)['tests/api.test.ts']?.words).toEqual(['fresh'])
   })
 
+  test('a newest small test, or one among large ones, still closes its candidate; long runs and decimals', () => {
+    const found = triggersOf('src/api.ts', '', 'export function chargeCard(user) {\n  if (!user.isAdmin) return res.status(403)\n}', 1)
+    const many = Array.from({ length: 4_000 }, (_, i) => `name${i}`).join(' ')
+    let held = withTest({}, 'tests/api.test.ts', digestOf(many), true, found)
+    held = withTest(held, 'tests/api-extra.test.ts', digestOf("it('chargeCard refuses a guest with 403', () => {})"), true, found)
+    expect(candidatesOf(found, held, [])).toEqual([])
+
+    let crowd = withTest({}, 'tests/api.test.ts', digestOf("it('chargeCard refuses a guest with 403', () => {})"), true, found)
+    const bulk = Array.from({ length: 4_000 }, (_, i) => `apiWord${i} ${i}`).join(' ')
+    for (let i = 0; i < 20; i += 1) crowd = withTest(crowd, `tests/api${i}.test.ts`, digestOf(`${bulk} x${i}`), true, found)
+    expect(crowd['tests/api.test.ts']).toBeDefined()
+    expect(candidatesOf(found, crowd, [])).toEqual([])
+
+    expect(digestOf(`${'a'.repeat(100_000)} short`).words).toEqual(['short'])
+    const decimal = triggersOf('src/rate.ts', '', 'if (rate > 1.1) throw new RangeError("high")', 1)
+    expect(candidatesOf(decimal, {}, []).map(one => one.ask)).toContain('境界値 0.1 / 1.1 / 2.1')
+  })
+
   test('a line number from Read is no bound tried, and a long minified line is no trigger', () => {
     const found = triggersOf('src/form.ts', '', "if (name.length > 100) throw new ValidationError('long')", 1)
     const numbered = Array.from({ length: 120 }, (_, i) => `${String(i + 1).padStart(6)}\tit('rejects invalid name', () => {})`).join('\n')

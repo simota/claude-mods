@@ -130,7 +130,8 @@ const MAX_NUMBERS = 1_000
 export function digestOf(text: string): TestDigest {
   const body = text.replace(/^[ \t]*\d+\t/gm, '')
   const covers = (['auth', 'validation', 'error'] as const).filter(kind => COVERS[kind].test(body))
-  const words = new Set(body.match(/[A-Za-z_$][\w$]*/g) ?? [])
+  // A name is no longer than this: a fixture's long run of letters is no name a trigger has.
+  const words = new Set((body.match(/[A-Za-z_$][\w$]*/g) ?? []).filter(word => word.length <= 64))
   const numbers = new Set<string>()
   for (const m of body.matchAll(/(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])/g)) {
     numbers.add(m[0])
@@ -154,10 +155,18 @@ const asDigest = (value: TestDigest | string): TestDigest => (typeof value === '
 /** What the tests that speak of a source file say together: the session's tests whose name holds its stem. */
 export function testsFor(path: string, tests: Readonly<Record<string, TestDigest | string>>): TestDigest {
   const stem = stemOf(path)
-  return Object.entries(tests)
-    .filter(([test]) => stem !== '' && stemOf(test).includes(stem))
-    .map(([, one]) => asDigest(one))
-    .reduce(mergeDigest, { covers: [], words: [], numbers: [] })
+  const covers = new Set<NegativeTrigger['kind']>()
+  const words = new Set<string>()
+  const numbers = new Set<string>()
+  // Every matching file whole: a cap here would cut the newest test, the one just written to close it.
+  for (const [test, value] of Object.entries(tests)) {
+    if (stem === '' || !stemOf(test).includes(stem)) continue
+    const one = asDigest(value)
+    for (const kind of one.covers) covers.add(kind)
+    for (const word of one.words) words.add(word)
+    for (const n of one.numbers) numbers.add(n)
+  }
+  return { covers: [...covers], words: [...words], numbers: [...numbers] }
 }
 
 // Well under the 4 MiB the engine holds a state value to: past it every write would be refused.
@@ -181,7 +190,10 @@ export function withTest(
   const stems = [...new Set(triggers.map(one => stemOf(one.path)).filter(stem => stem !== ''))]
   const isRelevant = (test: string) => stems.some(stem => stemOf(test).includes(stem))
   let size = JSON.stringify(Object.fromEntries(entries)).length
-  const order = [...entries.slice(0, -1).filter(([test]) => !isRelevant(test)), ...entries.slice(0, -1).filter(([test]) => isRelevant(test))]
+  // Among tests a trigger needs, the largest leave first: a small one closing a candidate costs little to keep.
+  const sizeOf = (one: TestDigest) => JSON.stringify(one).length
+  const relevant = entries.slice(0, -1).filter(([test]) => isRelevant(test)).sort(([, a], [, b]) => sizeOf(b) - sizeOf(a))
+  const order = [...entries.slice(0, -1).filter(([test]) => !isRelevant(test)), ...relevant]
   const gone = new Set<string>()
   for (const [test, one] of order) {
     if (size <= MAX_TESTS_CHARS) break
@@ -236,8 +248,11 @@ export function candidatesOf(
       if (!digest.covers.includes(one.kind) || !isNamed) add(kindKey, QUESTION[one.kind])
     }
     for (const n of one.bounds) {
-      const tried = [n - 1, n, n + 1].filter(v => numbers.has(String(v)))
-      if (tried.length < 2) add(`${base}\u0000${n}`, `境界値 ${n - 1} / ${n} / ${n + 1}`)
+      // A decimal bound's neighbours as it is written: 1.1 asks for 0.1 and 2.1, never 0.10000000000000009.
+      const places = (String(n).split('.')[1] ?? '').length
+      const [below, above] = [n - 1, n + 1].map(v => Number(v.toFixed(places)))
+      const tried = [below, n, above].filter(v => numbers.has(String(v)))
+      if (tried.length < 2) add(`${base}\u0000${n}`, `境界値 ${below} / ${n} / ${above}`)
     }
   }
   return out
