@@ -162,6 +162,8 @@ describe('fog', () => {
       bashTouches(command, '/r', known)
       expect(performance.now() - started).toBeLessThan(200)
     }
+    // A cd back up is folded, so a long chain that stays near home is still followed.
+    expect(bashTouches(`${'cd src && cd .. && '.repeat(700)}cat README.md`, '/r', known).reads).toEqual(['README.md'])
     // Still followed: a cd, and one with a trailing slash.
     expect(bashTouches('cd src/ && cat a.ts', '/r', known).reads).toEqual(['src/a.ts'])
     expect(bashTouches('cd src && cd util// && cat c.ts', '/r', known).reads).toEqual(['src/util/c.ts'])

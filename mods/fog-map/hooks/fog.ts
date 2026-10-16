@@ -20,6 +20,17 @@ function trimSlashes(path: string): string {
 // No path is longer: a `cd` past it is not followed, so a chain of them is not read on forever.
 const PATH_MAX = 4096
 
+// An absolute directory with `.` and `..` folded, as the shell's would be after a cd.
+function folding(path: string): string {
+  const parts: string[] = []
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return `/${parts.join('/')}`
+}
+
 export function inRepo(path: string, root: string, cwd: string): string | undefined {
   const full = path.startsWith('/') ? path : `${trimSlashes(cwd)}/${path}`
   const parts: string[] = []
@@ -97,7 +108,8 @@ export function bashTouches(
       const next: string | undefined = to === undefined || to === '-' || to.startsWith('~') || to.includes('$') || here === undefined
         ? undefined
         : to.startsWith('/') ? to : `${trimSlashes(here)}/${to}`
-      here = next !== undefined && next.length <= PATH_MAX ? next : undefined
+      const folded = next === undefined ? undefined : folding(next)
+      here = folded !== undefined && folded.length <= PATH_MAX ? folded : undefined
       continue
     }
     const name = program.slice(program.lastIndexOf('/') + 1)

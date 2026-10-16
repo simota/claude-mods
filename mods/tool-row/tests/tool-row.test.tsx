@@ -237,3 +237,10 @@ test('a one-line command of megabytes is cut without reading it all, on every dr
   // Still cut between whole characters.
   expect(summarize({ tool: 'Bash', input: { command: '👩‍💻'.repeat(100_000) }, output: {}, isErrored: false })?.label).toBe(`${'👩‍💻'.repeat(59)}…`)
 })
+
+test('the fallback reads one long cluster in linear time', () => {
+  const started = performance.now()
+  expect(graphemesFallback(`a${'\u200d\u{1F1EF}'.repeat(20_000)}`)).toHaveLength(1)
+  expect(performance.now() - started).toBeLessThan(200)
+  expect(graphemesFallback('🇯🇵🇺🇸')).toEqual(['🇯🇵', '🇺🇸'])
+})

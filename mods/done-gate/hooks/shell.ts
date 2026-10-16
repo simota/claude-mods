@@ -591,7 +591,7 @@ const CARRIES_FAILURE = new Set<Op>(['&&', '|', '|&'])
 function verifies(command: string, depth: number): boolean {
   const { commands } = parse(command)
   const last = commands.length - 1
-  // carries[i]: every command from i up to the last one passes a failure on. Built once from
+  // carries[i]: every command from i up to the one before the last passes a failure on. Built once from
   // the end, so a command of thousands of checks is not read again after each one.
   const carries: boolean[] = new Array(commands.length + 1).fill(true)
   for (let i = last - 1; i >= 0; i -= 1) carries[i] = CARRIES_FAILURE.has((commands[i] as Simple).after) && (carries[i + 1] as boolean)

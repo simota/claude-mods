@@ -177,6 +177,10 @@ describe('merge', () => {
     expect(parseDenials(`<sandbox_violations>\ndeny file-write-create /a${spaces}b\n</sandbox_violations>`)).toEqual([{ kind: 'file-write', target: `/a${spaces}b` }])
     expect(parseDenials(`zsh: operation not permitted: a${spaces}b`)).toEqual([{ kind: 'eperm', target: `a${spaces}b` }])
     expect(performance.now() - started).toBeLessThan(100)
+    // A lone carriage return in the line, as a command's own stderr may print, is no slower.
+    const cr = performance.now()
+    parseDenials(`<sandbox_violations>\ndeny file-write${' '.repeat(32_000)}x\ry\n</sandbox_violations>`)
+    expect(performance.now() - cr).toBeLessThan(100)
     // Trailing spaces still left off.
     expect(parseDenials('zsh: operation not permitted: /x/a.txt   ')).toEqual([{ kind: 'eperm', target: '/x/a.txt' }])
   })

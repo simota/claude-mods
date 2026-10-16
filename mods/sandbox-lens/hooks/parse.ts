@@ -8,7 +8,7 @@ const EXAMPLE_CHARS = 80
 const OPEN = '<sandbox_violations>'
 const CLOSE = '</sandbox_violations>'
 // Read on a line with its trailing space off: `(.+?)\s*$` tries every split of a run of spaces.
-const VIOLATION = /^\s*deny\s+(network-outbound|file-write[\w*-]*|file-read[\w*-]*)\s+(.+)$/
+const VIOLATION = /^\s*deny\s+(network-outbound|file-write[\w*-]*|file-read[\w*-]*)\s+(\S.*)$/
 
 // The tail a refusal line may carry after "permitted": Rust's `(os error 1)`.
 const TAIL = String.raw`(?:\s*\(os error 1\))?\s*$`

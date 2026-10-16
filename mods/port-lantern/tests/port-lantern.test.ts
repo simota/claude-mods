@@ -132,3 +132,12 @@ describe('long dev-server output', () => {
     expect(performance.now() - started).toBeLessThan(100)
   })
 })
+
+test('a URL ending in a long run of punctuation, and a title never closed, are read right and in time', () => {
+  const started = performance.now()
+  expect(urlsOf(`http://localhost:3000/${';'.repeat(64_000)}x`)).toHaveLength(1)
+  expect(urlsOf(`http://localhost:3000/a${'.'.repeat(64_000)}`)).toEqual(['http://localhost:3000/a'])
+  expect(performance.now() - started).toBeLessThan(100)
+  // An OSC never ended keeps the lines after it: only a closed one is taken out.
+  expect(urlsOf('\u001b]0;my-app\n  Local: http://localhost:5173/\n')).toEqual(['http://localhost:5173/'])
+})

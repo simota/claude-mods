@@ -502,3 +502,10 @@ test('a long typed text or URL is measured and cut without reading it all', () =
   expect(summarize({ url: `https://example.com/${'p'.repeat(2_000_000)}` })).toHaveLength(60)
   expect(performance.now() - started).toBeLessThan(100)
 })
+
+test('the fallback reads one long cluster in linear time', () => {
+  const started = performance.now()
+  expect(graphemesFallback(`a${'\u200d\u{1F1EF}'.repeat(20_000)}`)).toHaveLength(1)
+  expect(performance.now() - started).toBeLessThan(200)
+  expect(graphemesFallback('🇯🇵🇺🇸')).toEqual(['🇯🇵', '🇺🇸'])
+})

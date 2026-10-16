@@ -100,17 +100,24 @@ const ZWJ = 0x200d
  */
 export function graphemesFallback(text: string, limit = Infinity): string[] {
   const out: string[] = []
+  // The cluster being read, as its pieces and its first code point: a cluster that keeps
+  // growing is never read again as a whole, so one long cluster stays linear.
+  let pieces: string[] = []
+  let first = 0
   let isAfterJoiner = false
   for (const ch of text) {
     const cp = ch.codePointAt(0) ?? 0
-    const prev = out.at(-1)
-    const prevCp = prev?.codePointAt(0) ?? 0
-    const isFlagHalf = isRegional(cp) && prev !== undefined && Array.from(prev).length === 1 && isRegional(prevCp)
-    if (prev !== undefined && (isAfterJoiner || cp === ZWJ || isExtend(cp) || isFlagHalf)) out[out.length - 1] = prev + ch
-    else if (out.length >= limit) break
-    else out.push(ch)
+    const isFlagHalf = isRegional(cp) && pieces.length === 1 && isRegional(first)
+    if (pieces.length > 0 && (isAfterJoiner || cp === ZWJ || isExtend(cp) || isFlagHalf)) pieces.push(ch)
+    else {
+      if (pieces.length > 0) out.push(pieces.join(''))
+      if (out.length >= limit) return out
+      pieces = [ch]
+      first = cp
+    }
     isAfterJoiner = cp === ZWJ
   }
+  if (pieces.length > 0 && out.length < limit) out.push(pieces.join(''))
   return out
 }
 
