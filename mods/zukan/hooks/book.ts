@@ -30,6 +30,11 @@ const MAX_PARSED = 10_000
 
 type Run = { name: string; args: string[] }
 
+// A program named by an expansion (`$CMD`, `$(foo)`) is not known until it runs.
+const named = (runs: Run[]): Run[] => runs.filter(one => !/^[$`]/.test(one.name))
+// A program name is kept to this: it goes into the key, the toast and the pane.
+const MAX_PROGRAM = 60
+
 /** The programs a command line runs at its top level (a `bash -c` text read through), and those of its substitutions. */
 function runsOf(command: string): { top: Run[]; nested: Run[] } {
   const { commands, nested } = parse(command)
@@ -38,10 +43,10 @@ function runsOf(command: string): { top: Run[]; nested: Run[] } {
     const inner = outer?.name === 'find' ? undefined : innerText(one.words)
     // A text that is itself fetched or expanded (`bash -c "$(curl …)"`, `eval "$X"`) names nothing: the shell does.
     if (inner === undefined || /^\s*[$`]/.test(inner)) return outer ?? []
-    const runs = allCommands(inner).flatMap(each => program(each.words) ?? [])
+    const runs = named(allCommands(inner).flatMap(each => program(each.words) ?? []))
     return runs.length > 0 ? runs : (outer ?? [])
   })
-  return { top, nested: nested.flatMap(text => allCommands(text)).flatMap(one => program(one.words) ?? []) }
+  return { top: named(top), nested: named(nested.flatMap(text => allCommands(text)).flatMap(one => program(one.words) ?? [])) }
 }
 
 /**
@@ -60,7 +65,7 @@ export function programOf(command: string): string {
   } catch {
     // A line the reader cannot hold: named by its first word below.
   }
-  if (run === undefined) return base(command.trim().split(/\s+/)[0] ?? '')
+  if (run === undefined) return base(command.trim().split(/\s+/)[0] ?? '').slice(0, MAX_PROGRAM)
   // Free text after `echo` or a path after `cd` is no subcommand.
   if (LEADING.has(run.name)) return run.name
   let k = 0
@@ -68,7 +73,8 @@ export function programOf(command: string): string {
     while (run.args[k]?.startsWith('-') === true) k += GIT_VALUES.has(run.args[k] as string) ? 2 : 1
   }
   const second = run.args[k]
-  return second !== undefined && /^[a-z][\w:-]*$/.test(second) ? `${run.name} ${second}` : run.name
+  const name = second !== undefined && /^[a-z][\w:-]*$/.test(second) ? `${run.name} ${second}` : run.name
+  return name.slice(0, MAX_PROGRAM)
 }
 
 /**

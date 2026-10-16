@@ -135,6 +135,9 @@ describe('book', () => {
     expect(programOf('eval "$(ssh-agent -s)"')).toBe('eval')
     expect(programOf('sh -c "$CMD"')).toBe('sh')
     expect(programOf('find . -name "*.ts" -exec grep -l foo {} +')).toBe('find')
+    expect(programOf(`bash -c 'cd a && $X'`)).toBe('cd')
+    expect(programOf('bash -c "echo hi; $CMD"')).toBe('echo')
+    expect(programOf(`cd app && ${'x'.repeat(10_100)}`)).toHaveLength(60)
   })
 
   test('a line the shell reader cannot hold is named by its first word, without throwing', () => {
