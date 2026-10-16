@@ -266,7 +266,7 @@ Findings ride beside the edit's result, quoted as data, asking Claude to state e
 
 ### negative-space
 
-Edits to source files that add authorization (`isAdmin`, `permission`, `403`…), input validation (`validate`, `z.string().max(40)`, `if (x > 100)`…) or error handling (`catch`, `raise`, `Err(`…) become triggers. After the turn, a band lists what the tests touched this session (edited or read, matched to the source by file stem; the latest 30 test files, each to its last 200 KB) do not yet try: the refusal, the invalid input, the failure, and each bound N as N-1/N/N+1. A case counts as tried only when such a test both tries it (`403`, `invalid`, `toThrow`…) and names what changed: the function the trigger sits in or a name on its line. **Claude に頼む** puts the list in the prompt; **不要** dismisses it. `/negative-space` lists all candidates.
+Edits to source files that add authorization (`isAdmin`, `permission`, `403`…), input validation (`validate`, `z.string().max(40)`, `if (x > 100)`…) or error handling (`catch`, `raise`, `Err(`…) become triggers. After the turn, a band lists what the tests touched this session (edited or read, matched to the source by file stem; each held as what it tries, its names and its numbers, Read's line numbers left out, under 1.5 MB in all, a test some trigger's file needs kept longest) do not yet try: the refusal, the invalid input, the failure, and each bound N as N-1/N/N+1. A case counts as tried only when such a test both tries it (`403`, `invalid`, `toThrow`…) and names what changed: the function the trigger sits in or a name on its line. **Claude に頼む** puts the list in the prompt; **不要** dismisses it. `/negative-space` lists all candidates.
 
 ### mutation-tap
 

@@ -13,13 +13,23 @@ export type NegativeTrigger = {
   at: number
 }
 
+/** What a test file says, as far as the candidates ask: which cases it tries, its names and numbers. */
+export type TestDigest = {
+  /** The kinds whose refusal or failure case the file tries (`403`, `invalid`, `toThrow`…). */
+  covers: NegativeTrigger['kind'][]
+  /** The identifiers in it, each once. */
+  words: string[]
+  /** The numbers in it, each once (a negative one also without its sign). */
+  numbers: string[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'negative-space': {
       /** Triggers from this session's edits, newest last, one per path, kind and line. */
       triggers: NegativeTrigger[]
-      /** Test file path to the text this session's edits added to it. */
-      tests: Record<string, string>
+      /** Test file path to what it says, as this session's edits and reads have shown it. */
+      tests: Record<string, TestDigest>
       /** Keys of candidates the person dismissed. */
       dismissed: string[]
       /** Whether the band is up: set when a turn ends with open candidates. */
