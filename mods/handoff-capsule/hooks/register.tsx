@@ -76,14 +76,20 @@ async function save(
   const sessionId = known?.sessionId ?? (await $.session.id())
   const branch = known?.skipBranch ? undefined : await branchOf($, root)
   const meta = { id: `${sessionId}:${at}`, at, sessionId, root, reason, byPerson: await read($, hasPerson), ...(branch === undefined ? {} : { branch }) }
-  const capsule = capsuleOf(known?.seen ?? (await read($, log)), meta)
-  if (isEmpty(capsule)) return undefined
+  const seen = known?.seen ?? (await read($, log))
+  const capsule = capsuleOf(seen, meta)
   // One capsule per session and root, laid on the session's capsule as this process first found
   // it (a resumed session's log starts empty); one per root for sessions no person was seen in.
   const found = await read($, base)
-  const under = found?.sessionId === sessionId ? found.capsule : ((await shelfOf($))[root] ?? []).find(one => one.sessionId === sessionId) ?? null
+  const stored = ((await shelfOf($))[root] ?? []).find(one => one.sessionId === sessionId)
+  const under = found?.sessionId === sessionId ? found.capsule : (stored ?? null)
+  // Nothing to keep, unless a todo list says what was left is done.
+  if (isEmpty(capsule) && (under === null || seen.todos.length === 0)) return undefined
   if (found?.sessionId !== sessionId) await update($, base, () => ({ sessionId, capsule: under }))
-  const kept = under === null ? capsule : merged(under, capsule)
+  const laid = under === null ? capsule : merged(under, capsule, seen.todos.length > 0)
+  // An end save reads no branch: the one an earlier save of the session read stays.
+  const branchKept = laid.branch ?? stored?.branch
+  const kept = branchKept === undefined ? laid : { ...laid, branch: branchKept }
   const withCapsule = (shelf: Shelf): Shelf => {
     const old = shelf[root] ?? []
     const others = old.filter(one => one.sessionId !== sessionId && (kept.byPerson !== false || one.byPerson !== false))
