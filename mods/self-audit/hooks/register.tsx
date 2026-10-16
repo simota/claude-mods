@@ -38,7 +38,7 @@ async function audit($: EngineInterface, mine: number, turnId: string, answer: s
     await skip($, turnId, `監査の fork が応答しませんでした（${reply.reason}）`)
     return
   }
-  const found = parseViolations(reply.text)
+  const found = parseViolations(reply.text, answer)
   if (found === undefined) {
     $.ui.log('self-audit: the audit reply was not the asked JSON', { to: 'debug' })
     await skip($, turnId, '監査の返答が JSON ではありませんでした')
@@ -112,7 +112,10 @@ export const register: Register = (on, options) => {
     await update($, latest, () => ({ status: 'pending', turnId }) as SelfAuditLatest)
     // Audit from a timer so the fork never holds the turn's end.
     $.clock.after(0, () => {
-      audit($, mine, turnId, answer).catch(err => $.ui.log(`self-audit: ${String(err)}`, { to: 'debug' }))
+      // A fork that throws leaves the reply skipped, not pending for ever.
+      audit($, mine, turnId, answer).catch(async err => {
+        if (mine === round) await skip($, turnId, `監査の fork が失敗しました（${String(err).slice(0, 80)}）`).catch(() => undefined)
+      })
     })
     return done
   })
