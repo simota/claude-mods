@@ -149,11 +149,11 @@ export function importPattern(path: string): string | undefined {
 
 export type Counts = { read: number; edited: number; errors: number; touched: number; total: number; percent: number }
 
-export function countsOf(touched: Readonly<Record<string, FogFile>>, files: readonly string[]): Counts {
-  const tracked = new Set(files)
+/** `tracked` is `new Set(files)` from a cache, when there is one: the list is not read again. */
+export function countsOf(touched: Readonly<Record<string, FogFile>>, files: readonly string[], tracked: ReadonlySet<string> = new Set(files)): Counts {
   const all = Object.entries(touched)
   const inside = all.filter(([path]) => tracked.has(path) || touched[path]?.isNew === true)
-  const total = new Set([...files, ...all.filter(([, one]) => one.isNew).map(([path]) => path)]).size
+  const total = tracked.size + all.filter(([path, one]) => one.isNew && !tracked.has(path)).length
   return {
     read: all.filter(([, one]) => one.reads > 0 && one.edits === 0).length,
     edited: all.filter(([, one]) => one.edits > 0).length,
@@ -210,11 +210,12 @@ export function bar(percent: number, width = 24): string {
 /** One row of the drawn tree. */
 export type Row = { depth: number; text: string; kind: 'fog' | 'read' | 'edit' | 'new' | 'error' | 'dir' | 'focus-dir' }
 
-type Node = { name: string; dirs: Map<string, Node>; files: string[] }
+export type Node = { name: string; dirs: Map<string, Node>; files: string[] }
 
-function treeOf(paths: Iterable<string>): Node {
+/** The paths as a tree of folders, each name once. */
+export function treeOf(paths: Iterable<string>): Node {
   const root: Node = { name: '', dirs: new Map(), files: [] }
-  for (const path of paths) {
+  for (const path of new Set(paths)) {
     const parts = path.split('/')
     let node = root
     for (const part of parts.slice(0, -1)) {
@@ -226,6 +227,39 @@ function treeOf(paths: Iterable<string>): Node {
       node = next
     }
     node.files.push(parts.at(-1) ?? path)
+  }
+  return root
+}
+
+function hasPath(tree: Node, path: string): boolean {
+  const parts = path.split('/')
+  let node: Node | undefined = tree
+  for (const part of parts.slice(0, -1)) node = node?.dirs.get(part)
+  return node !== undefined && node.files.includes(parts.at(-1) ?? path)
+}
+
+/**
+ * `base` with `paths` it lacks added, as treeOf would have placed them after its own. The
+ * folders on their way are copied, so `base`, kept in a cache, is never changed.
+ */
+function withPaths(base: Node, paths: readonly string[]): Node {
+  const root: Node = { ...base, dirs: new Map(base.dirs), files: [...base.files] }
+  const copied = new Set<Node>([root])
+  for (const path of paths) {
+    const parts = path.split('/')
+    let node = root
+    for (const part of parts.slice(0, -1)) {
+      const found = node.dirs.get(part)
+      let next: Node
+      if (found === undefined) next = { name: part, dirs: new Map(), files: [] }
+      else if (copied.has(found)) next = found
+      else next = { ...found, dirs: new Map(found.dirs), files: [...found.files] }
+      copied.add(next)
+      node.dirs.set(part, next)
+      node = next
+    }
+    const name = parts.at(-1) ?? path
+    if (!node.files.includes(name)) node.files.push(name)
   }
   return root
 }
@@ -242,14 +276,30 @@ export function rowsOf(
   touched: Readonly<Record<string, FogFile>>,
   focus: string | null,
   width: number,
+  tree?: Node,
 ): Row[] {
   const rows: Row[] = []
-  const root = treeOf(new Set([...files, ...Object.keys(touched)]))
+  // `tree` is treeOf(files) from a cache: only the touched paths it lacks are added, on a copy.
+  const root = tree === undefined ? treeOf([...files, ...Object.keys(touched)]) : withPaths(tree, Object.keys(touched).filter(path => !hasPath(tree, path)))
 
-  const marksUnder = (node: Node, prefix: string): FogFile[] => [
-    ...node.files.flatMap(name => (touched[`${prefix}${name}`] ? [touched[`${prefix}${name}`] as FogFile] : [])),
-    ...[...node.dirs.values()].flatMap(dir => marksUnder(dir, `${prefix}${dir.name}/`)),
-  ]
+  // Each folder's marks are gathered once: an open folder's are not gathered again for each level
+  // above it, and a folder holding no touched path is never read through.
+  const holding = new Set<string>()
+  for (const path of Object.keys(touched)) {
+    for (let at = path.indexOf('/'); at >= 0; at = path.indexOf('/', at + 1)) holding.add(path.slice(0, at + 1))
+  }
+  const gathered = new Map<Node, FogFile[]>()
+  const marksUnder = (node: Node, prefix: string): FogFile[] => {
+    if (prefix !== '' && !holding.has(prefix)) return []
+    const known = gathered.get(node)
+    if (known !== undefined) return known
+    const marks = [
+      ...node.files.flatMap(name => (touched[`${prefix}${name}`] ? [touched[`${prefix}${name}`] as FogFile] : [])),
+      ...[...node.dirs.values()].flatMap(dir => marksUnder(dir, `${prefix}${dir.name}/`)),
+    ]
+    gathered.set(node, marks)
+    return marks
+  }
 
   const walk = (node: Node, prefix: string, depth: number) => {
     const fog: string[] = []
