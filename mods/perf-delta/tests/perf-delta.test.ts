@@ -46,6 +46,7 @@ describe('delta', () => {
     expect(parseArgs('')).toEqual({ mode: 'show', command: '' })
     // A ref with no command asks for one, never runs a shell command named `ref`.
     expect(parseArgs('ref main')).toEqual({ mode: 'ref', ref: 'main', command: '' })
+    expect(parseArgs('ref')).toEqual({ mode: 'ref', command: '' })
     expect(isSafeRef('origin/main')).toBe(true)
     expect(isSafeRef('--upload-pack=x')).toBe(false)
     expect(isSafeRef('a..b')).toBe(false)
@@ -80,6 +81,8 @@ function world(on: On): World {
     return { value: undefined }
   })
   on('fs.exists', ($, e) => ({ value: !w.missing.includes(String(e.path)) }))
+  // TMPDIR as macOS has it: under a link, git listing worktrees by the real path.
+  on('fs.stat', ($, e) => ({ value: { kind: 'dir', size: 0, mtimeMs: 0, realPath: String(e.path).replace(/^\/tmp\//, '/private/tmp/') } }) as never)
   on('process.run', ($, e) => {
     const argv = e.argv.join(' ')
     w.argvs.push(argv)
@@ -176,7 +179,7 @@ describe('perf-delta in a session', () => {
     await w.clock.settle()
     const ui = await pane($)
     expect(await ui.find({ type: 'Text', text: /HEAD~1 には packages\/new がありません/ })).toBeDefined()
-    expect(w.argvs.some(a => a.startsWith('git worktree remove --force -- /tmp/me/perf-delta-'))).toBe(true)
+    expect(w.argvs.some(a => a.startsWith('git worktree remove --force --force -- /tmp/me/perf-delta-'))).toBe(true)
     await ui.unmount()
 
     w.cwd = '/w/gone'
@@ -190,14 +193,22 @@ describe('perf-delta in a session', () => {
     await again.unmount()
   })
 
-  test('a worktree git cannot remove is deleted and pruned; ones left by a run cut short are removed at the next start', async ($, on) => {
+  test('a worktree git cannot remove is deleted with its registration alone; ones left by a run cut short are removed at the next start', async ($, on) => {
     const w = world(on)
     const now = 1_000 + 13 * 3_600_000
     const young = now - 60_000
-    w.worktrees = ['worktree /w', 'HEAD abc', '', 'worktree /tmp/me/perf-delta-1000-zz99zz', 'HEAD def', 'detached', '', `worktree /tmp/me/perf-delta-${young}-yy88yy`, 'HEAD 123', 'detached', ''].join('\n')
+    w.worktrees = [
+      'worktree /w', 'HEAD abc', '',
+      'worktree /private/tmp/me/perf-delta-1000-zz99zz', 'HEAD def', 'detached', '',
+      'worktree /private/tmp/me/perf-delta-1000-xx77xx', 'HEAD def', 'detached', 'locked added with --lock', '',
+      `worktree /tmp/me/perf-delta-${young}-yy88yy`, 'HEAD 123', 'detached', '',
+    ].join('\n')
     await w.clock.advance(13 * 3_600_000)
     await $.session.start(START)
-    expect(w.argvs).toContain('git worktree remove --force -- /tmp/me/perf-delta-1000-zz99zz')
+    await w.clock.settle()
+    expect(w.argvs).toContain('git worktree remove --force --force -- /private/tmp/me/perf-delta-1000-zz99zz')
+    // Locked: a run that may still be going (a laptop asleep), given 48 hours.
+    expect(w.argvs.some(a => a.includes('perf-delta-1000-xx77xx'))).toBe(false)
     expect(w.argvs.some(a => a.includes(`perf-delta-${young}-yy88yy`) && a.startsWith('git worktree remove'))).toBe(false)
 
     w.isRemoveFailing = true
@@ -205,7 +216,9 @@ describe('perf-delta in a session', () => {
     await $.command.run(perf('ref HEAD~1 make bench'))
     await w.clock.settle()
     expect(w.argvs).toContain(`rm -rf -- /tmp/me/perf-delta-${now}-ab12cd`)
-    expect(w.argvs).toContain('git worktree prune')
+    expect(w.argvs.filter(a => a === `git worktree remove --force --force -- /tmp/me/perf-delta-${now}-ab12cd`)).toHaveLength(2)
+    // Never a prune: it would drop the person's own worktrees whose folders are away.
+    expect(w.argvs).not.toContain('git worktree prune')
   })
 
   test('runs a git ref in a temporary worktree and removes it after', async ($, on) => {
@@ -214,8 +227,8 @@ describe('perf-delta in a session', () => {
     w.reals = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
     await $.command.run(perf('ref HEAD~1 make bench'))
     await w.clock.settle()
-    expect(w.argvs).toContain('git worktree add --detach -- /tmp/me/perf-delta-1000-ab12cd HEAD~1')
-    expect(w.argvs.some(a => a.startsWith('git worktree remove --force -- /tmp/me/perf-delta-'))).toBe(true)
+    expect(w.argvs).toContain('git worktree add --lock --detach -- /tmp/me/perf-delta-1000-ab12cd HEAD~1')
+    expect(w.argvs.some(a => a.startsWith('git worktree remove --force --force -- /tmp/me/perf-delta-'))).toBe(true)
     expect(w.toasts.at(-1)).toContain('ばらつきの範囲内')
   })
 })

@@ -284,7 +284,7 @@ The copy takes disk space and time where no clone is possible (a large `node_mod
 
 - `/perf <command>`: one warm-up and N measured runs; the first time saves a baseline, later runs compare with it (a baseline belongs to the command and the folder it ran in)
 - `/perf base <command>`: measure and save as the baseline
-- `/perf ref <git-ref> <command>`: run the ref in a temporary `git worktree` (a folder `mktemp` makes, in the same folder below the top as the session), then the working tree (dependencies not in git, such as `node_modules`, are missing there); a worktree git cannot remove is deleted and pruned, and one a run cut short left is removed by a later session start after 12 hours
+- `/perf ref <git-ref> <command>`: run the ref in a temporary `git worktree` (a folder `mktemp` makes, in the same folder below the top as the session), then the working tree (dependencies not in git, such as `node_modules`, are missing there); the worktree is locked while it runs; one git cannot remove is deleted with its own registration (never `git worktree prune`, which would drop your worktrees whose folders are away), and one a run cut short left is removed by a later session start after 48 hours
 - `/perf show`, `/perf clear [command]`
 
 Time and peak memory come from `/usr/bin/time` (`-l` on macOS, `-v` on GNU). The report gives median, ±stdev, CV and range per side; a difference counts only beyond twice the larger stdev and 1%, with at least 3 runs a side (fewer is reported as too few to judge), and a side with CV over 10% is flagged unsteady. A folder missing at the ref, or a command that cannot start, is said as such.
