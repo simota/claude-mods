@@ -47,6 +47,13 @@ const asPosted = (body: string): string => clip(plain(body), 200)
  * A conversation comment or a review's body (`gh pr comment`, `gh pr review -b`) never shows in a
  * thread, so it is not recorded: kept, it would claim a reviewer's comment with the same words later.
  */
+// A part that calls `gh api` on a pull's comments: the path looked for after the first
+// `gh api`, once, not by `.*` from every one of them.
+function postsComment(part: string): boolean {
+  const call = /\bgh\s+api\b/.exec(part)
+  return call !== null && /\/pulls\/\d+\/comments\b/.test(part.slice(call.index + call[0].length))
+}
+
 export function bodiesPosted(tool: string, input: Record<string, unknown>): string[] {
   if (tool.startsWith('mcp__')) {
     const isThreadPost = /reply|review_comment|comment_to_pending_review|pull_request_comment/i.test(tool) && !/issue/i.test(tool)
@@ -59,7 +66,7 @@ export function bodiesPosted(tool: string, input: Record<string, unknown>): stri
   // Only the gh command's own words: `gh pr comment -b ok && git checkout -b feat` posted `ok`.
   return input.command
     .split(/&&|\|\||[;|\n]/)
-    .filter(part => /\bgh\s+api\b.*\/pulls\/\d+\/comments\b/.test(part))
+    .filter(postsComment)
     .flatMap(part => [...part.matchAll(new RegExp(String.raw`(?:-f|-F|--field|--raw-field)\s+body=${value}`, 'g'))])
     .map(m => unquote(m[1] ?? ''))
     .filter(one => one.trim() !== '' && !one.startsWith('@')) // `-F body=@file`: the file's words are not seen
