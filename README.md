@@ -116,7 +116,7 @@ Finished tool calls are drawn as one compact line with a Nerd Font icon: Edit/Wr
 - Images a session writes, reads, or that a Bash command produces (png, jpg, jpeg, webp, gif) get a thumbnail under that tool's row in the terminal (kitty graphics: Ghostty, kitty).
 - `/images` opens a pane, newest first; `h`/`l` step through them.
 - Non-PNG files are converted with macOS `sips` after the tool result has gone back, so tool calls never wait on it. Converted files live in a private cache (`$TMPDIR` or `~/.cache`), newest 50 kept.
-- A Bash command and its output are searched for image paths in time linear in their length, before the result goes back. A path split at spaces (`/tmp/a b/x.jpg`) is followed back at most 8 pieces.
+- A Bash command and its output are searched for image paths in time linear in their length, before the result goes back. A path split at spaces (`/tmp/a b/x.jpg`) joins at most 8 preceding pieces and 4096 characters; the first 64 paths named are read, and of those the first 4 that exist are shown.
 
 | Option | Default | |
 | --- | --- | --- |

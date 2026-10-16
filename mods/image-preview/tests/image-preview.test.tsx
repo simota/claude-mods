@@ -143,8 +143,8 @@ describe('findImageCandidates', () => {
   })
 
   test('reads a long output in linear time: it runs before every Bash result', () => {
-    // An echoed glob of many paths, and a long run of `=`: each took most of a second or more.
-    for (const text of ['/a '.repeat(7_000) + '/x.png', '='.repeat(60_000), `${':'.repeat(30_000)}x.png`]) {
+    // An echoed glob of many paths, a long run of `=` or of `:`: each took 0.4 s or more.
+    for (const text of ['/a '.repeat(7_000) + '/x.png', '='.repeat(60_000), ':'.repeat(60_000)]) {
       const started = performance.now()
       findImageCandidates(text)
       expect(performance.now() - started).toBeLessThan(100)
@@ -156,6 +156,20 @@ describe('findImageCandidates', () => {
     expect(group?.length).toBeLessThanOrEqual(9)
     expect(group?.at(-1)).toBe('/x.png')
     expect(group?.[0]).toBe(`${'/a '.repeat(8)}/x.png`)
+  })
+
+  test('a long list of image paths stops at the first 64: at most 4 are shown from one call', () => {
+    // Each `/n.png!` is a path and also the head of the next one: 9 readings for every word.
+    const text = Array.from({ length: 20_000 }, (_, n) => `/${n}.png!`).join(' ')
+    const started = performance.now()
+    const groups = findImageCandidates(text)
+    expect(performance.now() - started).toBeLessThan(100)
+    expect(groups).toHaveLength(64)
+    expect(groups[0]).toEqual(['/0.png'])
+    expect(groups.at(-1)?.at(-1)).toBe('/63.png')
+    // Repeats and URLs do not count toward the 64: a path after them is still found.
+    const after = `${'a.png '.repeat(100)}${'https://e.com/i.png '.repeat(100)}"q.png" ${`'q.png' `.repeat(100)}b.png`
+    expect(findImageCandidates(after)).toEqual([['a.png'], ['q.png'], ['b.png']])
   })
 
   test('a word after a space is read whole, one glued to a quote from its `=`; a word holds one path at most', () => {

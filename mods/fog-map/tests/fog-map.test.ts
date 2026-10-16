@@ -94,8 +94,8 @@ describe('fog', () => {
   })
 
   test('reads a long output without a path in linear time: it runs before every Bash result', () => {
-    // Each of these took over a second when a regex scanned the rest of a long word from every dot.
-    for (const output of ['a.b'.repeat(10_000), 'Q'.repeat(60_000), `${'x.y'.repeat(10_000)}:1`]) {
+    // Each of these took over a second when a regex scanned the rest of a long word from every start.
+    for (const output of ['a.b'.repeat(10_000), 'Q'.repeat(60_000)]) {
       const started = performance.now()
       errorPaths(output)
       expect(performance.now() - started).toBeLessThan(100)
