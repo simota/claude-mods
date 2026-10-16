@@ -94,7 +94,7 @@ export function bashTouches(
     const [program = '', ...rest] = words(part)
     if (program === 'cd') {
       const to = rest[0]
-      const next = to === undefined || to === '-' || to.startsWith('~') || to.includes('$') || here === undefined
+      const next: string | undefined = to === undefined || to === '-' || to.startsWith('~') || to.includes('$') || here === undefined
         ? undefined
         : to.startsWith('/') ? to : `${trimSlashes(here)}/${to}`
       here = next !== undefined && next.length <= PATH_MAX ? next : undefined
