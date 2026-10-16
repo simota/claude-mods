@@ -197,6 +197,32 @@ describe('handoff-capsule in a session', () => {
     expect((w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.[0]?.open).toEqual(['docs'])
   })
 
+  test('resumed, a todo list with nothing left open leaves nothing open', async ($, on) => {
+    const w = world(on, 's1', { capsules: { [ROOT]: [{ ...EARLIER, open: ['old open'] }] } })
+    await $.session.start(START)
+    await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'add tests', status: 'completed' }] } as never)
+    await $.command.run({ command: 'handoff', args: 'save', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+    expect((w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.[0]?.open).toEqual([])
+
+  })
+
+  test('resumed with no todo list, a reply line is added to what was left', async ($, on) => {
+    const w = world(on, 's1', { capsules: { [ROOT]: [{ ...EARLIER, open: ['a', 'b'] }] } })
+    await $.session.start(START)
+    await $.turn.complete({ answer: 'README はまだです。', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: {} as never })
+    expect((w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.[0]?.open).toEqual(['README はまだです。', 'a', 'b'])
+  })
+
+  test('a save after another in one process keeps the branch the first one read', async ($, on) => {
+    const w = world(on, 's1')
+    await $.session.start(START)
+    await $.prompt.submit({ text: 'ログインを直して', origin: { kind: 'composer' }, wait: false })
+    await $.command.run({ command: 'handoff', args: 'save', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: {} as never })
+    expect((w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.[0]?.branch).toBe('main')
+  })
+
   test('a long quoted secret is masked whole, past where the prompt is cut', async ($, on) => {
     const w = world(on, 's1')
     await $.session.start(START)

@@ -88,10 +88,10 @@ const union = (first: readonly string[], then: readonly string[]): string[] => [
 /**
  * A session's newer capsule laid on its older one, as when it is resumed in a new process and
  * its log starts empty: its first request stays the goal's first, its branch is kept when the
- * newer has none, and the rest is both, the newer's ahead; what is left is the newer's when it
- * knows any, so an item finished since is not brought back.
+ * newer has none, and the rest is both, the newer's ahead. What is left is the newer's alone
+ * when its log saw a todo list (an item finished since is not brought back), else both.
  */
-export function merged(older: Capsule, newer: Capsule): Capsule {
+export function merged(older: Capsule, newer: Capsule, sawTodos = false): Capsule {
   const first = older.goal[0] ?? newer.goal[0]
   const latest = newer.goal.at(-1) ?? older.goal.at(-1)
   const branch = newer.branch ?? older.branch
@@ -100,7 +100,7 @@ export function merged(older: Capsule, newer: Capsule): Capsule {
     ...(branch === undefined ? {} : { branch }),
     goal: first === undefined ? [] : latest === undefined || latest === first ? [first] : [first, latest],
     decisions: union(older.decisions, newer.decisions).slice(-10),
-    open: newer.open.length > 0 ? newer.open : older.open,
+    open: sawTodos ? newer.open : union(newer.open, older.open).slice(0, 12),
     commands: [...older.commands.filter(one => !newer.commands.some(other => other.command === one.command)), ...newer.commands].slice(-8),
     files: union(newer.files, older.files).slice(0, 15),
   }
