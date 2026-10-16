@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
@@ -31,6 +31,8 @@ type Calls = {
   /** Set to make the next fill wait for the test, then fail. */
   slowFill?: Promise<void>
   toasts: string[]
+  /** The composer's draft, as the engine keeps it. */
+  box: string
   judged: string[]
   models: string[]
   entered: string[]
@@ -41,8 +43,11 @@ type Calls = {
 
 // Stands for the engine beneath the plugin: a judge that calls only VAGUE ambiguous,
 // or never answers in time when `isSlow`.
+// The engine of the test running: typing a prompt empties its box, held back or not.
+let current: Calls | undefined
+
 const engine = (on: On, isSlow = false): Calls => {
-  const calls: Calls = { toasts: [], judged: [], models: [], entered: [], filled: [], modes: [], timeouts: [] }
+  const calls: Calls = (current = { toasts: [], box: '', judged: [], models: [], entered: [], filled: [], modes: [], timeouts: [] })
   on('ui.toast', ($, e) => {
     calls.toasts.push(e.text)
     return { value: undefined }
@@ -59,6 +64,8 @@ const engine = (on: On, isSlow = false): Calls => {
     return { value: { isAnswered: true, text, usage: USAGE } as const }
   })
   on('prompt.submit', ($, e) => {
+    // Submitting (or holding, which drops it) leaves the composer empty.
+    calls.box = ''
     if (calls.fails === 'submit') {
       calls.fails = undefined
       throw new Error('the engine could not take the prompt')
@@ -70,6 +77,7 @@ const engine = (on: On, isSlow = false): Calls => {
     calls.entered.push(e.text)
     return { text: e.text }
   })
+  on('prompt.read', () => ({ value: { text: calls.box, cursor: calls.box.length } }) as never)
   on('prompt.fill', async ($, e) => {
     if (calls.slowFill !== undefined) {
       const wait = calls.slowFill
@@ -87,7 +95,8 @@ const engine = (on: On, isSlow = false): Calls => {
     }
     calls.filled.push(e.text)
     calls.modes.push(e.mode)
-    return { isFilled: true, box: { text: e.text, cursor: e.text.length } }
+    calls.box = e.mode === 'replace' ? e.text : calls.box + e.text
+    return { isFilled: true, text: calls.box, cursor: calls.box.length }
   })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Box } = $.ui.resolve(e)
@@ -96,8 +105,10 @@ const engine = (on: On, isSlow = false): Calls => {
   return calls
 }
 
-const typed = ($: Engine, text: string, extra: Record<string, unknown> = {}) =>
-  $.prompt.submit({ text, wait: false, origin: { kind: 'composer' }, ...extra })
+const typed = ($: Engine, text: string, extra: Record<string, unknown> = {}) => {
+  if (current !== undefined) current.box = ''
+  return $.prompt.submit({ text, wait: false, origin: { kind: 'composer' }, ...extra })
+}
 
 describe('judge helpers', () => {
   test('parseVerdict reads JSON around prose and rejects anything unclear', () => {
@@ -311,21 +322,39 @@ test('two presses at once hand the prompt over once', ON, async ($, on) => {
   await ui.unmount()
 })
 
-test('words go back into the box beside a new draft, never over it', ON, async ($, on) => {
+test('words go back into an empty box as they are, and after a new draft on a line of their own', ON, async ($, on) => {
   const calls = engine(on)
   await typed($, VAGUE)
-  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   await ui.press({ key: 'coach-dismiss' })
-  expect(calls.modes).toEqual(['insert'])
+  expect(calls.box).toBe(VAGUE)
   await ui.unmount()
+
+  calls.box = ''
+  await typed($, `${VAGUE} 2`)
+  calls.box = 'also fix the login bug'
+  ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'add' })
+  expect(calls.box).toBe(`also fix the login bug\n${VAGUE} 2\n完了条件: `)
+  await ui.unmount()
+  // What came back completed, draft and all, is not held a second time.
+  expect((await typed($, `${calls.box}画面が崩れないこと`)).drop).toBeUndefined()
 })
 
-test('a prompt held when the session ends is shown, not lost', ON, async ($, on) => {
+test('a prompt held when the session ends comes back into the box at the next start', ON, async ($, on) => {
   const calls = engine(on)
+  mock.store(on, {})
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
   await typed($, VAGUE)
   await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } })
-  expect(calls.toasts.join('\n')).toContain(VAGUE)
+  expect(calls.box).toBe('')
+  await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
+  expect(calls.box).toBe(VAGUE)
+  // Once only.
+  calls.box = ''
+  await $.session.start({ cwd: '/w', surface: 'terminal', isInteractive: true })
+  expect(calls.box).toBe('')
 })
 
 test('a new prompt while one is held is sent once, even when the held words cannot go back', ON, async ($, on) => {

@@ -51,12 +51,13 @@ export const FOLLOW_UP = '\n完了条件: '
 
 /**
  * Whether a text is one this coach handed back to be completed, which is never held again:
- * the exact text handed back, or anything that still opens with the held words once the
- * whitespace around both is set aside (an empty 完了条件 the box trimmed, a line added after).
+ * the exact text handed back, or anything that still holds the held words once the whitespace
+ * around them is set aside (an empty 完了条件 the box trimmed, a line added after, a draft before).
  */
 export function isFollowUp(text: string, bases: readonly string[]): boolean {
   const typed = text.trim()
-  return bases.some(base => text === base + FOLLOW_UP || (base.trim() !== '' && typed.startsWith(base.trim())))
+  // Anywhere in the text: words handed back go after a draft typed meanwhile, on their own line.
+  return bases.some(base => text === base + FOLLOW_UP || (base.trim() !== '' && typed.includes(base.trim())))
 }
 
 /**
