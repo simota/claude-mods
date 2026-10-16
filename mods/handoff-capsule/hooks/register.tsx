@@ -31,6 +31,8 @@ const FRESH_MS = 14 * 24 * 60 * 60 * 1000
 const log = atom({ plugin: 'handoff-capsule', key: 'log' } as const, emptyLog())
 const offer = atom({ plugin: 'handoff-capsule', key: 'offer' } as const, null as { capsule: Capsule; sections: CapsuleSection[] } | null)
 const pending = atom({ plugin: 'handoff-capsule', key: 'pending' } as const, null as string | null)
+// A `-p` run or the SDK: no person to hand over to, and its capsule would push theirs off the shelf.
+const isHeadless = atom({ plugin: 'handoff-capsule', key: 'isHeadless' } as const, false)
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
@@ -87,6 +89,7 @@ const offerOf = (capsule: Capsule) => ({ capsule, sections: filled(capsule) })
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'handoff', description: '引き継ぎカプセル: 表示（/handoff）· 保存（save）· 前回分を取り込む（load）', argumentHint: '[save | load]' })
+    await update($, isHeadless, () => !e.isInteractive)
     const started = await next(e)
     if ((await read($, offer)) !== null || (await read($, pending)) !== null) return started
     const sessionId = await $.session.id()
@@ -128,7 +131,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e)) // an observer: a failure here never changes the call
 
   on('session.compact', async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined || (await read($, isHeadless))) return next(e)
     const capsule = await save($, 'compact').catch(() => undefined)
     const done = await next(e)
     // After the compaction the conversation has only its summary: offer the capsule back.
@@ -138,7 +141,9 @@ export const register: Register = on => {
 
   on('session.end', async ($, e, next) => {
     // The end has about a second and a half in all: no git call, the store write alone.
-    await save($, 'end', { sessionId: e.sessionId, skipBranch: true }).catch(() => undefined)
+    if (!(await read($, isHeadless))) await save($, 'end', { sessionId: e.sessionId, skipBranch: true }).catch(() => undefined)
+    // A /clear goes on in the same process under a new session: its capsule starts afresh.
+    if (e.reason === 'clear') await update($, log, () => emptyLog())
     return next(e)
   })
 

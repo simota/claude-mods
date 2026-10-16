@@ -296,7 +296,7 @@ Time and peak memory come from `/usr/bin/time` (`-l` on macOS, `-v` on GNU). The
 
 ### handoff-capsule
 
-It follows the session: the person's requests, decision lines and open items from Claude's replies (`#TODO(agent)`, "まだ", the todo list), Bash commands worth rerunning with their last outcome, files edited; credentials in commands masked as zukan does. A capsule is saved before each compaction, at session end, and with `/handoff save` (five per repository). The next session in the repository, or the conversation right after a compaction, shows a band: toggle 目的・決定・未完了・コマンド・ファイル and press **取り込む**; the chosen parts go to Claude beside the next prompt, marked as a record to check against the current state. `/handoff` shows the capsule, `/handoff load` offers the latest again.
+It follows the session: the person's requests, decision lines and open items from Claude's replies (`#TODO(agent)`, "まだ", the todo list), Bash commands worth rerunning with their last outcome, files edited; credentials in all of it (requests, reply lines, todos, commands) masked as zukan does. A capsule is saved before each compaction, at session end, and with `/handoff save` (five per repository); a `-p` run or the SDK saves none, and after `/clear` the next conversation starts a capsule of its own. The next session in the repository, or the conversation right after a compaction, shows a band: toggle 目的・決定・未完了・コマンド・ファイル and press **取り込む**; the chosen parts go to Claude beside the next prompt, marked as a record to check against the current state. `/handoff` shows the capsule, `/handoff load` offers the latest again.
 
 ### port-lantern
 

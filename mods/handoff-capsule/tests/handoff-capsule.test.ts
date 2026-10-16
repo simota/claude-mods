@@ -127,6 +127,40 @@ describe('handoff-capsule in a session', () => {
     expect(kept).not.toContain('npm_abcdef123456')
   })
 
+  test('credentials in a prompt, a reply or a todo are masked before the capsule is kept', async ($, on) => {
+    const w = world(on, 's1')
+    await $.session.start(START)
+    await $.prompt.submit({ text: 'deploy with GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789', origin: { kind: 'composer' }, wait: false })
+    await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'rotate key sk_live_abcdefghijklmnop1234', status: 'pending' }] } as never)
+    await $.turn.complete({ answer: '方針: API_KEY=hunter2secret を使うことにしました。', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: {} as never })
+    const kept = JSON.stringify(w.kept.capsules)
+    expect(kept).toContain('GITHUB_TOKEN=***')
+    for (const secret of ['ghp_abcdefghij', 'sk_live_abcdefghij', 'hunter2secret']) expect(kept).not.toContain(secret)
+  })
+
+  test('a -p run or the SDK leaves no capsule to push the person\'s off the shelf', async ($, on) => {
+    const w = world(on, 's9', { capsules: { [ROOT]: [EARLIER] } })
+    await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+    await $.prompt.submit({ text: 'summarise the diff', origin: { kind: 'sdk' }, wait: false })
+    await $.tool.call({ tool: 'Bash', command: 'pnpm test' })
+    await $.turn.complete({ answer: 'Tests pass; nothing left to do except the remaining docs.', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+    await $.session.end({ reason: 'other', sessionId: 's9', resume: {} as never })
+    expect(w.kept.capsules).toEqual({ [ROOT]: [EARLIER] })
+  })
+
+  test('after /clear the next conversation starts a capsule of its own', async ($, on) => {
+    const w = world(on, 's1')
+    await $.session.start(START)
+    await $.prompt.submit({ text: 'ログインを直して', origin: { kind: 'composer' }, wait: false })
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: {} as never })
+    await $.prompt.submit({ text: 'README を書いて', origin: { kind: 'composer' }, wait: false })
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's2', resume: {} as never })
+    const list = (w.kept.capsules as Record<string, Capsule[]>)[ROOT] ?? []
+    expect(list.find(one => one.sessionId === 's2')?.goal).toEqual(['README を書いて'])
+    expect(list.find(one => one.sessionId === 's1')?.goal).toEqual(['ログインを直して'])
+  })
+
   for (const surface of ['terminal', 'desktop'] as const) {
     test(`the ${surface} band brings back the chosen parts beside the next prompt`, async ($, on) => {
       const w = world(on, 's2', { capsules: { [ROOT]: [EARLIER] } })
