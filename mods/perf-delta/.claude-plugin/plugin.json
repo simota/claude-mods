@@ -1,6 +1,6 @@
 {
   "name": "perf-delta",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "/perf runs a benchmark command several times and compares it with its baseline (saved earlier, or a git ref run in a temporary worktree): median wall time, peak memory and the spread of the runs, and whether the difference is larger than the noise",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

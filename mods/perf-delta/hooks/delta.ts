@@ -39,16 +39,21 @@ export function statsOf(values: readonly number[]): Stats | undefined {
   return { n, median, mean, stdev, cv: mean === 0 ? 0 : (stdev / mean) * 100, min: sorted[0] as number, max: sorted[n - 1] as number }
 }
 
-export type Verdict = 'faster' | 'slower' | 'noise' | 'unknown'
+export type Verdict = 'faster' | 'slower' | 'noise' | 'few' | 'unknown'
+
+/** Runs a side needs before a difference is called: with fewer there is no spread to weigh it by. */
+export const MIN_RUNS = 3
 
 /**
  * Whether the medians differ by more than the noise: more than twice the larger standard
- * deviation and more than 1% of the baseline. A lower value is better (time, memory).
+ * deviation and more than 1% of the baseline, each side measured at least MIN_RUNS times. A
+ * lower value is better (time, memory).
  */
 export function verdictOf(before: Stats | undefined, after: Stats | undefined): { verdict: Verdict; deltaPct?: number } {
   if (before === undefined || after === undefined || before.median === 0) return { verdict: 'unknown' }
   const delta = after.median - before.median
   const deltaPct = (delta / before.median) * 100
+  if (before.n < MIN_RUNS || after.n < MIN_RUNS) return { verdict: 'few', deltaPct }
   const noise = 2 * Math.max(before.stdev, after.stdev)
   if (Math.abs(delta) <= noise || Math.abs(deltaPct) < 1) return { verdict: 'noise', deltaPct }
   return { verdict: delta < 0 ? 'faster' : 'slower', deltaPct }
@@ -58,7 +63,7 @@ export const ms = (v: number): string => (v >= 10_000 ? `${(v / 1000).toFixed(1)
 export const mb = (v: number): string => `${(v / 1024 / 1024).toFixed(v >= 100 * 1024 * 1024 ? 0 : 1)}MB`
 export const pct = (v: number): string => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`
 
-const WORD: Record<Verdict, string> = { faster: '改善', slower: '悪化', noise: 'ばらつきの範囲内', unknown: '比較できません' }
+const WORD: Record<Verdict, string> = { faster: '改善', slower: '悪化', noise: 'ばらつきの範囲内', few: `回数が少なく判定できません（各 ${MIN_RUNS} 回以上）`, unknown: '比較できません' }
 
 /** The comparison as lines: one for time, one for memory, and a warning per unsteady side. */
 export function reportLines(before: PerfSample | undefined, after: PerfSample | undefined): string[] {
@@ -94,7 +99,11 @@ export function parseArgs(args: string): { mode: 'run' | 'base' | 'ref' | 'show'
   return { mode: 'run', command: text }
 }
 
-export const baselineKey = (root: string, command: string): string => `${root}\u0000${command.trim().replace(/\s+/g, ' ')}`
+/** A baseline is the command's in the folder it ran in: at the root as it always was, below it with the folder named. */
+export const baselineKey = (root: string, command: string, cwd = root): string => {
+  const below = cwd.startsWith(`${root}/`) ? cwd.slice(root.length + 1) : ''
+  return `${root}\u0000${below === '' ? '' : `${below}\u0000`}${command.trim().replace(/\s+/g, ' ')}`
+}
 
 /** A git ref safe to hand to git: no option, no whitespace, no shell or revision-range tricks. */
 export const isSafeRef = (ref: string): boolean => /^[\w][\w./~^@{}-]*$/.test(ref) && !ref.includes('..')
