@@ -155,13 +155,15 @@ describe('ledger', () => {
   })
 })
 
-type World = { toasts: string[]; status: (string | undefined)[]; kept: Record<string, unknown>; race?: (mine: unknown) => unknown }
+type World = { toasts: string[]; status: (string | undefined)[]; kept: Record<string, unknown>; race?: (mine: unknown) => unknown; limit?: number }
 
 function world(on: On): World {
   const w: World = { toasts: [], status: [], kept: {} }
   // A store in memory the test can read back.
   on('store.get', ($, e) => ({ value: w.kept[e.key] }) as never)
   on('store.set', ($, e) => {
+    // Past `limit`, refused, as the host refuses a store past 4,194,304 characters.
+    if (w.limit !== undefined && JSON.stringify({ ...w.kept, [e.key]: e.value }).length > w.limit) throw new Error(`the store would be over the ${w.limit} limit`)
     w.kept[e.key] = e.value
     // Another session, having read before this write, writes its own list over it once.
     const race = w.race
@@ -288,6 +290,20 @@ describe('side-effect-ledger in a session', () => {
     expect(JSON.stringify(w.kept).length).toBeLessThan(4_194_304)
     expect(w.kept['ledger:/b4']).toBeDefined()
     expect(w.kept['ledger:/b0']).toBeUndefined()
+  })
+
+  test('an index that under-reports a ledger is built again when the store refuses the write', async ($, on) => {
+    const w = world(on)
+    const big = (repo: string, at: number) => Array.from({ length: 300 }, (_, i) => ({ id: `${repo}:${i}`, at: at * 1000 + i, kind: 'push', label: 'git push', source: 'y'.repeat(2_500), isOk: true, outcome: '', undo: 'x', reversibility: 'easy', undoState: 'confirmed', sessionId: 's0' }))
+    // Six full ledgers an earlier version grew past the room the store has.
+    for (let i = 0; i < 6; i += 1) w.kept[`ledger:/b${i}`] = big(`/b${i}`, 10 + i)
+    // An index from a session that saw them small.
+    w.kept['ledger-index'] = Object.fromEntries([0, 1, 2, 3, 4, 5].map(i => [`ledger:/b${i}`, { size: 1_000, at: 10_000 + i, isOpen: false }]))
+    w.limit = 4_194_304
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+    expect((w.kept['ledger:/w'] as unknown[] | undefined)?.length).toBe(1)
+    expect(JSON.stringify(w.kept).length).toBeLessThan(4_194_304)
   })
 
   test('a field is kept small whatever the command named', async ($, on) => {
