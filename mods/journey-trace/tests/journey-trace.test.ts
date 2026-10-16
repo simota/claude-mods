@@ -178,3 +178,9 @@ describe('journey-trace in a session', () => {
     }
   })
 })
+
+test('a navigation to an address of many slashes is read in linear time', () => {
+  const started = performance.now()
+  stepsOf('navigate', { url: `example.com${'/'.repeat(32_000)}x` }, {}, 'https://example.com/', 5)
+  expect(performance.now() - started).toBeLessThan(100)
+})

@@ -8,7 +8,13 @@ const clip = (text: string, max: number) => {
   const one = text.replace(/\s+/g, ' ').trim()
   return one.length > max ? `${one.slice(0, max - 1)}…` : one
 }
-const base = (path: string) => path.slice(path.replace(/\/+$/, '').lastIndexOf('/') + 1)
+// Trailing slashes off, by a loop: `/\/+$/` tries from every slash of a long run.
+function trimSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path.charCodeAt(end - 1) === 47) end -= 1
+  return path.slice(0, end)
+}
+const base = (path: string) => path.slice(trimSlashes(path).lastIndexOf('/') + 1)
 const host = (url: string) => url.replace(/^https?:\/\//, '').split(/[/?#]/)[0] ?? url
 
 export const firstLine = (text: string, max = 40): string => clip(text.split('\n').find(line => line.trim() !== '') ?? '', max)
