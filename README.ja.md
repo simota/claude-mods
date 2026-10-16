@@ -332,7 +332,7 @@ Claude in Chrome のスクリーンショットを URL・サイズと一緒に P
 
 ### journey-trace
 
-Claude in Chrome の遷移・クリック・入力・キー・フォーム入力・スクロールを手順として記録し、`find`/`read_page` が示した要素はロールと名前で残します。期待状態は `/journey expect <文>` と、Claude が呼ぶツール `mcp__journey-trace__expect` で記録。`/journey start [名前]`・`stop`・`resume`・`clear`。`/journey md` でバグ報告（再現手順・期待結果・実際の結果の記入欄・環境）、`/journey e2e` で Playwright テストの下書き（座標だけのクリックは TODO）をコピーします。秘密の値は記録しません。秘密を示す名前の欄（パスワード・トークン・ワンタイムパスワード・PIN・セキュリティコードなど）への入力、その欄にフォーカスがある間の入力、既知のキー形式の文字列は `***` として残し、報告にはその旨を、テストでは `process.env.JOURNEY_SECRET_n` を使います。URL の秘密のクエリ（`token`・`code`・`signature` など）とパスワード部分も伏せます。
+Claude in Chrome の遷移・クリック・入力・キー・フォーム入力・スクロールを手順として記録し、`find`/`read_page` が示した要素はロールと名前で残します。期待状態は `/journey expect <文>` と、Claude が呼ぶツール `mcp__journey-trace__expect` で記録。`/journey start [名前]`・`stop`・`resume`・`clear`。`/journey md` でバグ報告（再現手順・期待結果・実際の結果の記入欄・環境）、`/journey e2e` で Playwright テストの下書き（座標だけのクリックは TODO）をコピーします。秘密の値は記録しません。秘密を示す名前の欄（パスワード・トークン・ワンタイムパスワード・PIN・セキュリティコードなど）への入力、その欄にフォーカスがある間の入力、既知のキー形式の文字列は `***` として残し、報告にはその旨を、テストでは `process.env.JOURNEY_SECRET_n` を使います。欄が分からないとき（Tab や Enter の後、座標でのクリック、新しいページ）は、パスワードやワンタイムコードらしい文字列も伏せます。URL はクエリとフラグメントの秘密のパラメータ（`token`・`signature`・`sessionId` など、コールバックのページの `code`）、パス中のキー形式の文字列、ユーザー部分を伏せます。選択欄やチェックボックスへの入力は `selectOption` や `check` で書き出します。
 
 ### token-lens
 

@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { Journey } from '../types'
-import { markdownOf, playwrightOf, refsOf, stepsOf } from '../hooks/journey'
+import { markdownOf, maskedUrl, playwrightOf, refsOf, stepsOf } from '../hooks/journey'
 
 const FIND = ['Found 2 matching elements:', '- ref_12: button "Add to cart"', '- ref_15: textbox "Quantity" (value: 1)'].join('\n')
 
@@ -55,6 +55,47 @@ describe('journey', () => {
     expect(all).toContain('page=2')
     expect(playwrightOf(j)).toContain('process.env.JOURNEY_SECRET_1')
     expect(markdownOf(j)).toContain('記録していません')
+  })
+
+  test('a password typed after Tab or a click by coordinates, or under a label the list missed, is not kept', () => {
+    const typed = (text: string, focus?: Parameters<typeof stepsOf>[5]) => stepsOf('computer', { action: 'type', text }, {}, 'https://a.test/login', 1, focus)
+    // Focus unknown (after Tab, a coordinate click): text shaped like a password is masked, plain words are not.
+    expect(typed('Tab-Passw0rd!', undefined)[0]).toMatchObject({ text: '***', isSecret: true })
+    expect(typed('493021', { x: 5, y: 5 })[0]).toMatchObject({ text: '***', isSecret: true })
+    expect(typed('alice', undefined)[0]).toMatchObject({ text: 'alice' })
+    expect(typed('me@a.test', undefined)[0]).toMatchObject({ text: 'me@a.test' })
+    expect(typed('hello world 2024', undefined)[0]).toMatchObject({ text: 'hello world 2024' })
+    const fill = (name: string, role = 'textbox') => stepsOf('form_input', { ref: 'r', value: 'v4lue-X' }, { r: { role, name } }, 'https://a.test/', 1)[0]
+    for (const name of ['Verification code', 'MFA code', 'Enter the 6-digit code', 'Recovery code', 'Card number', 'Contraseña', 'Kennwort', 'pwd', 'パスコード', 'Seed phrase', 'Private key'])
+      expect(fill(name)).toMatchObject({ isSecret: true })
+    for (const name of ['Passport number', 'Passengers', 'Token count', 'Secretary', 'Pin to top', 'Compass heading'])
+      expect(fill(name)).not.toMatchObject({ isSecret: true })
+    expect(fill('Remember password', 'checkbox')).not.toMatchObject({ isSecret: true })
+  })
+
+  test('a URL loses its secrets in the fragment and the path too, and keeps ordinary parameters', () => {
+    expect(maskedUrl('https://x.com/#access_token=SECRET1&token_type=bearer')).not.toContain('SECRET1')
+    expect(maskedUrl('https://x.com/app#/route?token=SECRET2')).not.toContain('SECRET2')
+    expect(maskedUrl('https://x.com/reset/eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.sig')).not.toContain('eyJhbGciOiJIUzI1NiJ9')
+    expect(maskedUrl('https://ghp_abcdefghijklmnopqrstuvwxyz0123456789@github.com/o/r')).not.toContain('ghp_abcdefghij')
+    expect(maskedUrl('https://x.com/a?sessionId=S1&jsessionid=S2&sid=S3&jwt=S4&pwd=S5')).not.toMatch(/S[1-5]/)
+    expect(maskedUrl('https://x.com/oauth/callback?code=OAUTHCODE&state=st')).not.toContain('OAUTHCODE')
+    expect(maskedUrl('https://shop.test/search?q=shoes&state=CA&code=US&key=blue&page=2')).toBe('https://shop.test/search?q=shoes&state=CA&code=US&key=blue&page=2')
+  })
+
+  test('a fill into a select or a checkbox is written as Playwright takes it, and a carriage return stays a valid string', () => {
+    const refs = { s: { role: 'combobox', name: 'Country' }, c: { role: 'checkbox', name: 'Agree' } }
+    const steps = [
+      ...stepsOf('form_input', { ref: 's', value: 'Japan' }, refs, 'https://a.test/', 1),
+      ...stepsOf('form_input', { ref: 'c', value: 'true' }, refs, 'https://a.test/', 2),
+      ...stepsOf('computer', { action: 'type', text: 'a\r\nb' }, refs, 'https://a.test/', 3, { ref: 'x', role: 'textbox', name: 'Note' }),
+      ...stepsOf('navigate', { url: 'https://x.com/cb?token=T' }, refs, '', 4),
+    ]
+    const test = playwrightOf({ name: 'forms', startedAt: 0, isRecording: false, steps })
+    expect(test).toContain(".selectOption('Japan')")
+    expect(test).toContain('.check()')
+    expect(test).not.toContain('\r')
+    expect(test).toMatch(/TODO.*伏せた/)
   })
 
   test('writes a bug report with numbered steps and the expectations', () => {

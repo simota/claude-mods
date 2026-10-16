@@ -21,29 +21,61 @@ export function refsOf(text: string): Record<string, { role?: string; name?: str
   return out
 }
 
-// A field that takes a secret, by the name the page gave it.
-const SECRET_FIELD = /pass(?:word|code|phrase)?|パスワード|暗証|secret|token|otp\b|one[- ]?time|ワンタイム|\bpin\b|cvv|cvc|security code|セキュリティコード|api[ _-]?key|認証コード|確認コード/i
+// A field that takes a secret, by the name the page gave it: whole words, so a passport, a token
+// count or a secretary is no secret.
+const SECRET_FIELD = new RegExp(
+  [
+    String.raw`\bpass(?:word|code|phrase|wort)?s?\b`, 'mot de passe', 'contraseña', 'kennwort', String.raw`\bpwd\b`,
+    'パスワード', 'パスコード', '暗証', String.raw`\bsecret\b`, String.raw`\b(?:api|access|private|secret)[ _-]?keys?\b`,
+    String.raw`\btokens?\b(?!\s*(?:count|per|usage|limit))`, String.raw`\botp\b`, String.raw`\btotp\b`, String.raw`\bmfa\b`, String.raw`\b2fa\b`,
+    'one[- ]?time', 'ワンタイム', String.raw`\bpin\b(?!\s+to\b)`, String.raw`\bcv[vc]\b`, 'security (?:code|answer)', 'セキュリティコード',
+    String.raw`\b(?:verification|authentication|auth|sms|recovery|backup|confirmation|access|login)\s+codes?\b`, String.raw`\b\d-digit code\b`,
+    '(?:seed|recovery) phrase', 'card number', 'カード番号', '認証コード', '確認コード', '確認番号',
+  ].join('|'),
+  'i',
+)
 // Text shaped like a credential wherever it is typed.
-const SECRET_SHAPE = /\b(?:sk-(?:ant-)?[\w-]{16,}|gh[pousr]_[A-Za-z0-9]{10,}|github_pat_\w{10,}|xox[abprs]-[\w-]{8,}|AKIA[0-9A-Z]{16}|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}|AIza[\w-]{35})|(?<![\w-])eyJ[\w-]{8,}\.eyJ[\w-]{8,}\./
-// Query parameters that carry a secret: an OAuth code, a token, a signature.
-const SECRET_PARAM = /^(?:.*(?:token|secret|password|passwd|signature|api[_-]?key|session|otp)|code|sig|key|auth|state)$/i
+const SHAPES = String.raw`(?:sk-(?:ant-)?[\w-]{16,}|gh[pousr]_[A-Za-z0-9]{10,}|github_pat_\w{10,}|xox[abprs]-[\w-]{8,}|AKIA[0-9A-Z]{16}|glpat-[\w-]{20,}|npm_[A-Za-z0-9]{36}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}|AIza[\w-]{35}|eyJ[\w-]{8,}\.eyJ[\w-]{8,}\.[\w-]*)`
+const SECRET_SHAPE = new RegExp(String.raw`(?<![\w-])${SHAPES}`)
+const SECRET_SHAPES = new RegExp(String.raw`(?<![\w-])${SHAPES}`, 'g')
+// Query and fragment parameters that carry a secret. `code` only on a page that receives one
+// (an OAuth callback); `state` and `key` are ordinary words there.
+const SECRET_PARAM = /^(?:.*(?:token|secret|password|passwd|signature|api[_-]?key|otp|jwt)|.*session(?:[_-]?id)?|jsessionid|sid|pwd|pass|auth|authorization|sig|auth[_-]?code|code[_-]?verifier)$/i
+const CALLBACK = /callback|oauth|\/auth\b|login|signin|sign-in|redirect/i
 
 export const SECRET = '***'
 
-/** A URL as kept: credentials in its user part and secret query parameters masked. */
-export function maskedUrl(url: string): string {
-  const [head = '', ...rest] = url.split('?')
-  const base = head.replace(/^(\w[\w+.-]*:\/\/[^/@\s:]+):[^/@\s]+@/, `$1:${SECRET}@`)
-  if (rest.length === 0) return base
-  const [query = '', ...hash] = rest.join('?').split('#')
-  const masked = query
+function maskedParams(params: string, isCallback: boolean): string {
+  return params
     .split('&')
     .map(pair => {
       const at = pair.indexOf('=')
-      return at > 0 && SECRET_PARAM.test(decodeURIComponentSafe(pair.slice(0, at))) ? `${pair.slice(0, at)}=${SECRET}` : pair
+      if (at <= 0) return pair
+      const name = decodeURIComponentSafe(pair.slice(0, at))
+      return SECRET_PARAM.test(name) || (isCallback && /^code$/i.test(name)) ? `${pair.slice(0, at)}=${SECRET}` : pair
     })
     .join('&')
-  return `${base}?${masked}${hash.length > 0 ? `#${hash.join('#')}` : ''}`
+}
+
+/** A URL as kept: its user part, secret parameters (query and fragment), and key-shaped text in its path masked. */
+export function maskedUrl(url: string): string {
+  const hashAt = url.indexOf('#')
+  const beforeHash = hashAt === -1 ? url : url.slice(0, hashAt)
+  const hash = hashAt === -1 ? undefined : url.slice(hashAt + 1)
+  const [head = '', ...rest] = beforeHash.split('?')
+  const isCallback = CALLBACK.test(head)
+  const base = head
+    .replace(/^(\w[\w+.-]*:\/\/)([^/@\s:]+):[^/\s]+@/, `$1$2:${SECRET}@`)
+    .replace(/^(\w[\w+.-]*:\/\/)([^/@\s:]+)@/, (whole, scheme: string, user: string) => (SECRET_SHAPE.test(user) || user.length > 24 ? `${scheme}${SECRET}@` : whole))
+    .replace(SECRET_SHAPES, SECRET)
+  const query = rest.length === 0 ? '' : `?${maskedParams(rest.join('?'), isCallback)}`
+  // A fragment carries parameters too: an implicit OAuth flow's `#access_token=…`, a hash route's `#/x?token=…`.
+  let fragment = ''
+  if (hash !== undefined) {
+    const inner = hash.indexOf('?')
+    fragment = `#${inner === -1 ? (hash.includes('=') ? maskedParams(hash, true) : hash) : `${hash.slice(0, inner)}?${maskedParams(hash.slice(inner + 1), isCallback)}`}`
+  }
+  return `${base}${query}${fragment}`
 }
 
 function decodeURIComponentSafe(text: string): string {
@@ -54,12 +86,30 @@ function decodeURIComponentSafe(text: string): string {
   }
 }
 
-const isSecretTarget = (t: JourneyTarget | undefined) => t?.name !== undefined && SECRET_FIELD.test(t.name)
+// Roles a secret is typed into: a checkbox named "Remember password" holds none.
+const TEXT_ROLES = new Set(['textbox', 'input', 'textarea', 'searchbox', 'combobox'])
+
+/**
+ * Text typed where the field is not known (after Tab or Enter, a click by coordinates, a new
+ * page) that reads as a password or a one-time code: no spaces, not an address, and either
+ * three kinds of character or four to eight digits.
+ */
+export function isPasswordLike(text: string): boolean {
+  if (/\s/.test(text) || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text) || /^\w+:\/\//.test(text)) return false
+  if (/^\d{4,8}$/.test(text)) return true
+  const kinds = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter(kind => kind.test(text)).length
+  return text.length >= 6 && text.length <= 128 && kinds >= 3
+}
+
+const isSecretTarget = (t: JourneyTarget | undefined) =>
+  t?.name !== undefined && (t.role === undefined || TEXT_ROLES.has(t.role)) && SECRET_FIELD.test(t.name)
 
 /**
  * The steps one browser call makes, read from its input. A value filled into a field named as a
- * secret, text typed while one has the focus (`focus`: the element last clicked or filled), and
- * text shaped like a credential are kept as `***`: the journey is copied out as a report or a test.
+ * secret, text typed while one has the focus (`focus`: the element last clicked or filled, absent
+ * when it is not known: after Tab or Enter, a click by coordinates, a new page) or, focus unknown,
+ * text that reads as a password, and text shaped like a credential are kept as `***`: the journey
+ * is copied out as a report or a test.
  */
 export function stepsOf(
   tool: string,
@@ -109,7 +159,8 @@ export function stepsOf(
       return [{ kind: 'click', target: target(), button: 'double', url, at }]
     case 'type':
       if (str('text') === undefined) return []
-      return isSecretTarget(focus) || SECRET_SHAPE.test(str('text') as string)
+      const isKnown = focus?.name !== undefined
+      return isSecretTarget(focus) || SECRET_SHAPE.test(str('text') as string) || (!isKnown && isPasswordLike(str('text') as string))
         ? [{ kind: 'type', text: SECRET, url, at, isSecret: true }]
         : [{ kind: 'type', text: str('text') as string, url, at }]
     case 'key':
@@ -174,7 +225,8 @@ export function markdownOf(j: Journey, now: number): string {
   ].join('\n')
 }
 
-const q = (text: string) => `'${text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n')}'`
+const q = (text: string) =>
+  `'${text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')}'`
 const PW_ROLE: Record<string, string> = { textbox: 'textbox', input: 'textbox', textarea: 'textbox', searchbox: 'searchbox', button: 'button', link: 'link', checkbox: 'checkbox', radio: 'radio', combobox: 'combobox', select: 'combobox', tab: 'tab', menuitem: 'menuitem', option: 'option', heading: 'heading', img: 'img', image: 'img', switch: 'switch', slider: 'slider' }
 
 function locator(t: JourneyTarget): string | undefined {
@@ -196,6 +248,7 @@ export function playwrightOf(j: Journey): string {
   for (const step of j.steps) {
     switch (step.kind) {
       case 'goto':
+        if (step.url.includes(SECRET)) lines.push(`  // TODO: 伏せた値（${SECRET}）を実際の値に置き換える`)
         lines.push(`  await page.goto(${q(step.url)})`)
         break
       case 'click': {
@@ -217,7 +270,14 @@ export function playwrightOf(j: Journey): string {
       case 'fill': {
         const where = locator(step.target)
         const value = step.isSecret === true ? secret() : q(step.value)
-        lines.push(where === undefined ? `  // TODO: ${step.target.ref ?? '入力欄'} に ${value} を入れる` : `  await ${where}.fill(${value})${step.isSecret === true ? ' // 秘密の値: 環境変数で渡す' : ''}`)
+        const role = step.target.role ?? ''
+        // A select takes an option, a checkbox a check: Playwright refuses fill() on either.
+        const action = ['combobox', 'select', 'listbox'].includes(role)
+          ? `selectOption(${value})`
+          : ['checkbox', 'radio', 'switch'].includes(role)
+            ? /^(?:true|on|checked|1|yes)$/i.test(step.value) ? 'check()' : 'uncheck()'
+            : `fill(${value})`
+        lines.push(where === undefined ? `  // TODO: ${step.target.ref ?? '入力欄'} に ${value} を入れる` : `  await ${where}.${action}${step.isSecret === true ? ' // 秘密の値: 環境変数で渡す' : ''}`)
         break
       }
       case 'scroll':
