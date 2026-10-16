@@ -53,6 +53,35 @@ describe('guard', () => {
     expect(kinds('src/a.ts', 'try { a() } catch {}\nb()', 'try { a() } catch {}\nc()')).toEqual([])
   })
 
+  test('a formatting-only change to an assertion is no rewrite', () => {
+    // Quotes, a closing semicolon or comma, and spaces around punctuation, as a formatter changes them.
+    expect(kinds('a.test.ts', "expect(x).toBe('a')\nexpect(y).toEqual([1, 2])", 'expect(x).toBe("a");\nexpect(y).toEqual([1,2]);')).toEqual([])
+    expect(kinds('test_a.py', "self.assertEqual(f( 1 ), 'x')", 'self.assertEqual(f(1), "x"),')).toEqual([])
+    // A value that changed is still one.
+    expect(kinds('a.test.ts', "expect(x).toBe('a b')", "expect(x).toBe('ab')")).toEqual(['rewritten'])
+    expect(kinds('a.test.ts', 'expect(x).toBe(1)', 'expect(x).toBe(2);')).toEqual(['rewritten'])
+  })
+
+  test('every pattern stays fast on a whole file, also on lines built to make it backtrack', () => {
+    // Exponential before: a catch block opening on a 40-slash divider took seconds per edit.
+    const hostile = [
+      `try { f() } catch (e) {\n  ${'/'.repeat(400)}\n  log(e)\n}`,
+      `except${' a'.repeat(20_000)}`,
+      `${'except a b c '.repeat(20_000)}`,
+      `rescue${' '.repeat(20_000)}`,
+      `catch (${'('.repeat(20_000)}`,
+    ]
+    for (const text of hostile) {
+      const started = performance.now()
+      inspect('a.test.py', '', text)
+      expect(performance.now() - started).toBeLessThan(500)
+    }
+    // Still caught: a comment-only catch block, on its own lines or after the brace.
+    expect(kinds('a.ts', '', 'try { f() } catch (e) {\n  // ignore\n  // really\n}')).toEqual(['swallowed'])
+    expect(kinds('a.ts', '', 'try { f() } catch {}')).toEqual(['swallowed'])
+    expect(kinds('a.py', '', 'try:\n  f()\nexcept (ValueError, KeyError) as e:\n  pass')).toEqual(['swallowed'])
+  })
+
   test('leaves alone edits that keep or strengthen the tests', () => {
     expect(kinds('a.test.ts', 'expect(r).toBeDefined()', 'expect(r).toEqual({ id: 1 })')).toEqual([])
     expect(kinds('a.test.ts', 'const x = 1', "const x = 1\nexpect(x).toBe(1)")).toEqual([])
