@@ -27,7 +27,9 @@ const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, c
 
 type Calls = {
   /** Set to make the next submission or fill fail, as an engine that cannot take it. */
-  fails?: 'submit' | 'fill' | 'fill-unplaced'
+  fails?: 'submit' | 'fill' | 'fill-unplaced' | 'drop'
+  /** Set to make the next fill wait for the test, then fail. */
+  slowFill?: Promise<void>
   toasts: string[]
   judged: string[]
   models: string[]
@@ -61,10 +63,20 @@ const engine = (on: On, isSlow = false): Calls => {
       calls.fails = undefined
       throw new Error('the engine could not take the prompt')
     }
+    if (calls.fails === 'drop') {
+      calls.fails = undefined
+      return { drop: 'a hook beneath held it' }
+    }
     calls.entered.push(e.text)
     return { text: e.text }
   })
-  on('prompt.fill', ($, e) => {
+  on('prompt.fill', async ($, e) => {
+    if (calls.slowFill !== undefined) {
+      const wait = calls.slowFill
+      calls.slowFill = undefined
+      await wait
+      throw new Error('a dialog is up')
+    }
     if (calls.fails === 'fill') {
       calls.fails = undefined
       throw new Error('no box')
@@ -261,6 +273,61 @@ test('a held prompt is never lost: a send or a fill that fails keeps it held or 
   await ui.unmount()
 })
 
+test('a resend dropped beneath is not counted as sent: the prompt stays held', ON, async ($, on) => {
+  const calls = engine(on)
+  await typed($, VAGUE)
+  calls.fails = 'drop'
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'send' })
+  expect(await ui.find({ key: 'send' })).toBeDefined()
+  expect(calls.toasts.join('\n')).toContain(VAGUE)
+  await ui.unmount()
+})
+
+test('a late failed fill does not overwrite a prompt held since', ON, async ($, on) => {
+  const calls = engine(on)
+  await typed($, `${VAGUE} 1`)
+  let open = () => {}
+  calls.slowFill = new Promise<void>(resolve => (open = resolve))
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const pressed = ui.press({ key: 'coach-dismiss' })
+  await typed($, `${VAGUE} 2`)
+  open()
+  await pressed
+  // The newer hold stands; the older words are shown, not lost.
+  expect(await ui.find({ type: 'Text', text: /保留/ })).toBeDefined()
+  expect(calls.toasts.join('\n')).toContain(`${VAGUE} 1`)
+  await ui.press({ key: 'send' })
+  expect(calls.entered).toEqual([`${VAGUE} 2`])
+  await ui.unmount()
+})
+
+test('two presses at once hand the prompt over once', ON, async ($, on) => {
+  const calls = engine(on)
+  await typed($, VAGUE)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await Promise.all([ui.press({ key: 'send' }), ui.press({ key: 'coach-dismiss' })])
+  expect(calls.entered.length + calls.filled.length).toBe(1)
+  await ui.unmount()
+})
+
+test('words go back into the box beside a new draft, never over it', ON, async ($, on) => {
+  const calls = engine(on)
+  await typed($, VAGUE)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await ui.press({ key: 'coach-dismiss' })
+  expect(calls.modes).toEqual(['insert'])
+  await ui.unmount()
+})
+
+test('a prompt held when the session ends is shown, not lost', ON, async ($, on) => {
+  const calls = engine(on)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await typed($, VAGUE)
+  await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } })
+  expect(calls.toasts.join('\n')).toContain(VAGUE)
+})
+
 test('a new prompt while one is held is sent once, even when the held words cannot go back', ON, async ($, on) => {
   const calls = engine(on)
   await typed($, VAGUE)
@@ -369,7 +436,7 @@ test('a guess goes into the box, and sending it is not held again', ON, async ($
   expect(await ui.find({ key: 'send' })).toBeUndefined()
   await ui.unmount()
   expect(calls.filled).toEqual(['このページの見出し階層を整理して'])
-  expect(calls.modes).toEqual(['replace'])
+  expect(calls.modes).toEqual(['insert'])
   const sent = 'このページの見出し階層を整理して。h1 は1つだけ'
   const result = await typed($, sent)
   expect(result.drop).toBeUndefined()
