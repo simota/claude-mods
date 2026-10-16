@@ -74,8 +74,10 @@ const tmpOf = async ($: EngineInterface): Promise<string> => ((await $.env.get('
 // Its folder's name carries when it was made, then a random part mktemp chose.
 const WORKTREE = /\/perf-delta-(\d+)-[\w]+$/
 // The longest a run can take is about 8.5 hours (51 runs of at most 10 minutes): past this a
-// worktree of ours is left over from a run cut short (a reload, a crash).
+// worktree of ours is left over from a run cut short (a reload, a crash). Ours are locked while
+// they run, so a locked one waits longer: a laptop asleep mid-run may pass the wall-clock bound.
 const STALE_MS = 12 * 60 * 60_000
+const LOCKED_STALE_MS = 48 * 60 * 60_000
 
 /** The folder below the repository's top that cwd is, as git reads it: right in a linked worktree too. */
 async function folderOf($: EngineInterface, cwd: string): Promise<string> {
@@ -83,12 +85,32 @@ async function folderOf($: EngineInterface, cwd: string): Promise<string> {
   return ran?.exitCode === 0 ? ran.stdout.trim().replace(/\/+$/, '') : ''
 }
 
-/** Removes a worktree of ours; when git cannot (a process still writing in it), its folder and registration go anyway. */
+/**
+ * Removes a worktree of ours, locked or not. When git cannot (a process still writing in it), its
+ * folder goes and then its registration alone: never a prune, which would drop the person's own
+ * worktrees whose folders are away (an unmounted disk).
+ */
 async function dropWorktree($: EngineInterface, root: string, dir: string): Promise<void> {
-  const removed = await git($, root, ['worktree', 'remove', '--force', '--', dir])
-  if (removed?.exitCode === 0) return
+  const remove = () => git($, root, ['worktree', 'remove', '--force', '--force', '--', dir])
+  if ((await remove())?.exitCode === 0) return
   if (WORKTREE.test(dir)) await $.process.run(['rm', '-rf', '--', dir], { timeoutMs: 120_000 }).catch(() => undefined)
-  await git($, root, ['worktree', 'prune'])
+  await remove()
+}
+
+/** Worktrees of ours a run cut short left registered in the repository, by when each was made. */
+async function dropStale($: EngineInterface, root: string): Promise<void> {
+  const now = await $.clock.now()
+  const tmp = await tmpOf($)
+  // git lists a worktree by its real path: TMPDIR on macOS is under /var, a link to /private/var.
+  const real = (await $.fs.stat(tmp, { resolve: true }).catch(() => undefined))?.realPath ?? tmp
+  const listed = await git($, root, ['worktree', 'list', '--porcelain'])
+  for (const block of listed?.exitCode === 0 ? listed.stdout.split('\n\n') : []) {
+    const dir = block.match(/^worktree (.+)$/m)?.[1] ?? ''
+    const made = Number(dir.match(WORKTREE)?.[1] ?? NaN)
+    const isOurs = dir.startsWith(`${tmp}/`) || dir.startsWith(`${real}/`)
+    const age = /^locked\b/m.test(block) ? LOCKED_STALE_MS : STALE_MS
+    if (isOurs && now - made > age) await dropWorktree($, root, dir)
+  }
 }
 
 /** Runs `command` in a temporary worktree of `ref`, in the same folder below the top. */
@@ -97,7 +119,8 @@ async function measureRef($: EngineInterface, root: string, below: string, ref: 
   const made = await $.process.run(['mktemp', '-d', `${await tmpOf($)}/perf-delta-${await $.clock.now()}-XXXXXX`]).catch(() => undefined)
   const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
   if (!WORKTREE.test(dir)) throw new Error('一時フォルダを作れませんでした（TMPDIR を確認してください）')
-  const added = await git($, root, ['worktree', 'add', '--detach', '--', dir, ref])
+  // Locked while it runs, so another session's start never takes it for one left behind.
+  const added = await git($, root, ['worktree', 'add', '--lock', '--detach', '--', dir, ref])
   if (added?.exitCode !== 0) {
     await dropWorktree($, root, dir)
     throw new Error(`git worktree add ${ref} に失敗: ${added?.stderr.trim().slice(-200) ?? ''}`)
@@ -133,18 +156,9 @@ export const register: Register = (on, options) => {
       argumentHint: '<cmd> | base <cmd> | ref <git-ref> <cmd> | show | clear [cmd]',
     })
     const started = await next(e)
-    // Worktrees of ours a run cut short left registered in the repository.
+    // Worktrees of ours a run cut short left: cleaned after the start, not holding it up.
     const root = (await $.session.repo())?.root
-    if (root !== undefined) {
-      const now = await $.clock.now()
-      const tmp = await tmpOf($)
-      const listed = await git($, root, ['worktree', 'list', '--porcelain'])
-      for (const line of listed?.exitCode === 0 ? listed.stdout.split('\n') : []) {
-        const dir = line.startsWith('worktree ') ? line.slice('worktree '.length) : ''
-        const made = Number(dir.match(WORKTREE)?.[1] ?? NaN)
-        if (dir.startsWith(`${tmp}/`) && now - made > STALE_MS) await dropWorktree($, root, dir)
-      }
-    }
+    if (root !== undefined) $.clock.after(0, () => void dropStale($, root).catch(() => undefined))
     return started
   })
 

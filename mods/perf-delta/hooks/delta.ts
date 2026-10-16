@@ -102,8 +102,8 @@ export function parseArgs(args: string): { mode: 'run' | 'base' | 'ref' | 'show'
   if (first === 'clear') return { mode: 'clear', command: rest.join(' ') }
   if (first === 'base') return { mode: 'base', command: text.slice(4).trim() }
   if (first === 'ref' && rest.length >= 2) return { mode: 'ref', ref: rest[0], command: text.slice(4).trim().slice((rest[0] as string).length).trim() }
-  // A ref with no command asks for one: `ref main` is no command to run.
-  if (first === 'ref' && rest.length === 1) return { mode: 'ref', ref: rest[0], command: '' }
+  // `ref` with no command, or nothing at all, asks for what is missing: it is no command to run.
+  if (first === 'ref') return rest[0] === undefined ? { mode: 'ref', command: '' } : { mode: 'ref', ref: rest[0], command: '' }
   return { mode: 'run', command: text }
 }
 
