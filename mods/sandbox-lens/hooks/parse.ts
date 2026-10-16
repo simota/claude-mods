@@ -53,11 +53,16 @@ export function absolute(path: string, cwd: string): string {
 }
 
 /**
- * The harness's own violations block: the one that ends the output. A block anywhere
- * earlier was printed by the command (a file shown, a page fetched) and proves nothing.
+ * The harness's own violations block: the one that ends the output, or the error text before
+ * the agent proxy's note. A block anywhere earlier was printed by the command (a file shown,
+ * a page fetched) and proves nothing.
  */
+// What a proxied environment adds after the block of a failed command's error text.
+const PROXY_NOTE = '\n\n[agent-proxy] '
+
 function trailingBlock(output: string): string | undefined {
-  const text = output.trimEnd()
+  const note = output.lastIndexOf(PROXY_NOTE)
+  const text = (note < 0 ? output : output.slice(0, note)).trimEnd()
   let last: RegExpMatchArray | undefined
   for (const match of text.matchAll(BLOCK)) last = match
   if (last === undefined || (last.index ?? 0) + last[0].length !== text.length) return undefined
