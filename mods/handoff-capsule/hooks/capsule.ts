@@ -11,8 +11,8 @@ export const emptyLog = (): CapsuleLog => ({ prompts: [], decisions: [], open: [
 
 // Everything kept is kept across sessions and fed to another: credentials in it are masked first.
 const clip = (text: string, max: number) => {
-  // Cut before masking, so a long paste costs no more than what is kept (a token cut at the end still reads as one).
-  const one = maskedOf(text.slice(0, max + 256)).replace(/\s+/g, ' ').trim()
+  // Masked before it is cut, so a quoted value keeps its closing quote; a paste past 64 KB is cut first, to bound the cost.
+  const one = maskedOf(text.slice(0, 65_536)).replace(/\s+/g, ' ').trim()
   return one.length > max ? `${one.slice(0, max - 1)}…` : one
 }
 
@@ -67,7 +67,7 @@ export const withTodos = (log: CapsuleLog, todos: unknown): CapsuleLog => {
 const relative = (path: string, root: string) => (path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path)
 
 /** The capsule a log makes. */
-export function capsuleOf(log: CapsuleLog, meta: Pick<Capsule, 'id' | 'at' | 'sessionId' | 'root' | 'branch' | 'reason' | 'isInteractive'>): Capsule {
+export function capsuleOf(log: CapsuleLog, meta: Pick<Capsule, 'id' | 'at' | 'sessionId' | 'root' | 'branch' | 'reason' | 'byPerson'>): Capsule {
   const goal = log.prompts.length === 0 ? [] : log.prompts.length === 1 ? [log.prompts[0] as string] : [log.prompts[0] as string, log.prompts.at(-1) as string]
   const todosOpen = log.todos.filter(one => one.status !== 'completed').map(one => `${one.status === 'in_progress' ? '▶ ' : ''}${one.content}`)
   return {
@@ -88,7 +88,8 @@ const union = (first: readonly string[], then: readonly string[]): string[] => [
 /**
  * A session's newer capsule laid on its older one, as when it is resumed in a new process and
  * its log starts empty: its first request stays the goal's first, its branch is kept when the
- * newer has none, and the rest is both, the newer's ahead.
+ * newer has none, and the rest is both, the newer's ahead; what is left is the newer's when it
+ * knows any, so an item finished since is not brought back.
  */
 export function merged(older: Capsule, newer: Capsule): Capsule {
   const first = older.goal[0] ?? newer.goal[0]
@@ -99,7 +100,7 @@ export function merged(older: Capsule, newer: Capsule): Capsule {
     ...(branch === undefined ? {} : { branch }),
     goal: first === undefined ? [] : latest === undefined || latest === first ? [first] : [first, latest],
     decisions: union(older.decisions, newer.decisions).slice(-10),
-    open: union(newer.open, older.open).slice(0, 12),
+    open: newer.open.length > 0 ? newer.open : older.open,
     commands: [...older.commands.filter(one => !newer.commands.some(other => other.command === one.command)), ...newer.commands].slice(-8),
     files: union(newer.files, older.files).slice(0, 15),
   }

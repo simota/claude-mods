@@ -14,8 +14,8 @@ export type Capsule = {
   branch?: string
   /** Why it was made. */
   reason: 'compact' | 'end' | 'manual'
-  /** False for a session with no REPL (`-p`, the SDK, the desktop app); absent in capsules kept before it was recorded. */
-  isInteractive?: boolean
+  /** False for a session no person was seen in (a `-p` run, the SDK); absent in capsules kept before it was recorded. */
+  byPerson?: boolean
   /** The first request of the session and the latest, as the person typed them. */
   goal: string[]
   /** Lines of Claude's replies that settled something. */
@@ -46,8 +46,10 @@ declare module 'claude-code' {
       offer: { capsule: Capsule; sections: CapsuleSection[] } | null
       /** Text chosen to go to Claude beside the next prompt typed. */
       pending: string | null
-      /** Whether this session runs under the REPL, as session.start said. */
-      isInteractive: boolean
+      /** Whether a person was seen in this session: the REPL, a surface attached (the desktop app, a phone), a prompt typed. */
+      hasPerson: boolean
+      /** The session's capsule as it stood when this process first saved for it, which later saves are laid on. */
+      base: { sessionId: string; capsule: Capsule | null } | null
     }
   }
 }

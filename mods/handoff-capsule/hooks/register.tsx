@@ -32,11 +32,15 @@ const FRESH_MS = 14 * 24 * 60 * 60 * 1000
 const log = atom({ plugin: 'handoff-capsule', key: 'log' } as const, emptyLog())
 const offer = atom({ plugin: 'handoff-capsule', key: 'offer' } as const, null as { capsule: Capsule; sections: CapsuleSection[] } | null)
 const pending = atom({ plugin: 'handoff-capsule', key: 'pending' } as const, null as string | null)
-// False with no REPL: a `-p` run and the SDK, but also the desktop app, a person's. Such a
-// session keeps one capsule per root, so automated runs never push a person's off the shelf.
-const isInteractive = atom({ plugin: 'handoff-capsule', key: 'isInteractive' } as const, true)
-// What a person sends: typed at the terminal, from the desktop app or the SDK host, or a phone.
-const PERSON = new Set(['composer', 'sdk', 'bridge'])
+// Whether a person was seen: the REPL, a surface attaching (the desktop app connecting, a phone
+// opening the session), a prompt typed or sent from a phone. A session with none (a `-p` run,
+// the SDK) keeps one capsule per root, so automated runs never push a person's off the shelf.
+const hasPerson = atom({ plugin: 'handoff-capsule', key: 'hasPerson' } as const, false)
+// The session's capsule as this process first found it: each later save is laid on it, not on
+// what this process kept since, which the log already holds.
+const base = atom({ plugin: 'handoff-capsule', key: 'base' } as const, null as { sessionId: string; capsule: Capsule | null } | null)
+// What a prompt may come from: typed at the terminal, the desktop app or the SDK host, a phone.
+const PROMPTS = new Set(['composer', 'sdk', 'bridge'])
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
@@ -71,17 +75,18 @@ async function save(
   const at = await $.clock.now()
   const sessionId = known?.sessionId ?? (await $.session.id())
   const branch = known?.skipBranch ? undefined : await branchOf($, root)
-  const meta = { id: `${sessionId}:${at}`, at, sessionId, root, reason, isInteractive: await read($, isInteractive), ...(branch === undefined ? {} : { branch }) }
+  const meta = { id: `${sessionId}:${at}`, at, sessionId, root, reason, byPerson: await read($, hasPerson), ...(branch === undefined ? {} : { branch }) }
   const capsule = capsuleOf(known?.seen ?? (await read($, log)), meta)
   if (isEmpty(capsule)) return undefined
-  let kept = capsule
-  // One capsule per session and root: a later save is laid on the session's earlier one (a
-  // resumed session's log starts empty), and one per root for sessions with no REPL.
+  // One capsule per session and root, laid on the session's capsule as this process first found
+  // it (a resumed session's log starts empty); one per root for sessions no person was seen in.
+  const found = await read($, base)
+  const under = found?.sessionId === sessionId ? found.capsule : ((await shelfOf($))[root] ?? []).find(one => one.sessionId === sessionId) ?? null
+  if (found?.sessionId !== sessionId) await update($, base, () => ({ sessionId, capsule: under }))
+  const kept = under === null ? capsule : merged(under, capsule)
   const withCapsule = (shelf: Shelf): Shelf => {
     const old = shelf[root] ?? []
-    const earlier = old.find(one => one.sessionId === sessionId)
-    kept = earlier === undefined ? capsule : merged(earlier, capsule)
-    const others = old.filter(one => one.sessionId !== sessionId && (kept.isInteractive !== false || one.isInteractive !== false))
+    const others = old.filter(one => one.sessionId !== sessionId && (kept.byPerson !== false || one.byPerson !== false))
     const list = [kept, ...others].slice(0, PER_ROOT)
     return Object.fromEntries(
       Object.entries({ ...shelf, [root]: list })
@@ -104,7 +109,7 @@ const offerOf = (capsule: Capsule) => ({ capsule, sections: filled(capsule) })
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'handoff', description: '引き継ぎカプセル: 表示（/handoff）· 保存（save）· 前回分を取り込む（load）', argumentHint: '[save | load]' })
-    await update($, isInteractive, () => e.isInteractive)
+    if (e.isInteractive) await update($, hasPerson, () => true)
     const started = await next(e)
     if ((await read($, offer)) !== null || (await read($, pending)) !== null) return started
     const sessionId = await $.session.id()
@@ -113,14 +118,15 @@ export const register: Register = on => {
     // A resumed session has its history and its own capsule: no other is offered.
     if (list.some(one => one.sessionId === sessionId)) return started
     const others = list.filter(one => one.sessionId !== sessionId)
-    // At the terminal a person's capsule before an automated run's.
-    const latest = (e.isInteractive ? others.find(one => one.isInteractive !== false) : undefined) ?? others[0]
+    // A person's capsule before an automated run's.
+    const latest = others.find(one => one.byPerson !== false) ?? others[0]
     if (latest !== undefined && now - latest.at < FRESH_MS) await update($, offer, () => offerOf(latest))
     return started
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (!PERSON.has(e.origin.kind) || e.command !== undefined || e.isMeta) return next(e)
+    if (!PROMPTS.has(e.origin.kind) || e.command !== undefined || e.isMeta) return next(e)
+    if (e.origin.kind !== 'sdk') await update($, hasPerson, () => true)
     await update($, log, old => withPrompt(old, e.text))
     const carried = e.turnId === undefined ? await read($, pending) : null
     if (carried === null) return next(e)
@@ -131,6 +137,12 @@ export const register: Register = on => {
     }
     return ran
   }).catch(($, e, next) => next(e))
+
+  // A client that draws (the desktop app, a phone) is a person's.
+  on('session.attach', async ($, e, next) => {
+    await update($, hasPerson, () => true)
+    return next(e)
+  })
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined && e.answer !== '') await update($, log, old => withAnswer(old, e.answer))

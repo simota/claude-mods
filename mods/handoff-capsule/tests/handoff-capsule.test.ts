@@ -88,6 +88,7 @@ function world(on: On, sessionId: string, store: Record<string, unknown> = {}): 
   on('session.cwd', () => ({ value: ROOT }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('session.compact', () => ({ skip: 'test' }) as never)
+  on('session.attach', ($, e) => ({ clientId: e.clientId }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.toast', () => ({ value: undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -162,7 +163,8 @@ describe('handoff-capsule in a session', () => {
 
   test('a desktop session, which is no REPL, still keeps its capsule and takes one back', async ($, on) => {
     const w = world(on, 's2', { capsules: { [ROOT]: [EARLIER] } })
-    await $.session.start({ cwd: ROOT, surface: 'desktop', isInteractive: false })
+    await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+    await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
     const ui = await $.ui.mount({ plugin: 'handoff-capsule', surface: 'desktop', ...BAND })
     await ui.press({ key: 'take' })
     await ui.unmount()
@@ -170,6 +172,40 @@ describe('handoff-capsule in a session', () => {
     expect(w.contexts[0]?.[0]).toContain('JWT の有効期限は 15 分に決定')
     await $.session.end({ reason: 'other', sessionId: 's2', resume: {} as never })
     expect((w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.find(one => one.sessionId === 's2')?.goal).toEqual(['ログイン画面を作って'])
+  })
+
+  test('an automated run does not push out a desktop person\'s capsule, and the person is offered theirs', async ($, on) => {
+    const w = world(on, 'd1')
+    await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+    await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+    await $.prompt.submit({ text: '決済を直して', origin: { kind: 'sdk' }, wait: false })
+    await $.session.end({ reason: 'other', sessionId: 'd1', resume: {} as never })
+    w.id = 'p1'
+    await $.session.start({ cwd: ROOT, surface: null, isInteractive: false })
+    await $.prompt.submit({ text: 'write a commit message', origin: { kind: 'sdk' }, wait: false })
+    await $.session.end({ reason: 'other', sessionId: 'p1', resume: {} as never })
+    expect(((w.kept.capsules as Record<string, Capsule[]>)[ROOT] ?? []).map(one => one.sessionId)).toEqual(['p1', 'd1'])
+  })
+
+  test('a second save in one process does not bring back a finished todo', async ($, on) => {
+    const w = world(on, 's1')
+    await $.session.start(START)
+    await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'add tests', status: 'in_progress' }] } as never)
+    await $.command.run({ command: 'handoff', args: 'save', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+    await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'add tests', status: 'completed' }, { content: 'docs', status: 'pending' }] } as never)
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: {} as never })
+    expect((w.kept.capsules as Record<string, Capsule[]>)[ROOT]?.[0]?.open).toEqual(['docs'])
+  })
+
+  test('a long quoted secret is masked whole, past where the prompt is cut', async ($, on) => {
+    const w = world(on, 's1')
+    await $.session.start(START)
+    const key = `-----BEGIN RSA PRIVATE KEY-----\n${'MIIEowIBAAKCAQEAx1y2z3'.repeat(80)}\n-----END RSA PRIVATE KEY-----`
+    await $.prompt.submit({ text: `deploy with PRIVATE_KEY="${key}" please`, origin: { kind: 'composer' }, wait: false })
+    await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: {} as never })
+    const kept = JSON.stringify(w.kept.capsules)
+    expect(kept).toContain('PRIVATE_KEY=***')
+    expect(kept).not.toContain('MIIEow')
   })
 
   test('a resumed session adds to its own capsule, and is offered no other', async ($, on) => {
