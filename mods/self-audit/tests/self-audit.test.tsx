@@ -119,6 +119,24 @@ describe('parseViolations', () => {
     expect(parseViolations(answer([{ rule: 'R5', quote: `前置き ${'あ'.repeat(300)}`, why: 'w' }]), long)).toHaveLength(1)
   })
 
+  test('a quote is found past markdown, quote marks, case, line breaks and an elision', () => {
+    const keep = (reply: string, quote: string, rule = 'R1') =>
+      parseViolations(JSON.stringify({ violations: [{ rule, quote, why: 'w' }] }), reply)?.length === 1
+    expect(keep('use the "strict" flag', 'use the “strict” flag')).toBe(true)
+    expect(keep('**全テスト通過**しました', '全テスト通過しました')).toBe(true)
+    expect(keep('`npm test` は通ります', 'npm test は通ります')).toBe(true)
+    expect(keep('修正済みで\n動作確認済み', '修正済みで動作確認済み')).toBe(true)
+    expect(keep('- ビルド成功\n- テスト成功', 'ビルド成功 テスト成功')).toBe(true)
+    expect(keep('Tests pass now', 'tests pass now')).toBe(true)
+    expect(keep('テストが通りました', 'テストが通りました。')).toBe(true)
+    expect(keep('A は直した。B も直した。C も直した', 'A は直した…C も直した')).toBe(true)
+    expect(keep('A は直した。B も直した', 'A は直した...B も直した')).toBe(true)
+    expect(keep('テストは全部通ります', 'テストは全部通ります', 'R1: 未検証の完了報告')).toBe(true)
+    // Still made up, or in the wrong order: dropped.
+    expect(keep('テストは書きました', 'テストは全部通ります')).toBe(false)
+    expect(keep('B も直した。A は直した', 'A は直した…B も直した')).toBe(false)
+  })
+
   test('drops malformed entries and refuses what is not the asked shape', () => {
     expect(parseViolations('{"violations":[{"rule":"R1"},{"rule":"R4","why":"w"}]}')).toEqual([
       { rule: 'R4', quote: '', why: 'w' },

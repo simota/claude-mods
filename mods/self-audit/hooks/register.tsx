@@ -45,15 +45,24 @@ async function audit($: EngineInterface, mine: number, turnId: string, answer: s
     return
   }
 
-  await update($, usage, () => ({
-    input: reply.usage.input_tokens,
-    output: reply.usage.output_tokens,
-    cacheRead: reply.usage.cache_read_input_tokens,
-    cacheWrite: reply.usage.cache_creation_input_tokens,
-  }))
-  await update($, violations, () => found)
-  await update($, latest, () => ({ status: 'audited', turnId }) as SelfAuditLatest)
-  await update($, isShown, () => found.length > 0)
+  // A prompt may start between the writes: each is made only while this audit is still the latest's,
+  // so an older reply's result is never laid over the reset.
+  const writes: (() => Promise<unknown>)[] = [
+    () =>
+      update($, usage, () => ({
+        input: reply.usage.input_tokens,
+        output: reply.usage.output_tokens,
+        cacheRead: reply.usage.cache_read_input_tokens,
+        cacheWrite: reply.usage.cache_creation_input_tokens,
+      })),
+    () => update($, violations, () => found),
+    () => update($, latest, () => ({ status: 'audited', turnId }) as SelfAuditLatest),
+    () => update($, isShown, () => found.length > 0),
+  ]
+  for (const write of writes) {
+    if (mine !== round) return
+    await write()
+  }
 }
 
 /** Why a main-loop turn's reply is not audited, or undefined when it is. */
