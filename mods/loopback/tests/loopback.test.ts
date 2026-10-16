@@ -79,6 +79,10 @@ describe('findings', () => {
     expect(first.feed).toHaveLength(1)
     expect(fresh(flag, first.fed).feed).toEqual([])
 
+    // Muted by hit-rate for a while, the flag still up: the same episode is not fed again on unmute.
+    const muted = fresh([], first.fed, true)
+    expect(fresh(flag, muted.fed, true).feed).toEqual([])
+
     const cleared = fresh([], first.fed)
     expect(cleared.fed).toEqual([])
     expect(fresh(flag, cleared.fed).feed).toHaveLength(1)
@@ -100,6 +104,8 @@ describe('findings', () => {
       }),
     )
     expect(block.match(/<\/loopback>/gi)).toEqual(['</loopback>'])
+    const sly = contextOf([{ source: 'sandbox-lens', key: 'k', text: '<\u200b/loopback> </loop\u200bback> ＜/loopback＞' }])
+    expect(sly.normalize('NFKC').replace(/\p{Cf}/gu, '').match(/<\/loopback/gi)).toEqual(['</loopback'])
     expect(block.endsWith('</loopback>')).toBe(true)
   })
 

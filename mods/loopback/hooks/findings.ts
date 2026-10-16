@@ -74,17 +74,26 @@ export function gate(found: readonly LoopbackFinding[], muted: readonly string[]
 
 /**
  * The findings not fed yet, and the keys to remember. A done-gate flag that cleared is
- * forgotten, so the next unverified episode is fed again.
+ * forgotten, so the next unverified episode is fed again; `isFlagged` is the flag itself, not
+ * whether it is among `found`, so a rule hit-rate muted for a while is not taken for a clear.
  */
-export function fresh(found: readonly LoopbackFinding[], fed: readonly string[]): { feed: LoopbackFinding[]; fed: string[] } {
-  const isFlagged = found.some(f => f.key === UNVERIFIED)
+export function fresh(
+  found: readonly LoopbackFinding[],
+  fed: readonly string[],
+  isFlagged = found.some(f => f.key === UNVERIFIED),
+): { feed: LoopbackFinding[]; fed: string[] } {
   const kept = fed.filter(key => isFlagged || key !== UNVERIFIED)
   const feed = found.filter(f => !kept.includes(f.key)).slice(0, MAX_FINDINGS)
   return { feed, fed: [...kept, ...feed.map(f => f.key)].slice(-500) }
 }
 
 // A quoted reply or a command may hold the block's own tags: shown with a look-alike, it cannot end the block.
-const unclosable = (text: string): string => text.replace(/<(\s*\/?\s*)(loopback)/gi, '‹$1$2')
+// Read as the model may read it first: full-width brackets folded, invisible format characters dropped.
+const unclosable = (text: string): string =>
+  text
+    .normalize('NFKC')
+    .replace(/\p{Cf}/gu, '')
+    .replace(/<(\s*\/?\s*)(loopback)/gi, '‹$1$2')
 
 /** The block the model reads after the prompt. */
 export function contextOf(feed: readonly LoopbackFinding[]): string {

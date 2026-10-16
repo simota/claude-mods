@@ -66,7 +66,7 @@ export const register: Register = (on, options) => {
     }
 
     const found = gate(collect({ selfAudit, isUnverified: isFlagged.value === true, denials: held.value }), silenced.value)
-    const picked = fresh(found, await read($, fed))
+    const picked = fresh(found, await read($, fed), isFlagged.value === true)
     if (picked.feed.length === 0) {
       await update($, fed, () => picked.fed)
       return next(e)
@@ -96,11 +96,12 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   // done-gate takes its flag down when a check passes and raises it again at the end of a turn
-  // with new edits unverified, both possibly between two prompts. Seen down after any tool call,
-  // the episode fed is over, so the next one is fed again rather than taken for the same.
-  on('tool.call', async ($, e, next) => {
+  // with new edits unverified, both possibly between two prompts. Seen down after a tool call,
+  // the episode fed is over, so the next one is fed again rather than taken for the same. The
+  // order of the two mods' hooks does not matter: raising it again takes an edit, itself a tool
+  // call after the check, and done-gate raises it only at turn.complete, after that edit's call.
+  if (isEnabled) on('tool.call', async ($, e, next) => {
     const ran = await next(e)
-    if (!isEnabled) return ran
     try {
       if ((await read($, fed)).includes(UNVERIFIED) && (await $.state.get(unverified)).value !== true) {
         await update($, fed, keys => keys.filter(key => key !== UNVERIFIED))
