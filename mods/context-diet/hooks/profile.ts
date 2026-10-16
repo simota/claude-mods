@@ -108,9 +108,17 @@ export function parseListing(text: string): Listing {
   // The last entry keeps its indented paragraphs, blank lines between them included. The tail
   // starts at the first blank line after which the next text is not indented, or nothing follows.
   const lastEntry = entries.at(-1)!
+  // The next text after each line, found once from the end: a run of blank lines is not read
+  // again from each of its lines.
+  const nextText: (string | undefined)[] = new Array(lastEntry.lines.length)
+  for (let i = lastEntry.lines.length - 1, seen: string | undefined; i >= 0; i -= 1) {
+    nextText[i] = seen
+    const line = lastEntry.lines[i] as string
+    if (!isBlank(line)) seen = line
+  }
   const blank = lastEntry.lines.findIndex((line, i) => {
     if (i === 0 || !isBlank(line)) return false
-    const after = lastEntry.lines.slice(i + 1).find(next => !isBlank(next))
+    const after = nextText[i]
     return after === undefined || !isIndented(after)
   })
   const tail = blank === -1 ? [] : lastEntry.lines.splice(blank)

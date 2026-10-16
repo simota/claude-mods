@@ -277,3 +277,12 @@ describe('context-diet in a session', () => {
     expect((await $.command.run({ ...RUN, args: '' })).text).toContain('書式を確実に読み取れなかった')
   })
 })
+
+test('a last entry with a long run of blank lines is read in linear time', () => {
+  const text = `- one: first skill\n${'\n'.repeat(8000)}  more of one\n\nAfter the list.`
+  const started = performance.now()
+  const listing = parseListing(text)
+  expect(performance.now() - started).toBeLessThan(100)
+  expect(listing.entries.map(entry => entry.name)).toEqual(['one'])
+  expect(listing.tail).toEqual(['', 'After the list.'])
+})
