@@ -5,7 +5,8 @@ export type Hit = { kind: SandboxLensKind; target: string }
 export const LIMIT = 200
 const EXAMPLE_CHARS = 80
 
-const BLOCK = /<sandbox_violations>([\s\S]*?)<\/sandbox_violations>/g
+const OPEN = '<sandbox_violations>'
+const CLOSE = '</sandbox_violations>'
 const VIOLATION = /^\s*deny\s+(network-outbound|file-write[\w*-]*|file-read[\w*-]*)\s+(.+?)\s*$/
 
 // The tail a refusal line may carry after "permitted": Rust's `(os error 1)`.
@@ -63,10 +64,11 @@ const PROXY_NOTE = '\n\n[agent-proxy] '
 function trailingBlock(output: string): string | undefined {
   const note = output.lastIndexOf(PROXY_NOTE)
   const text = (note < 0 ? output : output.slice(0, note)).trimEnd()
-  let last: RegExpMatchArray | undefined
-  for (const match of text.matchAll(BLOCK)) last = match
-  if (last === undefined || (last.index ?? 0) + last[0].length !== text.length) return undefined
-  return last[1] ?? ''
+  // Found from the end: a scan from each opening tag took quadratic time on many left unclosed.
+  if (!text.endsWith(CLOSE)) return undefined
+  const end = text.length - CLOSE.length
+  const start = text.lastIndexOf(OPEN, end)
+  return start < 0 ? undefined : text.slice(start + OPEN.length, end)
 }
 
 /**
@@ -203,6 +205,8 @@ export function exampleOf(command: string): string {
   return masked.length > EXAMPLE_CHARS ? `${masked.slice(0, EXAMPLE_CHARS)}…` : masked
 }
 
+const keyOf = (one: { kind: string; target: string }) => `${one.kind} ${one.target}`
+
 /** Adds one command's hits to a tally; past LIMIT the least recently seen leave, so a new one always stays. */
 export function merge(
   list: readonly SandboxLensDenial[],
@@ -212,15 +216,19 @@ export function merge(
 ): SandboxLensDenial[] {
   const example = exampleOf(command)
   const next = list.map(one => ({ ...one }))
+  // Found by key, not by a search of the list: `find ~` may be refused at thousands of paths.
+  const byKey = new Map(next.map(one => [keyOf(one), one]))
 
   for (const hit of hits) {
-    const found = next.find(one => one.kind === hit.kind && one.target === hit.target)
+    const found = byKey.get(keyOf(hit))
     if (found) {
       found.count += 1
       found.lastSeen = now
       found.example = example
     } else {
-      next.push({ ...hit, count: 1, lastSeen: now, example })
+      const added = { ...hit, count: 1, lastSeen: now, example }
+      next.push(added)
+      byKey.set(keyOf(added), added)
     }
   }
 
@@ -260,7 +268,8 @@ export function isOverwritten(wrote: readonly SandboxLensDenial[], stored: reado
 
 /** True when a hit names a (kind, target) the list does not hold yet. */
 export function hasNew(list: readonly SandboxLensDenial[], hits: readonly Hit[]): boolean {
-  return hits.some(hit => !list.some(one => one.kind === hit.kind && one.target === hit.target))
+  const known = new Set(list.map(keyOf))
+  return hits.some(hit => !known.has(keyOf(hit)))
 }
 
 export function ranked(list: readonly SandboxLensDenial[]): SandboxLensDenial[] {
