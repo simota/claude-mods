@@ -25,7 +25,7 @@ const LEADING = new Set([
 ])
 // git's own options that take the next word, before its subcommand (`git -C dir push`), as shell.ts reads them.
 const GIT_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'])
-// Past this the shell reader is not asked: its recursion is bounded by the stack, not by length.
+// Past this the shell reader reads no further: its recursion is bounded by the stack, not by length.
 const MAX_PARSED = 10_000
 
 type Run = { name: string; args: string[] }
@@ -34,9 +34,12 @@ type Run = { name: string; args: string[] }
 function runsOf(command: string): { top: Run[]; nested: Run[] } {
   const { commands, nested } = parse(command)
   const top = commands.flatMap(one => {
-    const inner = innerText(one.words)
-    if (inner !== undefined) return allCommands(inner).flatMap(each => program(each.words) ?? [])
-    return program(one.words) ?? []
+    const outer = program(one.words)
+    const inner = outer?.name === 'find' ? undefined : innerText(one.words)
+    // A text that is itself fetched or expanded (`bash -c "$(curl …)"`, `eval "$X"`) names nothing: the shell does.
+    if (inner === undefined || /^\s*[$`]/.test(inner)) return outer ?? []
+    const runs = allCommands(inner).flatMap(each => program(each.words) ?? [])
+    return runs.length > 0 ? runs : (outer ?? [])
   })
   return { top, nested: nested.flatMap(text => allCommands(text)).flatMap(one => program(one.words) ?? []) }
 }
@@ -50,15 +53,16 @@ function runsOf(command: string): { top: Run[]; nested: Run[] } {
  */
 export function programOf(command: string): string {
   let run: Run | undefined
-  if (command.length <= MAX_PARSED) {
-    try {
-      const { top, nested } = runsOf(command)
-      run = top.find(one => !LEADING.has(one.name)) ?? top[0] ?? nested[0]
-    } catch {
-      // A line the reader cannot hold: named by its first word below.
-    }
+  try {
+    // Only the head is read: a cut mid-quote reads as an unclosed quote, a deeper one throws.
+    const { top, nested } = runsOf(command.slice(0, MAX_PARSED))
+    run = top.find(one => !LEADING.has(one.name)) ?? top[0] ?? nested[0]
+  } catch {
+    // A line the reader cannot hold: named by its first word below.
   }
   if (run === undefined) return base(command.trim().split(/\s+/)[0] ?? '')
+  // Free text after `echo` or a path after `cd` is no subcommand.
+  if (LEADING.has(run.name)) return run.name
   let k = 0
   if (run.name === 'git') {
     while (run.args[k]?.startsWith('-') === true) k += GIT_VALUES.has(run.args[k] as string) ? 2 : 1
