@@ -47,22 +47,56 @@ function screenshotOf(result: unknown): { data: string; mime: string } | undefin
 const sh = ($: EngineInterface, script: string, args: string[], stdin?: string) =>
   $.process.run(['/bin/sh', '-c', script, 'sh', ...args], { timeoutMs: 20_000, ...(stdin === undefined ? {} : { stdin }) }).catch(() => undefined)
 
-/** The session's folder, made 0700 and checked to be ours: TMPDIR, else ~/.cache. */
-async function folder($: EngineInterface): Promise<string | undefined> {
+/** The mod's own folder under TMPDIR, else ~/.cache. */
+async function ownFolder($: EngineInterface): Promise<string | undefined> {
   const base = ((await $.env.get('TMPDIR')) || `${(await $.env.get('HOME')) ?? ''}/.cache`).replace(/\/+$/, '')
-  if (base === '' || base === '/.cache') return undefined
-  const dir = `${base}/${DIR_NAME}/${(await $.session.id()).replace(/[^\w-]/g, '_')}`
-  const made = await sh($, 'umask 077 && mkdir -p -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]', [dir])
+  return base === '' || base === '/.cache' ? undefined : `${base}/${DIR_NAME}`
+}
+
+const sessionFolderName = async ($: EngineInterface) => (await $.session.id()).replace(/[^\w-]/g, '_')
+
+/**
+ * The session's folder, made 0700 and checked to be ours, and so is the mod's folder it sits in:
+ * a link or another user's folder there would send its writes and removals elsewhere.
+ */
+async function folder($: EngineInterface): Promise<string | undefined> {
+  const own = await ownFolder($)
+  if (own === undefined) return undefined
+  const dir = `${own}/${await sessionFolderName($)}`
+  const made = await sh(
+    $,
+    'umask 077 && mkdir -p -m 700 -- "$1" && [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && chmod 700 -- "$1" && mkdir -p -m 700 -- "$2" && [ -d "$2" ] && [ ! -L "$2" ] && [ -O "$2" ]',
+    [own, dir],
+  )
   return made?.exitCode === 0 ? dir : undefined
+}
+
+// A session killed before its end leaves its folder: removed by a later start once a day old.
+const STALE_MS = 24 * 60 * 60 * 1000
+
+async function sweepStale($: EngineInterface): Promise<void> {
+  const own = await ownFolder($)
+  if (own === undefined) return
+  const current = await sessionFolderName($)
+  const cutoff = (await $.clock.now()) - STALE_MS
+  for (const entry of await $.fs.list(own).catch(() => [])) {
+    if (entry.kind !== 'dir' || entry.name === current || !/^[\w-]+$/.test(entry.name)) continue
+    const stat = await $.fs.stat(`${own}/${entry.name}`).catch(() => undefined)
+    if (stat === undefined || stat.mtimeMs >= cutoff) continue
+    // Both levels checked again right before: ours, no link.
+    await sh($, '[ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -d "$2" ] && [ ! -L "$2" ] && [ -O "$2" ] && rm -rf -- "$2"', [own, `${own}/${entry.name}`])
+  }
 }
 
 /** Writes the picture as PNG and a small BMP beside it; answers the shot, or why not. */
 async function keep($: EngineInterface, shot: { data: string; mime: string }, seq: number, at: number, page: string): Promise<VdShot | string> {
   const dir = await folder($)
   if (dir === undefined) return '画像の保存先を用意できませんでした'
-  const png = `${dir}/${seq}.png`
+  // The time in the name: a counter that starts again (a resumed session) never meets a file already there.
+  const name = `${seq}-${at}`
+  const png = `${dir}/${name}.png`
   const isPng = shot.mime === 'image/png'
-  const target = isPng ? png : `${dir}/${seq}.raw`
+  const target = isPng ? png : `${dir}/${name}.raw`
   const wrote = await sh($, 'set -C && base64 -d > "$1"', [target], shot.data)
   if (wrote?.exitCode !== 0) return '画像を書き出せませんでした'
   if (!isPng) {
@@ -78,7 +112,7 @@ async function keep($: EngineInterface, shot: { data: string; mime: string }, se
     if (w > 0 && h > 0) size = { width: w, height: h }
   }
   if (size === undefined) return '画像の大きさを読めませんでした'
-  const bmp = `${dir}/${seq}.bmp`
+  const bmp = `${dir}/${name}.bmp`
   const small =
     (await $.process.run(['sips', '-Z', String(SMALL_PX), '-s', 'format', 'bmp', png, '--out', bmp], { timeoutMs: 20_000 }).catch(() => undefined))?.exitCode === 0 ||
     (await $.process.run(['magick', png, '-resize', `${SMALL_PX}x${SMALL_PX}`, `BMP3:${bmp}`], { timeoutMs: 20_000 }).catch(() => undefined))?.exitCode === 0
@@ -157,7 +191,9 @@ async function ingest($: EngineInterface, shot: { data: string; mime: string }, 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'vdiff', description: '同じ URL・画面サイズのスクリーンショットの変更前後を比較（/vdiff · base で基準に固定 · clear）', argumentHint: '[base | clear]' })
-    return next(e)
+    const started = await next(e)
+    $.clock.after(0, () => void sweepStale($).catch(() => undefined))
+    return started
   })
 
   on('session.end', async ($, e, next) => {
