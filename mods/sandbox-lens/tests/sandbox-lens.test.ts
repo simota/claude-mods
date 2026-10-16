@@ -156,6 +156,29 @@ describe('parseDenials', () => {
 })
 
 describe('merge', () => {
+  test("a command refused at thousands of paths (`find ~`) is tallied in linear time: it holds the command's result", () => {
+    const output = Array.from({ length: 16_000 }, (_, n) => `find: /Users/me/Library/Containers/c${n}: Operation not permitted`).join('\n')
+    const hits = parseDenials(output, 'find ~', '/Users/me')
+    expect(hits).toHaveLength(16_000)
+    const started = performance.now()
+    const list = merge([denial('old.io:443', 3, 1)], hits, 'find ~', 2)
+    expect(performance.now() - started).toBeLessThan(200)
+    // Kept up to the limit; a repeat of a kept one is counted, not added again.
+    expect(list).toHaveLength(LIMIT)
+    const kept = list[0] as SandboxLensDenial
+    const again = merge(list, [{ kind: kept.kind, target: kept.target }], 'find ~', 3)
+    expect(again).toHaveLength(LIMIT)
+    expect(again.find(one => one.target === kept.target)?.count).toBe(2)
+  })
+
+  test('only the last violations block counts, and many unclosed ones are read in linear time', () => {
+    const started = performance.now()
+    expect(parseDenials('<sandbox_violations>\n'.repeat(20_000))).toEqual([])
+    expect(performance.now() - started).toBeLessThan(200)
+    const block = '<sandbox_violations>\ndeny network-outbound a.io:443 (x)\n</sandbox_violations>'
+    expect(parseDenials(`<sandbox_violations>\n${block}`)).toEqual([{ kind: 'network', target: 'a.io:443' }])
+  })
+
   test('counts repeats and keeps the busiest first', () => {
     const once = merge([], [{ kind: 'network', target: 'a:443' }], 'curl a', 1)
     const twice = merge(once, [{ kind: 'network', target: 'a:443' }, { kind: 'file-read', target: '/x' }], 'curl a', 2)
