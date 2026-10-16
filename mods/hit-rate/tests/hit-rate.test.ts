@@ -112,6 +112,21 @@ describe('verdicts', () => {
     expect(isReverted(marks, 'expect(x).toBe(1)\n')).toBe(false)
   })
 
+  test('assertion-guard: thousands of findings in a long file are counted in linear time', () => {
+    // Read before every Bash and Edit call and every prompt, and after every Bash call while open.
+    const findings = Array.from({ length: 4000 }, (_, n) => ({ kind: 'removed' as const, path: 'a.test.ts', before: `expect(a${n}).toBe(${n})` }))
+    const text = Array.from({ length: 4000 }, (_, n) => `  other(${n})`).join('\n')
+    let started = performance.now()
+    const marks = marksOf(findings, text)
+    expect(performance.now() - started).toBeLessThan(100)
+    const one = { path: 'a.test.ts', rules: guardRules(findings), marks }
+    started = performance.now()
+    expect(revertedRules(one, text)).toEqual([])
+    expect(isReverted(marks, text)).toBe(false)
+    expect(performance.now() - started).toBeLessThan(100)
+    expect(revertedRules(one, `${text}\n  expect(a7).toBe(7)`)).toEqual(['assertion-guard:removed'])
+  })
+
   test('assertion-guard: one verdict per kind per edit, and the kinds left keep their lines', () => {
     const loosened = (v: string) => ({ kind: 'loosened' as const, path: 'a.test.ts', before: `expect(${v}).toBe(1)`, after: `expect(${v}).toBeTruthy()` })
     const swallowed = { kind: 'swallowed' as const, path: 'a.test.ts', after: 'catch {}' }
