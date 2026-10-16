@@ -40,6 +40,23 @@ describe('journey', () => {
     ],
   }
 
+  test('a secret typed or filled is never kept, and the exports say so', () => {
+    const refs = { ref_1: { role: 'textbox', name: 'Password' }, ref_2: { role: 'textbox', name: 'Email' }, ref_3: { role: 'textbox', name: 'ワンタイムパスワード' } }
+    const fill = stepsOf('form_input', { ref: 'ref_1', value: 'hunter2!' }, refs, 'https://a.test/login', 1)
+    const email = stepsOf('form_input', { ref: 'ref_2', value: 'me@a.test' }, refs, 'https://a.test/login', 1)
+    const click = stepsOf('computer', { action: 'left_click', ref: 'ref_3' }, refs, 'https://a.test/login', 2)
+    const typed = stepsOf('computer', { action: 'type', text: '493021' }, refs, 'https://a.test/login', 3, click[0]?.kind === 'click' ? click[0].target : undefined)
+    const token = stepsOf('computer', { action: 'type', text: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' }, refs, 'https://a.test/x', 4)
+    const go = stepsOf('navigate', { url: 'https://a.test/cb?code=abc&access_token=xyz123&page=2' }, refs, '', 5)
+    const j = { name: 'login', startedAt: 0, isRecording: false, steps: [...fill, ...email, ...click, ...typed, ...token, ...go] }
+    const all = JSON.stringify(j) + markdownOf(j) + playwrightOf(j)
+    for (const secret of ['hunter2!', '493021', 'ghp_abcdefghij', 'xyz123']) expect(all).not.toContain(secret)
+    expect(all).toContain('me@a.test')
+    expect(all).toContain('page=2')
+    expect(playwrightOf(j)).toContain('process.env.JOURNEY_SECRET_1')
+    expect(markdownOf(j)).toContain('記録していません')
+  })
+
   test('writes a bug report with numbered steps and the expectations', () => {
     const md = markdownOf(J, 0)
     expect(md).toContain('1. http://localhost:3000/p/1 を開く\n2. 「Quantity」入力欄に「3」を入力\n3. 「Add to cart」ボタンをクリック\n4. 画面座標 (10, 20)をクリック\n5. Enter キーを押す')

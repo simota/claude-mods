@@ -332,7 +332,7 @@ Each Claude in Chrome screenshot is kept as PNG with its URL and size (in `$TMPD
 
 ### journey-trace
 
-Claude in Chrome navigations, clicks, typing, keys, form fills and scrolls are recorded as steps; elements named by `find`/`read_page` keep their role and name. Expected states come from `/journey expect <text>` and from Claude through the tool `mcp__journey-trace__expect`. `/journey start [name]`, `stop`, `resume`, `clear`; `/journey md` copies a bug report (steps, expected, actual to fill in, environment), `/journey e2e` a Playwright test where coordinate-only clicks are left as TODOs.
+Claude in Chrome navigations, clicks, typing, keys, form fills and scrolls are recorded as steps; elements named by `find`/`read_page` keep their role and name. Expected states come from `/journey expect <text>` and from Claude through the tool `mcp__journey-trace__expect`. `/journey start [name]`, `stop`, `resume`, `clear`; `/journey md` copies a bug report (steps, expected, actual to fill in, environment), `/journey e2e` a Playwright test where coordinate-only clicks are left as TODOs. A secret is never kept: a value filled into a field named as one (password, token, OTP, PIN, security code…), text typed while such a field has the focus, and text shaped like a known key are recorded as `***`, the report saying so and the test reading `process.env.JOURNEY_SECRET_n`; secret query parameters (`token`, `code`, `signature`…) and a URL's password are masked.
 
 ### token-lens
 
