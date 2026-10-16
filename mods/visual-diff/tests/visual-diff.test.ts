@@ -97,7 +97,7 @@ const PNG_800x600 = 'iVBORw0KGgoAAAANSUhEUgAAAyAAAAJYCAIAAAD'
 
 function world(on: On) {
   const clock = mock.clock(on, { now: 1_000 })
-  const w = { toasts: [] as string[], files: {} as Record<string, string>, clock, tabs: undefined as string | undefined }
+  const w = { toasts: [] as string[], files: {} as Record<string, string>, clock, tabs: undefined as string | undefined, sh: [] as string[][], dirs: [] as { name: string; mtimeMs: number }[] }
   mock.store(on, {})
   mock.env(on, { TMPDIR: '/t' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -111,12 +111,20 @@ function world(on: On) {
   on('process.run', ($, e) => {
     const ok = { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     const [program, flag] = e.argv
+    if (program === '/bin/sh') w.sh.push([...e.argv])
     if (program === 'sips' && flag === '-Z') {
       // The small copy: the first shot is plain, every later one has the red box.
       const out = e.argv.at(-1) as string
-      w.files[out] = out.endsWith('/1.bmp') ? bmp(64, 32, WHITE) : bmp(64, 32, BOX)
+      w.files[out] = /\/1-\d+\.bmp$/.test(out) ? bmp(64, 32, WHITE) : bmp(64, 32, BOX)
     }
     return ok
+  })
+  // The folders of sessions under the mod's own folder, as a listing and their times.
+  on('fs.list', () => ({ value: w.dirs.map(one => ({ name: one.name, kind: 'dir' })) }) as never)
+  on('fs.stat', ($, e) => {
+    const one = w.dirs.find(dir => String(e.path).endsWith(`/${dir.name}`))
+    if (one === undefined) throw new Error('ENOENT')
+    return { value: { kind: 'dir', size: 0, mtimeMs: one.mtimeMs, isLink: false } } as never
   })
   on('fs.read', ($, e) => {
     const data = w.files[String(e.path)]
@@ -166,6 +174,27 @@ describe('visual-diff in a session', () => {
       expect(await ui.find({ type: 'Text', text: /間の編集: App\.css/ })).toBeDefined()
       await ui.unmount()
     }
+  })
+
+  test('the folder is checked at both levels, names cannot collide, and folders of killed sessions are swept', async ($, on) => {
+    const w = world(on)
+    w.dirs = [{ name: 's1', mtimeMs: 1_000 }, { name: 'old', mtimeMs: 1_000 - 25 * 3_600_000 }, { name: 'fresh', mtimeMs: 1_000 - 3_600_000 }]
+    await $.session.start(START)
+    await w.clock.settle()
+    const removed = w.sh.filter(argv => String(argv[2]).includes('rm -rf')).map(argv => argv.at(-1))
+    expect(removed).toEqual(['/t/claude-visual-diff/old'])
+
+    await $.tool.call({ tool: 'mcp__claude-in-chrome__navigate', url: 'http://localhost:5173/', tabId: 1 } as never)
+    await $.tool.call({ tool: 'mcp__claude-in-chrome__computer', action: 'screenshot', tabId: 1 } as never)
+    await w.clock.settle()
+    const made = w.sh.find(argv => String(argv[2]).includes('mkdir'))
+    // The mod's own folder and the session's both: made private, no link, ours.
+    expect(made?.slice(-2)).toEqual(['/t/claude-visual-diff', '/t/claude-visual-diff/s1'])
+    expect(String(made?.[2])).toContain('[ ! -L "$1" ]')
+    expect(String(made?.[2])).toContain('[ ! -L "$2" ]')
+    // A name with the time in it: a counter that starts again never meets a file already there.
+    const written = w.sh.find(argv => String(argv[2]).includes('base64 -d'))
+    expect(String(written?.at(-1))).toMatch(/\/s1\/1-\d+\.png$/)
   })
 
   test('a click that leaves the page is not compared with the page it left', async ($, on) => {
