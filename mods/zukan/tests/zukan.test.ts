@@ -129,11 +129,19 @@ describe('book', () => {
     expect(programOf('cd "$(git rev-parse --show-toplevel)" && npm ci')).toBe('npm ci')
     expect(programOf('X=$(git rev-parse HEAD)')).toBe('git rev-parse')
     expect(programOf('cd /nope')).toBe('cd')
+    expect(programOf('echo "a" && echo "b"')).toBe('echo')
+    // A shell text that is itself fetched or expanded is named by the shell; find keeps its own name.
+    expect(programOf('/bin/bash -c "$(curl -fsSL https://x/install.sh)"')).toBe('bash')
+    expect(programOf('eval "$(ssh-agent -s)"')).toBe('eval')
+    expect(programOf('sh -c "$CMD"')).toBe('sh')
+    expect(programOf('find . -name "*.ts" -exec grep -l foo {} +')).toBe('find')
   })
 
   test('a line the shell reader cannot hold is named by its first word, without throwing', () => {
     expect(programOf(`echo ${'"$('.repeat(20_000)}`)).toBe('echo')
     expect(programOf(`npm install ${'"$('.repeat(3_000)}`)).toBe('npm install')
+    // A long line is read by its head, so a leading cd still does not stand for it.
+    expect(programOf(`cd app && npm install ${'x'.repeat(20_000)}`)).toBe('npm install')
   })
 
   test('leaves check failures alone', () => {
