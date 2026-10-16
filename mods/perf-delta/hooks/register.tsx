@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PerfReport, PerfSample } from '../types'
-import { baselineKey, commandStderr, isSafeRef, parseArgs, parseTime, reportLines, statsOf, verdictOf } from './delta'
+import { baselineKey, commandStderr, isSafeRef, isTimeout, MIN_RUNS, parseArgs, parseTime, reportLines, statsOf, verdictOf } from './delta'
 
 const PANE = 'perf-delta'
 const TITLE = '性能差'
@@ -41,7 +41,7 @@ async function measure($: EngineInterface, cwd: string, command: string, label: 
     })
     const elapsed = (await $.clock.now()) - started
     // The run rejects both when it outlasts the timeout and when it cannot start (a missing folder).
-    if (ran === undefined && elapsed < s.timeoutMs) {
+    if (ran === undefined && !isTimeout(elapsed, s.timeoutMs)) {
       throw new Error(`${label}: 起動できませんでした — ${failure instanceof Error ? failure.message : String(failure)}`.slice(0, 300))
     }
     if (ran === undefined) throw new Error(`${label}: ${s.timeoutMs / 1000}秒以内に終わりませんでした`)
@@ -70,19 +70,44 @@ async function git($: EngineInterface, cwd: string, argv: string[]) {
   return $.process.run(['git', ...argv], { cwd, timeoutMs: 120_000 }).catch(() => undefined)
 }
 
-/** Runs `command` in a temporary worktree of `ref`, in the same folder relative to the root. */
-async function measureRef($: EngineInterface, root: string, cwd: string, ref: string, command: string, s: Settings): Promise<PerfSample> {
-  const tmp = ((await $.env.get('TMPDIR')) ?? '/tmp').replace(/\/+$/, '')
-  const dir = `${tmp}/perf-delta-${await $.clock.now()}`
+const tmpOf = async ($: EngineInterface): Promise<string> => ((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '')
+// Its folder's name carries when it was made, then a random part mktemp chose.
+const WORKTREE = /\/perf-delta-(\d+)-[\w]+$/
+// The longest a run can take is about 8.5 hours (51 runs of at most 10 minutes): past this a
+// worktree of ours is left over from a run cut short (a reload, a crash).
+const STALE_MS = 12 * 60 * 60_000
+
+/** The folder below the repository's top that cwd is, as git reads it: right in a linked worktree too. */
+async function folderOf($: EngineInterface, cwd: string): Promise<string> {
+  const ran = await git($, cwd, ['rev-parse', '--show-prefix'])
+  return ran?.exitCode === 0 ? ran.stdout.trim().replace(/\/+$/, '') : ''
+}
+
+/** Removes a worktree of ours; when git cannot (a process still writing in it), its folder and registration go anyway. */
+async function dropWorktree($: EngineInterface, root: string, dir: string): Promise<void> {
+  const removed = await git($, root, ['worktree', 'remove', '--force', '--', dir])
+  if (removed?.exitCode === 0) return
+  if (WORKTREE.test(dir)) await $.process.run(['rm', '-rf', '--', dir], { timeoutMs: 120_000 }).catch(() => undefined)
+  await git($, root, ['worktree', 'prune'])
+}
+
+/** Runs `command` in a temporary worktree of `ref`, in the same folder below the top. */
+async function measureRef($: EngineInterface, root: string, below: string, ref: string, command: string, s: Settings): Promise<PerfSample> {
+  // A folder only this user can have made: a name another could guess and fill first is none.
+  const made = await $.process.run(['mktemp', '-d', `${await tmpOf($)}/perf-delta-${await $.clock.now()}-XXXXXX`]).catch(() => undefined)
+  const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
+  if (!WORKTREE.test(dir)) throw new Error('一時フォルダを作れませんでした（TMPDIR を確認してください）')
   const added = await git($, root, ['worktree', 'add', '--detach', '--', dir, ref])
-  if (added?.exitCode !== 0) throw new Error(`git worktree add ${ref} に失敗: ${added?.stderr.trim().slice(-200) ?? ''}`)
+  if (added?.exitCode !== 0) {
+    await dropWorktree($, root, dir)
+    throw new Error(`git worktree add ${ref} に失敗: ${added?.stderr.trim().slice(-200) ?? ''}`)
+  }
   try {
-    const below = cwd.startsWith(`${root}/`) ? cwd.slice(root.length + 1) : ''
     const inside = below === '' ? dir : `${dir}/${below}`
     if (below !== '' && !(await $.fs.exists(inside).catch(() => false))) throw new Error(`${ref} には ${below} がありません（このフォルダはその時点のコミットにありません）`)
     return await measure($, inside, command, ref, s)
   } finally {
-    await git($, root, ['worktree', 'remove', '--force', '--', dir])
+    await dropWorktree($, root, dir)
   }
 }
 
@@ -96,7 +121,8 @@ function toastOf(r: PerfReport): string {
 
 export const register: Register = (on, options) => {
   const settings: Settings = {
-    runs: Math.max(1, Math.min(50, Math.round(Number(options.runs ?? 5)) || 5)),
+    // At least MIN_RUNS: with fewer no difference is ever called.
+    runs: Math.max(MIN_RUNS, Math.min(50, Math.round(Number(options.runs ?? 5)) || 5)),
     timeoutMs: Math.max(5, Math.min(600, Number(options.timeoutSec ?? 300) || 300)) * 1000,
   }
 
@@ -106,13 +132,27 @@ export const register: Register = (on, options) => {
       description: 'ベンチマークの変更前後を比較（/perf <cmd> · /perf base <cmd> · /perf ref <git-ref> <cmd> · /perf show）',
       argumentHint: '<cmd> | base <cmd> | ref <git-ref> <cmd> | show | clear [cmd]',
     })
-    return next(e)
+    const started = await next(e)
+    // Worktrees of ours a run cut short left registered in the repository.
+    const root = (await $.session.repo())?.root
+    if (root !== undefined) {
+      const now = await $.clock.now()
+      const tmp = await tmpOf($)
+      const listed = await git($, root, ['worktree', 'list', '--porcelain'])
+      for (const line of listed?.exitCode === 0 ? listed.stdout.split('\n') : []) {
+        const dir = line.startsWith('worktree ') ? line.slice('worktree '.length) : ''
+        const made = Number(dir.match(WORKTREE)?.[1] ?? NaN)
+        if (dir.startsWith(`${tmp}/`) && now - made > STALE_MS) await dropWorktree($, root, dir)
+      }
+    }
+    return started
   })
 
   on('command.run', { command: 'perf' }, async ($, e) => {
     const { mode, ref, command } = parseArgs(e.args)
     const root = (await $.session.repo())?.root ?? (await $.session.cwd())
     const cwd = await $.session.cwd()
+    const below = await folderOf($, cwd)
 
     if (mode === 'show') {
       const shown = await read($, report)
@@ -122,7 +162,7 @@ export const register: Register = (on, options) => {
     }
     if (mode === 'clear') {
       const all = await baselinesOf($)
-      const kept = command === '' ? {} : Object.fromEntries(Object.entries(all).filter(([key]) => key !== baselineKey(root, command, cwd)))
+      const kept = command === '' ? {} : Object.fromEntries(Object.entries(all).filter(([key]) => key !== baselineKey(root, command, below)))
       await $.store.set(BASELINES, kept)
       return { text: `⏱ 基準を${command === '' ? 'すべて' : ''}削除しました。` }
     }
@@ -130,7 +170,7 @@ export const register: Register = (on, options) => {
     if (mode === 'ref' && (ref === undefined || !isSafeRef(ref))) return { text: `⏱ git ref として使えない値です: ${ref ?? ''}` }
     if (isBusy) return { text: '⏱ 計測中です。終わるまでお待ちください。' }
 
-    const key = baselineKey(root, command, cwd)
+    const key = baselineKey(root, command, below)
     const saved = (await baselinesOf($))[key]
     isBusy = true
     await update($, report, (): PerfReport => ({ status: 'running', command, note: '準備中' }))
@@ -143,7 +183,7 @@ export const register: Register = (on, options) => {
             await saveBaseline($, key, after)
             await update($, report, (): PerfReport => ({ status: 'done', command, after }))
           } else if (mode === 'ref') {
-            const before = await measureRef($, root, cwd, ref as string, command, settings)
+            const before = await measureRef($, root, below, ref as string, command, settings)
             const after = await measure($, cwd, command, '現在', settings)
             await update($, report, (): PerfReport => ({ status: 'done', command, before, after }))
           } else {
