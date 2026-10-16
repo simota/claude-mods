@@ -169,7 +169,20 @@ describe('artifact-shelf in a session', () => {
     expect(await ui.find({ type: 'Text', text: /hunter2secret/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /API_KEY=\*\*\*/ })).toBeDefined()
     await ui.unmount()
-    expect((await $.command.run(shelfRun('hunter2secret'))).text).not.toContain('hunter2secret —')
+    // Kept before masking, the shelf is written back masked at the start, not at its next item.
+    expect(JSON.stringify(w.store)).not.toContain('hunter2secret')
+  })
+
+  test('past 16 shelves the one least recently added to leaves, never the one in hand', async ($, on) => {
+    const w = world(on)
+    for (let i = 0; i < 20; i += 1) w.store[`shelf:/r${i}`] = [{ path: `/r${i}/a.csv`, kind: 'data', size: 1, at: 1_000 + i, tool: 'Write', event: 'Write', purpose: '', sessionId: 's0' }]
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Bash', command: 'pandoc a.md -o out.pdf' })
+    const shelves = Object.keys(w.store).filter(key => key.startsWith('shelf:'))
+    expect(shelves).toHaveLength(16)
+    expect(shelves).toContain('shelf:/w')
+    expect(shelves).toContain('shelf:/r19')
+    expect(shelves).not.toContain('shelf:/r0')
   })
 
   test('an item overwritten by another session at the same moment is shelved again', async ($, on) => {
