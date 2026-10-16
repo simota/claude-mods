@@ -123,6 +123,20 @@ export function testsFor(path: string, tests: Readonly<Record<string, string>>):
     .join('\n')
 }
 
+export const MAX_TEST_FILES = 30
+export const TEST_TEXT_MAX = 200_000
+
+/**
+ * The tests seen, with what one says now: each held to its last TEST_TEXT_MAX characters, and
+ * the files to the MAX_TEST_FILES seen latest (a file seen again counts as the newest), so a long
+ * session's reading neither grows the state without end nor slows every candidate count.
+ */
+export function withTest(all: Readonly<Record<string, string>>, path: string, text: string): Record<string, string> {
+  const { [path]: _, ...others } = all
+  const kept = Object.entries(others).slice(-(MAX_TEST_FILES - 1))
+  return { ...Object.fromEntries(kept), [path]: text.slice(-TEST_TEXT_MAX) }
+}
+
 /** One test to write: what to try, and why (the trigger line). */
 export type Candidate = { key: string; kind: NegativeTrigger['kind']; path: string; line: string; ask: string }
 
