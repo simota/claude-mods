@@ -59,11 +59,17 @@ export function verdictOf(before: Stats | undefined, after: Stats | undefined): 
   return { verdict: delta < 0 ? 'faster' : 'slower', deltaPct }
 }
 
+/**
+ * Whether a run that rejected did so at its time limit (else it could not start: a folder gone).
+ * A second's slack: a timer fires a little early, and the wall clock can step.
+ */
+export const isTimeout = (elapsedMs: number, timeoutMs: number): boolean => elapsedMs >= timeoutMs - 1000
+
 export const ms = (v: number): string => (v >= 10_000 ? `${(v / 1000).toFixed(1)}s` : v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${v.toFixed(v < 10 ? 1 : 0)}ms`)
 export const mb = (v: number): string => `${(v / 1024 / 1024).toFixed(v >= 100 * 1024 * 1024 ? 0 : 1)}MB`
 export const pct = (v: number): string => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`
 
-const WORD: Record<Verdict, string> = { faster: '改善', slower: '悪化', noise: 'ばらつきの範囲内', few: `回数が少なく判定できません（各 ${MIN_RUNS} 回以上）`, unknown: '比較できません' }
+const WORD: Record<Verdict, string> = { faster: '改善', slower: '悪化', noise: 'ばらつきの範囲内', few: `回数が少なく判定できません（各 ${MIN_RUNS} 回以上。古い基準なら /perf base で取り直してください）`, unknown: '比較できません' }
 
 /** The comparison as lines: one for time, one for memory, and a warning per unsteady side. */
 export function reportLines(before: PerfSample | undefined, after: PerfSample | undefined): string[] {
@@ -96,14 +102,14 @@ export function parseArgs(args: string): { mode: 'run' | 'base' | 'ref' | 'show'
   if (first === 'clear') return { mode: 'clear', command: rest.join(' ') }
   if (first === 'base') return { mode: 'base', command: text.slice(4).trim() }
   if (first === 'ref' && rest.length >= 2) return { mode: 'ref', ref: rest[0], command: text.slice(4).trim().slice((rest[0] as string).length).trim() }
+  // A ref with no command asks for one: `ref main` is no command to run.
+  if (first === 'ref' && rest.length === 1) return { mode: 'ref', ref: rest[0], command: '' }
   return { mode: 'run', command: text }
 }
 
-/** A baseline is the command's in the folder it ran in: at the root as it always was, below it with the folder named. */
-export const baselineKey = (root: string, command: string, cwd = root): string => {
-  const below = cwd.startsWith(`${root}/`) ? cwd.slice(root.length + 1) : ''
-  return `${root}\u0000${below === '' ? '' : `${below}\u0000`}${command.trim().replace(/\s+/g, ' ')}`
-}
+/** A baseline is the command's in the folder it ran in (below the top, as git names it): at the top the key it always was. */
+export const baselineKey = (root: string, command: string, below = ''): string =>
+  `${root}\u0000${below === '' ? '' : `${below}\u0000`}${command.trim().replace(/\s+/g, ' ')}`
 
 /** A git ref safe to hand to git: no option, no whitespace, no shell or revision-range tricks. */
 export const isSafeRef = (ref: string): boolean => /^[\w][\w./~^@{}-]*$/.test(ref) && !ref.includes('..')
