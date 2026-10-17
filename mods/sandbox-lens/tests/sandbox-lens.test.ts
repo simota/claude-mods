@@ -171,6 +171,20 @@ describe('merge', () => {
     expect(again.find(one => one.target === kept.target)?.count).toBe(2)
   })
 
+  test('a violation or refusal line with a long run of spaces inside is read in linear time', () => {
+    const spaces = ' '.repeat(32_000)
+    const started = performance.now()
+    expect(parseDenials(`<sandbox_violations>\ndeny file-write-create /a${spaces}b\n</sandbox_violations>`)).toEqual([{ kind: 'file-write', target: `/a${spaces}b` }])
+    expect(parseDenials(`zsh: operation not permitted: a${spaces}b`)).toEqual([{ kind: 'eperm', target: `a${spaces}b` }])
+    expect(performance.now() - started).toBeLessThan(100)
+    // A lone carriage return in the line, as a command's own stderr may print, is no slower.
+    const cr = performance.now()
+    parseDenials(`<sandbox_violations>\ndeny file-write${' '.repeat(32_000)}x\ry\n</sandbox_violations>`)
+    expect(performance.now() - cr).toBeLessThan(100)
+    // Trailing spaces still left off.
+    expect(parseDenials('zsh: operation not permitted: /x/a.txt   ')).toEqual([{ kind: 'eperm', target: '/x/a.txt' }])
+  })
+
   test('only the last violations block counts, and many unclosed ones are read in linear time', () => {
     const started = performance.now()
     expect(parseDenials('<sandbox_violations>\n'.repeat(20_000))).toEqual([])

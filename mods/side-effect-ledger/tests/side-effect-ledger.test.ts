@@ -327,3 +327,15 @@ describe('side-effect-ledger in a session', () => {
     expect(labels.some(label => label.startsWith('git push origin main'))).toBe(true)
   })
 })
+
+test('long runs of spaces or parentheses in a push or a command are read in linear time', () => {
+  const started = performance.now()
+  pushRefs(' '.repeat(32_000))
+  classifyCommand(`git push origin main${')'.repeat(32_000)}x`, '')
+  expect(performance.now() - started).toBeLessThan(100)
+  // As before: a forced update, a plain one after a space, none without the leading mark.
+  expect(pushRefs(' + 1a2b3c4...5d6e7f8 main -> main (forced update)').refs).toMatchObject([{ isForced: true, ref: 'main' }])
+  expect(pushRefs('   1a2b3c4..5d6e7f8  main -> main').refs).toMatchObject([{ isForced: false, ref: 'main' }])
+  expect(pushRefs('1a2b3c4..5d6e7f8  main -> main').refs).toEqual([])
+  expect(classifyCommand('(cd x && git push origin main)', 'To github.com:o/r.git\n   1a2b3c4..5d6e7f8  main -> main').length).toBeGreaterThan(0)
+})

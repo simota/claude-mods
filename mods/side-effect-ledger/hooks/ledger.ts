@@ -12,14 +12,29 @@ const clip = (text: string, max: number) => {
 
 const words = (part: string) => (part.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map(word => word.replace(/^['"]|['"]$/g, ''))
 
+/** A part less the `)` closing a subshell at its end, by a loop: /\)+\s*$/ tries from each `)` of a run. */
+function withoutClosers(part: string): string {
+  const text = part.trimEnd()
+  let end = text.length
+  while (end > 0 && text.charCodeAt(end - 1) === 41) end -= 1
+  return end < text.length ? text.slice(0, end) : part
+}
+
 /** What `git push` printed: the remote, and each ref's old and new commit. */
 export function pushRefs(output: string): { remote?: string; refs: { old?: string; now?: string; ref: string; isNew: boolean; isForced: boolean; isDeleted: boolean }[] } {
   const remote = output.match(/^To (\S+)/m)?.[1]
   const refs: { old?: string; now?: string; ref: string; isNew: boolean; isForced: boolean; isDeleted: boolean }[] = []
   for (const line of output.split('\n')) {
-    const updated = line.match(/^\s*([+ ])\s*([0-9a-f]{7,40})\.{2,3}([0-9a-f]{7,40})\s+\S+\s+->\s+(\S+)/)
+    // ` + old...new` (forced) or `   old..new`: the flag read once after the leading space, not by
+    // /^\s*([+ ])\s*/, which tries every split of a long run of spaces.
+    const body = line.trimStart()
+    const isForced = body.startsWith('+')
+    const updated =
+      isForced || line.slice(0, line.length - body.length).includes(' ')
+        ? (isForced ? body.slice(1) : body).match(/^\s*([0-9a-f]{7,40})\.{2,3}([0-9a-f]{7,40})\s+\S+\s+->\s+(\S+)/)
+        : null
     if (updated !== null) {
-      refs.push({ old: updated[2], now: updated[3], ref: updated[4] as string, isNew: false, isForced: updated[1] === '+', isDeleted: false })
+      refs.push({ old: updated[1], now: updated[2], ref: updated[3] as string, isNew: false, isForced, isDeleted: false })
       continue
     }
     const created = line.match(/^\s*\*\s+\[new (?:branch|tag)\]\s+\S+\s+->\s+(\S+)/)
@@ -324,7 +339,7 @@ export function classifyCommand(command: string, output: string): Classified[] {
   let isElsewhere = false
   const parts = command.split(/&&|\|\||;|\n|\|/).map(part => {
     if (/^\s*\(/.test(part)) isElsewhere = true
-    const argv = withoutRedirects(words(part.replace(/^\s*\(+/, '').replace(/\)+\s*$/, '')))
+    const argv = withoutRedirects(words(withoutClosers(part.replace(/^\s*\(+/, ''))))
     const where: string[] = []
     while (argv.length > 0 && (/^\w+=/.test(argv[0] as string) || argv[0] === 'sudo' || argv[0] === 'env' || argv[0] === 'command')) {
       const word = argv.shift() as string

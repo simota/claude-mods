@@ -82,6 +82,24 @@ describe('guard', () => {
     expect(kinds('a.py', '', 'try:\n  f()\nexcept (ValueError, KeyError) as e:\n  pass')).toEqual(['swallowed'])
   })
 
+  test('long or odd edits are read in time: rewritten subjects, # runs after except, commented catch lines', () => {
+    const time = (run: () => unknown) => {
+      const started = performance.now()
+      run()
+      return performance.now() - started
+    }
+    // Every assertion given a new subject: each removed line is paired once, not searched for.
+    const before = Array.from({ length: 4000 }, (_, n) => `expect(a${n}).toBe(${n})`).join('\n')
+    const after = Array.from({ length: 4000 }, (_, n) => `expect(b${n}).toBe(${n})`).join('\n')
+    expect(time(() => inspect('a.test.ts', before, after))).toBeLessThan(300)
+    // A run of # after `except:` is one comment, not exponentially many ways to split one.
+    expect(time(() => inspect('a.py', '', `except Exception:  ${'#'.repeat(40)}\n`))).toBeLessThan(50)
+    // Lines of `// catch {` do not each read every comment line after them.
+    expect(time(() => inspect('a.ts', '', '// catch {\n'.repeat(20_000)))).toBeLessThan(300)
+    // `pass` inside a comment on the except line is prose, not the clause's body.
+    expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept Exception:  # we pass on this\n    log()')).toEqual([])
+  })
+
   test('a comment on its own line before pass is still a swallow; prose starting with except is not', () => {
     expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept Exception:\n    # best effort\n    pass')).toEqual(['swallowed'])
     expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept Exception:  # noqa\n    # a\n    # b\n    ...')).toEqual(['swallowed'])

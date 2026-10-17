@@ -10,8 +10,29 @@ const READERS = new Set(['cat', 'sed', 'head', 'tail', 'less', 'more', 'bat', 'n
 export const blank = (at: number): FogFile => ({ reads: 0, edits: 0, added: 0, removed: 0, errors: 0, isNew: false, at })
 
 /** A path as the repository names it, or undefined when it lies outside. */
+// Trailing slashes off, by a loop: `/\/+$/` tries from every slash of a long run.
+function trimSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path.charCodeAt(end - 1) === 47) end -= 1
+  return path.slice(0, end)
+}
+
+// No path is longer: a `cd` past it is not followed, so a chain of them is not read on forever.
+const PATH_MAX = 4096
+
+// An absolute directory with `.` and `..` folded, as the shell's would be after a cd.
+function folding(path: string): string {
+  const parts: string[] = []
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return `/${parts.join('/')}`
+}
+
 export function inRepo(path: string, root: string, cwd: string): string | undefined {
-  const full = path.startsWith('/') ? path : `${cwd.replace(/\/+$/, '')}/${path}`
+  const full = path.startsWith('/') ? path : `${trimSlashes(cwd)}/${path}`
   const parts: string[] = []
   for (const part of full.split('/')) {
     if (part === '' || part === '.') continue
@@ -19,7 +40,7 @@ export function inRepo(path: string, root: string, cwd: string): string | undefi
     else parts.push(part)
   }
   const clean = `/${parts.join('/')}`
-  const base = root.replace(/\/+$/, '')
+  const base = trimSlashes(root)
   return clean.startsWith(`${base}/`) ? clean.slice(base.length + 1) : undefined
 }
 
@@ -84,9 +105,11 @@ export function bashTouches(
     const [program = '', ...rest] = words(part)
     if (program === 'cd') {
       const to = rest[0]
-      here = to === undefined || to === '-' || to.startsWith('~') || to.includes('$') || here === undefined
+      const next: string | undefined = to === undefined || to === '-' || to.startsWith('~') || to.includes('$') || here === undefined
         ? undefined
-        : to.startsWith('/') ? to : `${here.replace(/\/+$/, '')}/${to}`
+        : to.startsWith('/') ? to : `${trimSlashes(here)}/${to}`
+      const folded = next === undefined ? undefined : folding(next)
+      here = folded !== undefined && folded.length <= PATH_MAX ? folded : undefined
       continue
     }
     const name = program.slice(program.lastIndexOf('/') + 1)

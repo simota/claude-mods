@@ -155,6 +155,20 @@ describe('fog', () => {
     expect(counts).toEqual(countsOf(touched, files))
   })
 
+  test('a command of many cd parts or a long run of slashes is read in linear time', () => {
+    const known = (word: string, cwd: string) => inRepo(word, '/r', cwd)
+    for (const command of ['cd a; '.repeat(30_000), `cd /${'/'.repeat(32_000)}x; cat f`, `cat ${'/'.repeat(32_000)}x`]) {
+      const started = performance.now()
+      bashTouches(command, '/r', known)
+      expect(performance.now() - started).toBeLessThan(200)
+    }
+    // A cd back up is folded, so a long chain that stays near home is still followed.
+    expect(bashTouches(`${'cd src && cd .. && '.repeat(700)}cat README.md`, '/r', known).reads).toEqual(['README.md'])
+    // Still followed: a cd, and one with a trailing slash.
+    expect(bashTouches('cd src/ && cat a.ts', '/r', known).reads).toEqual(['src/a.ts'])
+    expect(bashTouches('cd src && cd util// && cat c.ts', '/r', known).reads).toEqual(['src/util/c.ts'])
+  })
+
   test('a touched path the list lacks is drawn, and the cached tree is left as it was', () => {
     const tree = treeOf(FILES)
     const once = rowsOf(FILES, { 'src/new.ts': { ...blank(1), edits: 1, isNew: true } }, null, 80, tree)

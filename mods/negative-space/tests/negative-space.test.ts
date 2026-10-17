@@ -176,3 +176,19 @@ describe('negative-space in a session', () => {
     expect((await $.command.run(RUN)).text).toContain('候補はありません')
   })
 })
+
+test('an unclosed quote before backslashes, and long lines above a trigger, are read in time', () => {
+  let started = performance.now()
+  namesOn(`throw new Error("${'\\'.repeat(40)}`)
+  namesOn(`const p = \`C:${'\\'.repeat(40)}`)
+  expect(performance.now() - started).toBeLessThan(50)
+  // Strings are still blanked, an escaped quote and a lone backslash before the close included.
+  expect(namesOn('validate("users \\" table", limitCount)')).toEqual(['validate', 'limitCount'])
+  expect(namesOn('check("path\\", other)')).toEqual(['check', 'other'])
+
+  const long = `${'x=('.repeat(3000)}`
+  const lines = [...Array.from({ length: 199 }, () => long), 'if (!user) throw new Error("no user")']
+  started = performance.now()
+  expect(enclosingName(lines, 199)).toBeUndefined()
+  expect(performance.now() - started).toBeLessThan(100)
+})

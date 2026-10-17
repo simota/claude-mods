@@ -83,8 +83,18 @@ export function recallStep(
 
 // ---- assertion-guard ------------------------------------------------------------------------
 
-export const occurrences = (text: string, line: string): number =>
-  line === '' ? 0 : text.split('\n').filter(one => one.trim() === line).length
+// Each trimmed line of a text and how often it occurs: built once per text, so a file is read
+// once however many findings are looked up in it, not once per finding.
+function lineCounts(text: string): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const one of text.split('\n')) {
+    const line = one.trim()
+    counts.set(line, (counts.get(line) ?? 0) + 1)
+  }
+  return counts
+}
+
+const countIn = (counts: ReadonlyMap<string, number>, line: string): number => (line === '' ? 0 : counts.get(line) ?? 0)
 
 type GuardFinding = PluginState['assertion-guard']['entries'][number]['findings'][number]
 
@@ -92,9 +102,10 @@ const guardRule = (finding: GuardFinding): string => `assertion-guard:${finding.
 
 /** Each finding's rule and its before and after lines, counted in the file as it stands when the finding is opened. */
 export function marksOf(findings: readonly GuardFinding[], text: string): HitMarks[] {
+  const counts = lineCounts(text)
   const mark = (side: HitMark['side'], raw: string | undefined): HitMark | undefined => {
     const line = raw?.trim() ?? ''
-    return line === '' ? undefined : { side, line, count: occurrences(text, line) }
+    return line === '' ? undefined : { side, line, count: countIn(counts, line) }
   }
   return findings.map(f => {
     const before = mark('before', f.before)
@@ -108,15 +119,18 @@ export function marksOf(findings: readonly GuardFinding[], text: string): HitMar
  * went (or only the one it has did). Counts, not presence, so a duplicate assertion elsewhere
  * in the file does not look like a revert.
  */
-function isUndone({ before, after }: HitMarks, text: string): boolean {
+function isUndone({ before, after }: HitMarks, counts: ReadonlyMap<string, number>): boolean {
   if (before === undefined && after === undefined) return false
-  const isBack = before === undefined || occurrences(text, before.line) > before.count
-  const isGone = after === undefined || occurrences(text, after.line) < after.count
+  const isBack = before === undefined || countIn(counts, before.line) > before.count
+  const isGone = after === undefined || countIn(counts, after.line) < after.count
   return isBack && isGone
 }
 
 /** Whether the file now undoes the weakening of some finding. */
-export const isReverted = (marks: readonly HitMarks[], text: string): boolean => marks.some(one => isUndone(one, text))
+export function isReverted(marks: readonly HitMarks[], text: string): boolean {
+  const counts = lineCounts(text)
+  return marks.some(one => isUndone(one, counts))
+}
 
 /**
  * The rules of one entry the file now undoes: a rule (a kind of weakening) is undone when one of
@@ -124,7 +138,10 @@ export const isReverted = (marks: readonly HitMarks[], text: string): boolean =>
  * in the same edit open. An entry gets one verdict per rule: two loosened matchers with one
  * undone score `loosened` once, as tp.
  */
-export const revertedRules = (one: HitAssertion, text: string): string[] => [...new Set(one.marks.filter(mark => isUndone(mark, text)).map(mark => mark.rule))]
+export function revertedRules(one: HitAssertion, text: string): string[] {
+  const counts = lineCounts(text)
+  return [...new Set(one.marks.filter(mark => isUndone(mark, counts)).map(mark => mark.rule))]
+}
 
 /** The entry with `rules` settled: those rules and their findings gone, or null when nothing is left open. */
 export function withoutRules(one: HitAssertion, rules: readonly string[]): HitAssertion | null {

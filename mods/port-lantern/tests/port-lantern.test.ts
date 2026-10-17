@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { LanternServer } from '../types'
-import { commandPorts, isServerCommand, judge, outputPathOf, outputPorts, parseLsof, statusOf, tailOf, urlsOf } from '../hooks/lantern'
+import { commandPorts, isServerCommand, judge, outputPathOf, outputPorts, parseLsof, statusOf, stripAnsi, tailOf, urlsOf } from '../hooks/lantern'
 
 const OUT = '/tmp/tasks/b1.output'
 const BG = `Command running in background with ID: b1. Output is being written to: ${OUT}. You will be notified when it completes.`
@@ -111,4 +111,33 @@ describe('port-lantern in a session', () => {
       await ui.unmount()
     }
   })
+})
+
+describe('long dev-server output', () => {
+  test('hyperlinks ended by ST, not BEL, are read in linear time and stripped', () => {
+    // Each line carries an OSC-8 link closed by ESC \: no BEL anywhere in the output.
+    const line = (n: number) => `\u001b]8;;http://localhost:5173/p${n}\u001b\\  ➜  page ${n}\u001b]8;;\u001b\\\n`
+    const output = Array.from({ length: 4000 }, (_, n) => line(n)).join('')
+    const started = performance.now()
+    expect(stripAnsi(output)).not.toContain('\u001b')
+    expect(urlsOf(output)).toEqual([])
+    expect(performance.now() - started).toBeLessThan(100)
+    expect(stripAnsi(`${line(1)}  ➜  Local:   http://localhost:5173/`)).toBe('  ➜  page 1\n  ➜  Local:   http://localhost:5173/')
+  })
+
+  test('many distinct local URLs are collected in linear time', () => {
+    const output = Array.from({ length: 20_000 }, (_, n) => `http://localhost:3000/r${n}`).join('\n')
+    const started = performance.now()
+    expect(urlsOf(output)).toHaveLength(20_000)
+    expect(performance.now() - started).toBeLessThan(100)
+  })
+})
+
+test('a URL ending in a long run of punctuation, and a title never closed, are read right and in time', () => {
+  const started = performance.now()
+  expect(urlsOf(`http://localhost:3000/${';'.repeat(64_000)}x`)).toHaveLength(1)
+  expect(urlsOf(`http://localhost:3000/a${'.'.repeat(64_000)}`)).toEqual(['http://localhost:3000/a'])
+  expect(performance.now() - started).toBeLessThan(100)
+  // An OSC never ended keeps the lines after it: only a closed one is taken out.
+  expect(urlsOf('\u001b]0;my-app\n  Local: http://localhost:5173/\n')).toEqual(['http://localhost:5173/'])
 })

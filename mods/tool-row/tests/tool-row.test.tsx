@@ -226,3 +226,21 @@ test('compact off keeps the result', { options: { compact: false } }, async ($, 
   await texts($, 'terminal', { id: 'toolu_e', tool: 'Edit', input: { file_path: '/repo/src/app.ts' }, output: EDIT_OUTPUT })
   expect(await result($, 'toolu_e', 'Edit')).toEqual([RESULT_TEXT])
 })
+
+test('a one-line command of megabytes is cut without reading it all, on every draw', () => {
+  const command = `python3 -c '${'x = 1; '.repeat(150_000)}'`
+  summarize({ tool: 'Bash', input: { command }, output: {}, isErrored: false })
+  const started = performance.now()
+  const summary = summarize({ tool: 'Bash', input: { command }, output: {}, isErrored: false })
+  expect(performance.now() - started).toBeLessThan(20)
+  expect(summary?.label).toBe(`${command.slice(0, 59)}…`)
+  // Still cut between whole characters.
+  expect(summarize({ tool: 'Bash', input: { command: '👩‍💻'.repeat(100_000) }, output: {}, isErrored: false })?.label).toBe(`${'👩‍💻'.repeat(59)}…`)
+})
+
+test('the fallback reads one long cluster in linear time', () => {
+  const started = performance.now()
+  expect(graphemesFallback(`a${'\u200d\u{1F1EF}'.repeat(20_000)}`)).toHaveLength(1)
+  expect(performance.now() - started).toBeLessThan(200)
+  expect(graphemesFallback('🇯🇵🇺🇸')).toEqual(['🇯🇵', '🇺🇸'])
+})

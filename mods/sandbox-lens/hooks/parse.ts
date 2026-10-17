@@ -7,7 +7,8 @@ const EXAMPLE_CHARS = 80
 
 const OPEN = '<sandbox_violations>'
 const CLOSE = '</sandbox_violations>'
-const VIOLATION = /^\s*deny\s+(network-outbound|file-write[\w*-]*|file-read[\w*-]*)\s+(.+?)\s*$/
+// Read on a line with its trailing space off: `(.+?)\s*$` tries every split of a run of spaces.
+const VIOLATION = /^\s*deny\s+(network-outbound|file-write[\w*-]*|file-read[\w*-]*)\s+(\S.*)$/
 
 // The tail a refusal line may carry after "permitted": Rust's `(os error 1)`.
 const TAIL = String.raw`(?:\s*\(os error 1\))?\s*$`
@@ -19,7 +20,7 @@ const EPERM_LINES: RegExp[] = [
   // touch: /x/My Files/a.txt: Operation not permitted   ·   rg: /x: Operation not permitted (os error 1)
   new RegExp(String.raw`^([\w./+-]+): (.+?): Operation not permitted${TAIL}`),
   // zsh: operation not permitted: /x/a.txt
-  /^(zsh|bash|sh|fish): operation not permitted: (.+?)\s*$/i,
+  /^(zsh|bash|sh|fish): operation not permitted: (.+)$/i,
   // PermissionError: [Errno 1] Operation not permitted: '/x/y'
   /^(?:\w+\.)*(PermissionError|OSError): \[Errno 1\] Operation not permitted: (['"].+['"])\s*$/,
 ]
@@ -72,6 +73,17 @@ function trailingBlock(output: string): string | undefined {
 }
 
 /**
+ * A path less the `(reason)` the harness may put after it. Found from its last `(`, not by
+ * /\s+\([^()]*\)$/, which tries from every space of a run in the path.
+ */
+function withoutReason(rest: string): string {
+  if (!rest.endsWith(')')) return rest
+  const open = rest.lastIndexOf('(')
+  if (open < 1 || rest.indexOf(')', open) < rest.length - 1 || !/\s/.test(rest[open - 1] as string)) return rest
+  return rest.slice(0, open).trimEnd()
+}
+
+/**
  * Denials named in one command's output, each (kind, target) once; relative paths resolved against cwd.
  * `harness` is where the harness's block may be: the result's own `stderr` when the command
  * succeeded (the engine keeps the command's output apart, in `stdout`), else the whole output.
@@ -81,12 +93,12 @@ export function parseDenials(output: string, command = '', cwd = '', harness = o
   const add = (hit: Hit) => seen.set(`${hit.kind} ${hit.target}`, hit)
 
   for (const line of (trailingBlock(harness) ?? '').split(/\r?\n/)) {
-    const match = VIOLATION.exec(line)
+    const match = VIOLATION.exec(line.trimEnd())
     if (!match) continue
     const [, operation = '', rest = ''] = match
     const kind = kindOf(operation)
     // A network denial is `host:port (why)`; a path runs to the end of the line, spaces and all.
-    const target = kind === 'network' ? (rest.split(/\s+/)[0] ?? rest) : unquote(rest.replace(/\s+\([^()]*\)$/, ''))
+    const target = kind === 'network' ? (rest.split(/\s+/)[0] ?? rest) : unquote(withoutReason(rest))
     if (target !== '') add({ kind, target })
   }
   // The block already names the refusal the command's own stderr reports again.
@@ -94,7 +106,9 @@ export function parseDenials(output: string, command = '', cwd = '', harness = o
 
   const program = firstWord(command)
   const isReader = READERS.has(program)
-  for (const line of output.split(/\r?\n/)) {
+  for (const raw of output.split(/\r?\n/)) {
+    // Trailing space off first: every shape's ending would otherwise try each split of it.
+    const line = raw.trimEnd()
     for (const shape of EPERM_LINES) {
       const match = shape.exec(line)
       if (!match) continue

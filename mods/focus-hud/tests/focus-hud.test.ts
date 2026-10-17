@@ -75,3 +75,12 @@ describe('focus-hud in a session', () => {
     expect(detail).toContain('待ち: あなたの入力待ち')
   })
 })
+
+test('a path ending a long run of slashes is read in linear time', () => {
+  for (const input of [{ file_path: `${'/'.repeat(32_000)}x` }, { command: `${'/'.repeat(32_000)}x` }]) {
+    const started = performance.now()
+    expect(targetOf(input.command === undefined ? 'Read' : 'Bash', input)).toBe('x')
+    expect(performance.now() - started).toBeLessThan(50)
+  }
+  expect(targetOf('Read', { file_path: '/repo/src/' })).toBe('src/')
+})

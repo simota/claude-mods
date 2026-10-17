@@ -82,7 +82,10 @@ const STOP = new Set(
 /** The function enclosing a line of a file: the nearest declaration above it. */
 export function enclosingName(lines: readonly string[], index: number): string | undefined {
   for (let i = index; i >= 0 && i > index - 200; i -= 1) {
-    const m = (lines[i] ?? '').match(DECLARATION)
+    const line = lines[i] ?? ''
+    // A minified line declares nothing worth naming, and its length would make DECLARATION slow.
+    if (line.length > MAX_LINE) continue
+    const m = line.match(DECLARATION)
     const name = m?.slice(1).find(Boolean)
     if (name !== undefined && !STOP.has(name.toLowerCase())) return name
   }
@@ -91,7 +94,9 @@ export function enclosingName(lines: readonly string[], index: number): string |
 
 /** Names worth finding in a test of this line: identifiers of four letters or more, common words left out. */
 export function namesOn(line: string): string[] {
-  const found = (line.replace(/(['"`])(?:\\.|(?!\1).)*\1/g, ' ').match(/[A-Za-z_$][\w$]{3,}/g) ?? []).filter(word => !STOP.has(word.toLowerCase()))
+  // A string's text: an escape, or any one character but a backslash, never a backslash both
+  // ways (a run of them would split exponentially), and a lone one may stand before the close.
+  const found = (line.replace(/(['"`])(?:\\.|(?!\1)[^\\])*\\?\1/g, ' ').match(/[A-Za-z_$][\w$]{3,}/g) ?? []).filter(word => !STOP.has(word.toLowerCase()))
   return [...new Set(found)].slice(0, 5)
 }
 

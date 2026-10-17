@@ -500,3 +500,11 @@ describe('pr-lamp in a session', () => {
     })
   }
 })
+
+test('a command naming gh api many times is read in linear time, on every tool call', () => {
+  const started = performance.now()
+  expect(bodiesPosted('Bash', { command: 'gh api x '.repeat(14_000) })).toEqual([])
+  expect(performance.now() - started).toBeLessThan(100)
+  expect(bodiesPosted('Bash', { command: 'gh api repos/o/r/pulls/3/comments -f body="ok there"' })).toHaveLength(1)
+  expect(bodiesPosted('Bash', { command: 'echo /pulls/3/comments && gh api x -f body=no' })).toEqual([])
+})

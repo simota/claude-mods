@@ -1,6 +1,6 @@
 {
   "name": "focus-hud",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One status line that says what is going on: the goal (the request, or the todo in progress), the target (the file, page or command in hand), what is running and for how long, and what it waits on (you, a permission, an answer, a tool); /focus gives the detail",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"

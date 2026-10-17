@@ -17,13 +17,14 @@ const WEAK =
 const SKIP =
   /\b(?:it|test|describe|context|suite)\.(?:skip|only|todo|fixme)\b|\b(?:xit|xdescribe|xtest|xcontext|fit|fdescribe)\s*\(|@pytest\.mark\.(?:skip|skipif|xfail)\b|@unittest\.(?:skip|expectedFailure)\b|#\[ignore\b|\bt\.Skip(?:Now|f)?\(|\bXCTSkip\w*\(|\bpending\(|@Disabled\b|@Ignore\b|\.disabled\(|\.enabled\(if:\s*false/
 // Each runs over the whole file at every edit, so none may backtrack on what it cannot match:
-// a comment line ends at its line break, `except` is read from the start of its line, and no
-// two quantifiers in a row take the same characters.
+// a comment runs to its line break, `except` is read from the start of its line, no two
+// quantifiers in a row take the same characters, and a block holds 20 comment lines at most,
+// so a run of commented-out `catch {` lines is not read through from each one.
 const SWALLOW = [
-  /catch\s*(?:\([^()]*\)\s*)?\{\s*(?:\/\/[^\n]*\n\s*)*\}/g,
+  /catch\s*(?:\([^()]*\)\s*)?\{\s*(?:\/\/[^\n]*\n\s*){0,20}\}/g,
   /\.catch\(\s*(?:\((?:\s*\w+)?\s*\)|\w+)\s*=>\s*(?:\{\s*\}|undefined|null|void 0|false)\s*\)/g,
   // Comment lines may stand between the clause and its pass; an ellipsis is the clause's whole body, not prose.
-  /^[ \t]*except\b(?:[ \t][^:\n]*)?:(?:\s*#[^\n]*)*\s*(?:pass\b|\.\.\.(?![^\S\n]*[^\s#]))/gm,
+  /^[ \t]*except\b(?:[ \t][^:\n]*)?:(?:\s*#[^\n]*(?![^\n])){0,20}\s*(?:pass\b|\.\.\.(?![^\S\n]*[^\s#]))/gm,
   /\brescue\b(?:[ \t]+[\w:]+)?(?:[ \t]*=>[ \t]*\w+)?\s*nil\b/g,
   /\bif\s+err\s*!=\s*nil\s*\{\s*\}/g,
   /\b_\s*=\s*err\b/g,
@@ -207,14 +208,30 @@ export function inspect(path: string, before: string, after: string): GuardFindi
     const come = added.filter(isAssertion)
     const pairs: [string, string][] = []
     const unpaired: string[] = []
-    const free = [...come]
+    // Each removed assertion takes the first added one about the same subject, found by subject
+    // rather than by a search of the list (an edit may rename thousands).
+    const bySubject = new Map<string, { at: number[]; next: number }>()
+    come.forEach((line, at) => {
+      const subject = subjectOf(line)
+      const queue = bySubject.get(subject)
+      if (queue === undefined) bySubject.set(subject, { at: [at], next: 0 })
+      else queue.at.push(at)
+    })
+    const taken = new Set<number>()
     for (const line of gone) {
-      const at = free.findIndex(one => subjectOf(one) === subjectOf(line))
-      if (at >= 0) pairs.push([line, free.splice(at, 1)[0] as string])
-      else unpaired.push(line)
+      const queue = bySubject.get(subjectOf(line))
+      const at = queue?.at[queue.next]
+      if (queue === undefined || at === undefined) unpaired.push(line)
+      else {
+        queue.next += 1
+        taken.add(at)
+        pairs.push([line, come[at] as string])
+      }
     }
     // What is left pairs in order: an edit that renamed the subject too still lines up.
-    while (unpaired.length > 0 && free.length > 0) pairs.push([unpaired.shift() as string, free.shift() as string])
+    const free = come.filter((_, at) => !taken.has(at))
+    for (let k = 0; k < Math.min(unpaired.length, free.length); k += 1) pairs.push([unpaired[k] as string, free[k] as string])
+    unpaired.splice(0, Math.min(unpaired.length, free.length))
     for (const line of unpaired) findings.push({ kind: 'removed', path, before: clip(line) })
     for (const [old, now] of pairs) {
       const isWeaker = STRICT.test(old) && WEAK.test(now) && !STRICT.test(now)

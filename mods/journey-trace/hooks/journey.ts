@@ -111,6 +111,13 @@ const isSecretTarget = (t: JourneyTarget | undefined) =>
  * text that reads as a password, and text shaped like a credential are kept as `***`: the journey
  * is copied out as a report or a test.
  */
+// Trailing slashes off, by a loop: `/\/+$/` tries from every slash of a long run.
+function trimSlashes(path: string): string {
+  let end = path.length
+  while (end > 0 && path.charCodeAt(end - 1) === 47) end -= 1
+  return path.slice(0, end)
+}
+
 export function stepsOf(
   tool: string,
   input: Record<string, unknown>,
@@ -138,7 +145,7 @@ export function stepsOf(
     // Typed without a scheme, the address the browser landed on says which (`url`, from the
     // navigation's answer); failing that, a local host is http and anything else https.
     const isLocal = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[\w.-]+\.(?:localhost|local|test))(?::\d+)?(?:\/|$)/.test(to)
-    const landed = /^https?:\/\//.test(url) && url.replace(/^https?:\/\//, '').startsWith(to.replace(/\/+$/, '')) ? url : undefined
+    const landed = /^https?:\/\//.test(url) && url.replace(/^https?:\/\//, '').startsWith(trimSlashes(to)) ? url : undefined
     return [{ kind: 'goto', url: maskedUrl(/^https?:\/\//.test(to) ? to : (landed ?? `${isLocal ? 'http' : 'https'}://${to}`)), at }]
   }
   if (tool === 'form_input') {
