@@ -184,11 +184,30 @@ function isAboutLiteral(line: string): boolean {
   return checked.length > 0 && checked.every(one => LITERAL.test(one))
 }
 
+// How far back an open `/*` is looked for: a block comment longer than this is read as code.
+const BLOCK_REACH = 4096
+
+/**
+ * Whether a match starts inside a comment: a comment line (`//`, `#`, ` * ` of a doc block), a
+ * comment after code on its line (`run() // or || true`), or an open `/* … *\/`. Its text is prose
+ * about code, not code. A `//` right after `:` (a URL) opens nothing.
+ */
+function inComment(text: string, at: number): boolean {
+  const lineStart = text.lastIndexOf('\n', at - 1) + 1
+  const prefix = text.slice(lineStart, at)
+  if (isComment(prefix.trimStart()) || /(?:^|\s)(?:\/\/|#\s)/.test(prefix)) return true
+  // Within the reach only, so a file of many matches is not read back to its start for each.
+  const reach = text.slice(Math.max(0, at - BLOCK_REACH), at)
+  const open = reach.lastIndexOf('/*')
+  return open !== -1 && open > reach.lastIndexOf('*/')
+}
+
 function newMatches(pattern: RegExp, before: string, after: string): string[] {
   const seen = new Map<string, number>()
-  for (const m of before.matchAll(pattern)) seen.set(squash(m[0]), (seen.get(squash(m[0])) ?? 0) + 1)
+  for (const m of before.matchAll(pattern)) if (!inComment(before, m.index)) seen.set(squash(m[0]), (seen.get(squash(m[0])) ?? 0) + 1)
   const fresh: string[] = []
   for (const m of after.matchAll(pattern)) {
+    if (inComment(after, m.index)) continue
     const key = squash(m[0])
     const n = seen.get(key) ?? 0
     if (n > 0) seen.set(key, n - 1)

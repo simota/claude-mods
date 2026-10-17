@@ -52,6 +52,29 @@ describe('guard', () => {
     expect(kinds('package.json', '"test": "jest"', '"test": "jest || true"')).toEqual(['swallowed'])
   })
 
+  test('a comment that names a swallow is no swallow; the code around it still is', () => {
+    // Comment lines, a doc block, a comment after code, a block comment, a Python or shell comment.
+    expect(kinds('src/a.ts', '', '// a report or a README quoting `|| true` or `catch {}`')).toEqual([])
+    expect(kinds('src/a.ts', '', '/**\n * Errors dropped (`catch {}`, `.catch(() => undefined)`) are flagged.\n */')).toEqual([])
+    expect(kinds('src/a.ts', 'run()', 'run() // or || true')).toEqual([])
+    expect(kinds('src/a.ts', '', '/* old: try { f() } catch {} */')).toEqual([])
+    expect(kinds('app.py', '', '# was: except Exception: pass')).toEqual([])
+    expect(kinds('run.sh', '', 'make # then || true')).toEqual([])
+    // Code: a catch block holding only a comment, a script string, a URL before the swallow.
+    expect(kinds('src/a.ts', '', 'try { f() } catch {\n  // ignore\n}')).toEqual(['swallowed'])
+    expect(kinds('package.json', '', '"test": "jest || true"')).toEqual(['swallowed'])
+    expect(kinds('run.sh', '', 'curl http://x || true')).toEqual(['swallowed'])
+    // A comment that already named it before the edit does not hide a new real one.
+    expect(kinds('src/a.ts', '// never || true', '// never || true\nnpm test || true')).toEqual(['swallowed'])
+  })
+
+  test('reading for comments stays fast on a file of many swallows', () => {
+    const big = `/* ${'x'.repeat(10_000)} */\n` + 'f() || true\n'.repeat(20_000)
+    const started = performance.now()
+    inspect('run.sh', '', big)
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
   test('prose that quotes a swallow is no swallow: a report or a README swallows nothing', () => {
     for (const path of ['build-report.md', 'docs/guide.MDX', 'NOTES.txt', 'README.rst', 'a.adoc']) {
       expect(kinds(path, '', 'cargo with `|| true`, go with `; echo`')).toEqual([])
