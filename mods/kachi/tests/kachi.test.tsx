@@ -2,8 +2,9 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
-import { TAIL, classify, classifyOrIgnore, compileGlobs, editsOf, scanCommand, isTestPath, outputTail, parseFailCount, sweepFrame } from '../hooks/win'
+import { MAX_WINS, TAIL, classify, classifyOrIgnore, compileGlobs, duration, editsOf, scanCommand, isTestPath, outputTail, parseFailCount, stampText, sweepFrame, tierOf, withReceipt } from '../hooks/win'
 import type { BashOutcome } from '../hooks/win'
+import type { Band, CheckRecord } from '../types'
 
 const SURFACES = ['terminal', 'desktop'] as const
 type Surface = (typeof SURFACES)[number]
@@ -27,11 +28,13 @@ type World = {
   blits: number
   /** Files `$.fs.read` answers, by path. */
   files: Record<string, string>
+  /** Whether `$.audio.play` rejects, as a host with no player does. */
+  isMuted: boolean
 }
 
 // Stands for the engine beneath the plugin: the clock, the tools, audio, blits and the engine's own rows.
 function world(on: On, env: Record<string, string> = { LANG: 'ja_JP.UTF-8' }, settings: Record<string, unknown> = {}): World {
-  const w: Omit<World, 'clock'> = { next: { kind: 'pass', stdout: PASS }, ids: [], plays: [], order: [], blits: 0, files: {} }
+  const w: Omit<World, 'clock'> = { next: { kind: 'pass', stdout: PASS }, ids: [], plays: [], order: [], blits: 0, files: {}, isMuted: false }
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, env)
   on('settings.read', () => ({ value: settings }))
@@ -53,6 +56,7 @@ function world(on: On, env: Record<string, string> = { LANG: 'ja_JP.UTF-8' }, se
     return { result: { stdout: next.stdout, stderr: '', interrupted: false, ...next.extra }, text: next.stdout }
   })
   on('audio.play', ($, e) => {
+    if (w.isMuted) throw new Error('no player')
     w.order.push('play')
     w.plays.push({ asset: e.clip.asset, gain: e.gain })
     return { value: undefined }
@@ -1223,6 +1227,107 @@ function nestedCommand(): string {
   const padding = `echo '${'a'.repeat(200_000 - chain.length - inner.length - 32)}' && `
   return `${padding}${chain}${inner} && pnpm test`
 }
+
+describe('boundaries', () => {
+  type Red = Extract<CheckRecord, { isRed: true }>
+  const red = (over: Partial<Red> = {}): Red => ({ isRed: true, at: 0, dir: CWD, firstFailAt: 0, failRuns: 1, scope: [], isCredited: true, ...over })
+
+  test('the tier steps up exactly at 3 and 8 failed runs, 5 and 20 minutes red, and 10 failing', () => {
+    const at = (over: Partial<Red>, ms = 0) => tierOf(red(over), ms)
+    expect([2, 3, 4].map(failRuns => at({ failRuns }))).toEqual([2, 3, 3])
+    expect([7, 8, 9].map(failRuns => at({ failRuns }))).toEqual([3, 4, 4])
+    expect([5 * MIN - 1, 5 * MIN, 5 * MIN + 1].map(ms => at({}, ms))).toEqual([2, 3, 3])
+    expect([20 * MIN - 1, 20 * MIN, 20 * MIN + 1].map(ms => at({}, ms))).toEqual([3, 4, 4])
+    expect([9, 10, 11].map(peakFailCount => at({ peakFailCount }))).toEqual([2, 4, 4])
+    // No count parsed is no count, not zero failing.
+    expect(at({ peakFailCount: undefined })).toBe(2)
+  })
+
+  test('a duration rounds to the second, never goes below zero, and changes unit at 60 s and 60 min', () => {
+    expect([-1_000, 0, 499, 500].map(duration)).toEqual(['0s', '0s', '0s', '1s'])
+    expect([59_000, 59_499, 59_500, 60_000, 61_000].map(duration)).toEqual(['59s', '59s', '1m00s', '1m00s', '1m01s'])
+    expect([59 * MIN + 59_000, 60 * MIN, 61 * MIN].map(duration)).toEqual(['59m59s', '1h00m', '1h01m'])
+  })
+
+  test('the receipts keep the newest 64, dropping only the oldest', () => {
+    const many = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, k) => [`id-${k}`, `line ${k}`]))
+    expect(withReceipt({}, 'id-new', 'new')).toEqual({ 'id-new': 'new' })
+    const justUnder = withReceipt(many(MAX_WINS - 1), 'id-new', 'new')
+    expect(Object.keys(justUnder)).toHaveLength(MAX_WINS)
+    expect(justUnder['id-0']).toBe('line 0')
+    const over = withReceipt(many(MAX_WINS), 'id-new', 'new')
+    expect(Object.keys(over)).toHaveLength(MAX_WINS)
+    expect(over['id-0']).toBeUndefined()
+    expect(over['id-1']).toBe('line 1')
+    expect(over['id-new']).toBe('new')
+  })
+
+  test('the stamp turns short below 40 columns and never cuts below 4 characters', () => {
+    const band: Band = { id: 1, tier: 2, kind: 'green', key: 'pnpm test', label: 'pnpm test', where: '', phase: 'stamp', locale: 'ja' }
+    expect([39, 40, 41].map(columns => stampText(band, columns))).toEqual(['✔ 緑 pnpm test', '✔ pnpm test  緑', '✔ pnpm test  緑'])
+    expect([0, 3, 4, 5].map(columns => stampText(band, columns))).toEqual(['✔ 緑 ', '✔ 緑 ', '✔ 緑 ', '✔ 緑 p'])
+  })
+
+  // A sweep frame's cells, read back: [glyph, colour] per column.
+  const cells = (b64: string) => {
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+    const view = new DataView(bytes.buffer)
+    return Array.from({ length: bytes.length / 12 }, (_, x) => [view.getUint32(x * 12, true), view.getUint32(x * 12 + 4, true)])
+  }
+  const RULE = 0x2501
+  const BLANK = 0x20
+  const HEAD = 0xeafff0
+  const DIM = 0x1f5a35
+  const BRIGHT = 0x8ff5aa
+
+  test('a sweep frame holds one cell per column, down to none and one', () => {
+    expect(sweepFrame(0, 2, 0)).toBe('')
+    expect(cells(sweepFrame(1, 2, 0))).toHaveLength(1)
+    expect(cells(sweepFrame(2, 2, 0))).toHaveLength(2)
+  })
+
+  test('the head runs forward, turns back only for the bell, then the row pulses once and settles', () => {
+    // Forward: ahead of the head is blank, the head is the brightest cell.
+    const first = cells(sweepFrame(10, 2, 0))
+    expect(first[1]?.[1]).toBe(HEAD)
+    expect(first[2]?.[0]).toBe(BLANK)
+    expect(cells(sweepFrame(10, 2, 15))[9]?.[1]).toBe(HEAD)
+    // A click's motion ends in the pulse at frame 16: dim, brightest at 20, dim again at 24.
+    expect(cells(sweepFrame(10, 2, 16)).every(([glyph, color]) => glyph === RULE && color === DIM)).toBe(true)
+    expect(cells(sweepFrame(10, 2, 20)).every(([, color]) => color === BRIGHT)).toBe(true)
+    expect(cells(sweepFrame(10, 2, 24)).every(([, color]) => color === DIM)).toBe(true)
+    // The bell goes forward to frame 13 and back from 14 to 27, keeping the rule drawn behind it.
+    expect(cells(sweepFrame(10, 4, 13))[9]?.[1]).toBe(HEAD)
+    const back = cells(sweepFrame(10, 4, 14))
+    expect(back[8]?.[1]).toBe(HEAD)
+    expect(back[0]?.[0]).toBe(RULE)
+    expect(cells(sweepFrame(10, 4, 27))[0]?.[1]).toBe(HEAD)
+    expect(cells(sweepFrame(10, 4, 28)).every(([, color]) => color === DIM)).toBe(true)
+  })
+
+  test('a host that cannot play the clip still sweeps, stamps and keeps the receipt, and says so in the debug log', async ($, on) => {
+    const w = world(on)
+    const logged: string[] = []
+    on('ui.log', ($, e) => {
+      logged.push(e.text)
+      return { value: undefined }
+    })
+    w.isMuted = true
+    const { id } = await recover($, w)
+    expect(w.plays).toEqual([])
+    expect(logged.some(line => line.startsWith('kachi: the clip did not play'))).toBe(true)
+    expect((await band($, 'terminal')).hasRaster).toBe(true)
+    expect((await result($, id))[1]).toBe('✔ 赤→緑  2 回目で · 30s 赤だった · 3 → 0 failing')
+  })
+
+  test('the sweep is never wider than 512 columns, however wide the terminal', async ($, on) => {
+    const w = world(on)
+    await recover($, w)
+    const ui = await $.ui.mount({ plugin: 'kachi', surface: 'terminal', component: 'AbovePrompt', requestId: 'band', props: bandProps(2_000) })
+    expect((await ui.find({ type: 'Raster' }))?.props.columns).toBe(512)
+    await ui.unmount()
+  })
+})
 
 describe('cost', () => {
   const fixtures: [string, BashOutcome][] = [
