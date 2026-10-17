@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, trust label, visual diff, journey trace, token lens, hit rate",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
   "owner": {
     "name": "simota"
   },
@@ -21,19 +21,9 @@
       "description": "Tallies sandbox denials seen in Bash output and reports them with /sandbox-report"
     },
     {
-      "name": "skill-hint",
-      "source": "./mods/skill-hint",
-      "description": "Suggests up to three matching skills above the prompt from what was typed; never invokes them."
-    },
-    {
       "name": "todo-agent",
       "source": "./mods/todo-agent",
       "description": "Collects #TODO(agent) follow-ups from Claude's replies into a per-project list with a /todos pane."
-    },
-    {
-      "name": "context-meter",
-      "source": "./mods/context-meter",
-      "description": "Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost"
     },
     {
       "name": "tool-row",
@@ -49,11 +39,6 @@
       "name": "self-audit",
       "source": "./mods/self-audit",
       "description": "After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt"
-    },
-    {
-      "name": "context-diet",
-      "source": "./mods/context-diet",
-      "description": "Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved"
     },
     {
       "name": "browser-cam",
@@ -131,11 +116,6 @@
       "description": "A ledger of what a git diff never shows: pushes, publishes, deploys, pull requests, releases, API writes and messages sent, each with its outcome, how it would be undone, and whether that undo has been checked; /ledger"
     },
     {
-      "name": "trust-label",
-      "source": "./mods/trust-label",
-      "description": "Labels text that came from outside (web pages, search results, issues and PRs, logs, browser pages, MCP services) with where it came from, beside the tool's result, and flags candidate instructions hidden in it; a heuristic, never a judgement that a text is safe; /trust"
-    },
-    {
       "name": "visual-diff",
       "source": "./mods/visual-diff",
       "description": "Compares the browser screenshots Claude takes of the same URL at the same size, before and after an edit: both side by side, a map of the cells that changed, the changed regions in page pixels and the files edited in between; /vdiff"
@@ -154,6 +134,11 @@
       "name": "hit-rate",
       "source": "./mods/hit-rate",
       "description": "Gives each finding of done-gate, assertion-guard, self-audit and zukan a later verdict from what the session did next (a failing check, a reverted edit, a rule not repeated, a recalled fix reused), keeps each rule's precision across sessions, and names the rules loopback stops feeding; /hit-rate; off by default"
+    },
+    {
+      "name": "kachi",
+      "source": "./mods/kachi",
+      "description": "When a check you broke turns green after a real fix, the band above the prompt sweeps green once with a short click, and the result row keeps the score; silent the rest of the time but for one dim line on a check's first red"
     }
   ]
 }

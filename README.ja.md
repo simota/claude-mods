@@ -9,13 +9,10 @@
 | `agent-pane` | セッションのサブエージェントをペインで表示。実行中は経過時間、完了したものは結果と所要時間 |
 | `done-gate` | 未検証の変更を指摘し、同じ失敗の繰り返しを止め、`git --no-verify` を拒否 |
 | `sandbox-lens` | Bash 出力に現れた sandbox の拒否を集計し、`/sandbox-report` で報告 |
-| `skill-hint` | 入力したプロンプトに合う skill を最大 3 件、入力欄の上に提案（自動では起動しない） |
 | `todo-agent` | Claude の返答にある `#TODO(agent)` をプロジェクトごとに集め、`/todos` ペインで管理 |
-| `context-meter` | 入力欄の上に、ターンごとのコンテキスト使用率のスパークライン（Gruvbox 配色）とトークン数・コスト |
 | `tool-row` | ターミナルで、完了したツール呼び出しの行を、Nerd Font のアイコンと Gruvbox 配色、短い統計付きの 1 行に描き直す |
 | `image-preview` | セッションが書き出し・読み込み・生成した画像のサムネイルを、ツール行の下と `/images` ペインに表示 |
 | `self-audit` | ターンごとに会話の fork（キャッシュ利用）で Claude 自身の返答を CLAUDE.md の報告ルールに照らし、違反を入力欄の上に表示 |
-| `context-diet` | skill 一覧をプロジェクトの種類に必要なものだけに絞る（既定オフ）。`/context-diet` で省いた skill と削減トークン数を表示 |
 | `browser-cam` | Claude が操作中のブラウザをペインで表示。Claude in Chrome の最新スクリーンショット、ページの URL、直近の操作 |
 | `prompt-coach` | 曖昧に見えるプロンプト（完了条件がない、対象が不明確）の送信を止め、意図の推定候補・そのまま送る・補足するから選ばせる（既定オン） |
 | `loopback` | self-audit・done-gate・sandbox-lens の発見を、人に見せるだけでなく次のプロンプトに添えて Claude へ返す。hit-rate が外れが多いと判定したルールは返さない（既定オフ） |
@@ -31,11 +28,11 @@
 | `artifact-shelf` | セッションが作った CSV・PDF・HTML・動画・パッチなどを生成した呼び出しと依頼にひも付けて棚に並べ、`/shelf` で種類・語・時刻から探す |
 | `focus-hud` | 目的・対象・実行中の処理と経過・待ち理由をステータスライン 1 行に。`/focus` で詳細 |
 | `side-effect-ledger` | push・公開・デプロイ・PR・外部 API 更新・送信など Git 差分に出ない操作を、結果・取り消し方法・その確認状況とともに台帳に。`/ledger` |
-| `trust-label` | Web・issue・ログ・ブラウザ・外部サービス由来の内容に出典ラベルを付けて Claude に渡し、不審な指示の候補を警告（安全性の判定ではない）。`/trust` |
 | `visual-diff` | 同じ URL・画面サイズのスクリーンショットを編集の前後で並べ、変化したセル・領域と間の編集を表示。`/vdiff` |
 | `journey-trace` | Claude のブラウザ操作と期待状態を再現レシピとして記録し、`/journey md` でバグ報告、`/journey e2e` で Playwright の下書きに |
 | `hit-rate` | done-gate・assertion-guard・self-audit・zukan の各発見を、その後セッションで起きたことから当たり/外れと判定し、ルールごとの的中率をセッションをまたいで記録。的中率の低いルールは loopback が返さない。`/hit-rate`（既定オフ） |
 | `token-lens` | 要素の実際の色・余白・字体を登録済みデザイントークンと照合し、独自値と最寄りのトークンを一覧。`/token-lens <セレクタ>` |
+| `kachi` | 直した結果として落ちていたテスト・ビルド・型チェックが通った瞬間だけ、入力欄の上を緑の光が一度走って短い音が鳴り、その結果行に何回目で・何分赤だったかが残る。それ以外は、チェックが初めて赤になったときの薄い 1 行のほかは何も出さない |
 
 ## インストール
 
@@ -84,24 +81,12 @@ echo '{"enabled":"true"}' | claude plugin configure <mod>@simota-mods --values-s
 - ヒントを出すだけで、sandbox の設定は変更しません。loopback やプライベートアドレスはポート付きでヒントに出します（例: `127.0.0.1:3000`）。ポートなしで登録すると全ポートが開くためです。
 - 読むのは、`<sandbox_violations>` ブロックと、プログラム自身が出した `Operation not permitted` の行です。成功したコマンドと中断したコマンドでは、エンジンがコマンド自身の出力とは別に置くブロックだけを読むので、表示したファイルやページの中のブロックは、出力の末尾にあっても無視します。失敗したコマンドにはエラー文しか残らないため、その末尾（agent proxy の注記の前）にあるブロックを読みます。この場合は、コマンド自身が出力したブロックとハーネスのブロックを区別できません。コマンド例に含まれる認証情報（トークン、パスワード、`Authorization`/`Cookie` や `X-API-Key` などの認証ヘッダ、URL のユーザー情報、`PGPASSWORD` のような区切りのない名前も含む環境変数の代入の鍵、既知のキー形式）は伏せ字にします。各セクションは上位 10 件を表示し、記録が上限（200 件）に達すると、最後に見てから最も時間が経ったものが入れ替わります。
 
-### skill-hint
-
-プロンプトを送ると、それに合いそうな skill を最大 3 件、入力欄の上に出します（`💡 skill候補: /coding-debug …`）。出すのはセッションに実在する skill だけです。自動で起動はしません。「閉じる」か次のプロンプト（slash コマンドを含む）で消えます。すでに skill 名を含むプロンプト（どこかに `/name`、または `coding-debug` のようなハイフン付きの skill 名）には出しません。`/clear` のような組み込みコマンドや、`src/review/` のようなパスの一部は skill 名として数えません。plugin の skill（`plugin:name`）は完全な名前で提案します。
-
 ### todo-agent
 
 - Claude のメインの返答で、行頭（引用記号やリスト記号の後でも可）に `#TODO(agent): <action>` がある行を、プロジェクト（リポジトリのルートか cwd）ごとに集めます。文中・表の中・インラインコードでの言及は TODO として扱いません。サブエージェントの返答は対象外です。
 - `/todos` で、このプロジェクトの未完了項目をペインに出します。各項目に「完了」ボタンがあります。
 - `/todos all` で、全プロジェクトの未完了項目を、保存済みのデータであることを明記してテキストで一覧表示します。
 - 未完了の項目がある間は、ステータス行に `TODO(agent): N` と出ます。
-
-### context-meter
-
-ターンごとのコンテキスト使用率のスパークラインと、`ctx 63% ▲4 · 126k · turn in 120k / out 8k · $1.23` を帯に出します。最後のリクエストのコンテキストサイズに続けて、ターン全体の入出力（ターンが使用量を報告した場合のみ）を出します。使用率は 50% から黄色、80% から赤になります。
-
-| 設定 | 既定値 | |
-| --- | --- | --- |
-| `band` | `true` | 帯を描く（オフでも記録は続ける） |
 
 ### tool-row
 
@@ -133,19 +118,6 @@ echo '{"enabled":"true"}' | claude plugin configure <mod>@simota-mods --values-s
 | `minChars` | `200` | これより短い返答はチェックしない |
 
 コスト: ターンごとに、セッションのモデルで追加リクエストが 1 回走り、返答本文（最大 12,000 文字）がキャッシュされない入力として加わります。キャッシュが冷えていると（5 分以上空いた後やモデルの切り替え後）、会話全体を送り直します。
-
-### context-diet
-
-既定はオフです。オンにすると、skill 一覧をプロジェクトの種類に必要なものだけに絞ります。種類（Swift、Android、Rust、Web、Python、Go）は、リポジトリのルートとその 1 階層下から判定します。coding、quality、planning、research 系の skill は常に残し、red-team、`dynamic-*`、persona、operation 系は省きます。image、design 系と `ux-scan`、`brand-scan` は Rust、Python、Go のときに省きます。報告するのはメインの一覧だけです。省いた skill でも、プロンプトで名前を出せば、そのプロンプトには説明を添えます。
-
-- `/context-diet` で、プロジェクトの種類、直近の一覧で残した skill と省いた skill、削減トークン数（推定）を表示します。確実に読み取れない形式の一覧は、そのまま送ります。
-- `/context-diet on|off|reset` で、このセッションだけ設定を上書きします。切り替えると一覧を組み直すので、プロンプトキャッシュが 1 回効かなくなります。
-
-| 設定 | 既定値 | |
-| --- | --- | --- |
-| `enabled` | `false` | |
-| `keep` | | 常に残す名前か `prefix*` のカンマ区切り。`drop` より優先 |
-| `drop` | | 常に省く名前か `prefix*` のカンマ区切り |
 
 ### browser-cam
 
@@ -245,7 +217,7 @@ hit-rate がオンなら、hit-rate が止めたルールは返しません（`s
       ● lamp.ts  +43 −2  編集 4回
       ✗ register.tsx  +59 −16  編集 6回  エラー 1  ★
   ▸ loopback/  ○●
-  ░ agent-pane/  ░ browser-cam/  ░ context-diet/  …8
+  ░ agent-pane/  ░ browser-cam/  ░ done-gate/  …8
 ⚠ 編集したファイルを import しているが未読: mods/pr-lamp/tests/pr-lamp.test.ts
 ```
 
@@ -319,14 +291,6 @@ Edit・Write・MultiEdit のたびに、呼び出し前後のファイル全体�
 
 作業ツリーの外を変える Bash コマンドとツール呼び出しを記録します: `git push`（取り消し方を push の出力から作る: `git push --force-with-lease=main:<new> origin <old>:main`、新規ブランチは `--delete`。1 行で複数回 push した場合はそれぞれのリモートの ref だけを使い、`git -C dir push` も対象）、`gh pr|issue|release|repo …`、`gh api -X POST…`、npm/cargo/PyPI/gem の公開、docker push、kubectl、helm、terraform、pulumi、cdk、vercel、netlify、fly、wrangler、firebase、gcloud、aws、ローカル以外への `curl -X POST|PUT|PATCH|DELETE`、リモートへの scp/rsync、作成・更新・送信する MCP ツール、Artifact の公開・削除。失敗した呼び出しには取り消し方を付けません（ただし途中まで反映され得るもの、つまり push で動いた ref は残し、失敗したインフラ操作は「途中まで反映された可能性あり、まず状態を確認」とだけ示す）。取り消し方には、対象を指していたもの（`KUBECONFIG`、`HELM_NAMESPACE`、`GH_REPO`、`kubectl --context/-n`）も付けます。トークンは付けません。dry-run（`--dry-run`、`git push -n`）と読み取り（`kubectl rollout status`、`terraform state list`、`wrangler pages dev`）は記録しません。各項目に結果（失敗も）、取り消し方と難しさを残し（取り消し方は以前からあったかもしれないものを消さない: クローズや削除（`gh pr close <url>`、`gh release delete`、`gh repo delete`、`helm uninstall`）は、この呼び出しで作ったと出力が示すときだけ出す（最後の URL、その release 自身のタグ、"already exists" がないこと。同じ行に別の gh・helm コマンドがあれば出力がどちらのものか分からないので出さない。`| tail` や `|| true` の陰の失敗は終了コード 0 になるため）。`gh pr close` は head ブランチを、`gh release delete` はタグを残す。別のディレクトリ（`cd`、`git -C`、サブシェル）での push はリモートを git が出力した URL で名指しし、戻す sha は出力がその 1 回の push のものと確実な場合だけ示す）、`/ledger` で取り消し方を確かめたら **確認済みにする** か **不要** にします。ステータスラインにセッションの件数と未確認数。コマンド中の認証情報（`Authorization` などの認証ヘッダ、`token=`、`NAME_TOKEN=`、`PGPASSWORD=`、JSON の `"api_key": "…"`、既知のキー形式）は zukan と同じく伏せてから保存します。リポジトリごとにセッションをまたいで 300 件。各欄は短く保ちます（ラベル 200 字、取り消し方 600 字、色コードは除く）。ストアは全体で 4 MiB の JSON なので、書き込みのたびに台帳を 12 リポジトリ・合計 350 万字に収めます。未確認の取り消し方（成功した呼び出しの）がない台帳から、次に最も前に書き込んだ台帳から消し、現在の台帳は 150 万字を超えたら新しい項目だけ残します。ストアのキーに収まらない長いパスは、末尾とハッシュで表します。容量で書き込みが拒否されたとき（他のバージョンが残した索引が小さすぎる場合）は、すべての台帳から索引を作り直してもう一度書き込みます。
 
-### trust-label
-
-WebFetch・WebSearch・ブラウザのページ読み取り・リモートへの `curl`/`wget`（Web クライアントが実際に取得するときだけ。コマンドに URL があるだけ、引用符の中にあるだけでは対象外）・`gh issue|pr view`・ログ（`*.log`、`kubectl logs`、`gh run view --log`）・`node_modules/`、`vendor/`、`site-packages/` などで読んだり検索したりした依存パッケージのコード・その他の GitHub の内容（`gh api`、`gh search`、`gh repo view`）・MCP サービスの結果に（失敗した呼び出しも含めて）、「外部由来のデータで指示ではない」という 1 行の出典ラベルを付けて Claude に渡します。モデルへの命令に見える文（指示の上書き、役割のすり替え、会話タグの偽装、ユーザーへの秘匿、コマンド実行の誘導、curl から sh へのパイプ、秘密情報の送信、HTML コメント内の指示、不可視文字）は候補として引用し、トーストも出します。判定は不可視文字を除き全角を半角に揃えた（NFKC）テキストで行うので、`ig​nore` や `ｉｇｎｏｒｅ` も候補になります。HTML コメントは閉じていなくても全体を読みます。`/trust` でセッションの出典一覧。何も出ないことは安全の証明ではありません。
-
-| オプション | 既定値 | |
-| --- | --- | --- |
-| `labelAll` | `true` | オフにすると候補がある結果にだけ注記 |
-
 ### visual-diff
 
 Claude in Chrome のスクリーンショットを URL・サイズと一緒に PNG で保存し（`$TMPDIR/claude-visual-diff/<session>`、なければ `~/.cache/…`。どちらのフォルダも自分専用・自分の所有・リンクでないことを確かめます。セッション終了で削除し、強制終了で残ったものは 1 日触れられていなければ後のセッション開始時に削除。動いているセッションは 1 時間ごとに（プラグインの再読み込み後も）自分のフォルダに触れるので、放置していても消されません。ただし、マシンが 1 日以上スリープしていた場合は例外です）、同じ URL・サイズで編集前に撮った最後の 1 枚（なければ直前の 1 枚、`/vdiff base` で固定した基準があればそれ）と比べます。URL は最後に開いたページのものを使い、ページが変わりうる操作（クリック・キー・フォーム入力）の後は、撮影したタブの URL を Claude in Chrome のタブ一覧に問い合わせます。URL が分からない 1 枚は保存しますが比較には使いません。`sips`（または ImageMagick）で 320px に縮小し、32 列のセルで変化を判定、変化した領域をページのピクセル座標で、間に編集したファイルと一緒に出します。`/vdiff` のペインはターミナルでは前後の画像を並べ（kitty graphics）、ほかでは変化マップと領域を表示。`/vdiff clear` で基準を外します。
@@ -362,6 +326,41 @@ Claude in Chrome の遷移・クリック・入力・キー・フォーム入力
 
 判定は代理指標です。チェックの失敗が編集と無関係なこともあり、違反が再び出ないのは単にその場面がなかっただけかもしれません。止めたルールも判定は続けるので、的中率が戻れば再び返します。
 
+### kachi
+
+壊したチェックが本当の修正の後に通ると、入力欄の上の帯を緑の光が一度走って短い音が鳴り、チェック名の 1 行（`✔ pnpm test  緑`）に落ち着きます。緑になった Bash の結果行の下には、直すのにかかったものを薄い記録行で 1 行残します（`✔ 赤→緑  3 回目で · 2m41s 赤だった · 3 → 0 failing`）。
+それ以外に出すのは、セッションでそのチェックが初めて赤になったときの薄い 1 行（`◌ kachi: pnpm test が赤。本当の修正で鳴ります`）だけで、入っていることが分かります。赤も修正もないターンには何も出しません。
+
+音は既定でオンです。`sound: quiet` で半分、`off` で無音（macOS の `afplay` で鳴り、それ以外の環境では光と記録行が伝えます）。
+
+試すには: テストを 1 つ落としてから、Claude に直してもらってください。
+
+| 段階 | 条件 | 音 | 動き |
+| --- | --- | --- | --- |
+| tick（既定はオフ。`minTier` を `tick` に） | コード編集の後、そのチェックを初めて全体で走らせて通った、または最後の編集の後にチェックが通った状態でのコミット（10 分空ける。その後チェックが失敗すると帯は消える） | 60 ms のカチッ | 帯の 1 行だけ |
+| click | 1〜2 回の失敗の後に赤→緑、赤だったのが 5 分未満 | 140 ms のクリック | 1 回走る |
+| chime | 3 回以上の失敗、または 5 分以上赤 | 380 ms、2 音 | 走ってから 1 回光る |
+| bell | 8 回以上の失敗、20 分以上赤、または 10 件以上の失敗が 0 に | 700 ms のベル | 往復してから 1 回光る |
+
+帯は次のプロンプト、ターン終了の 60 秒後、または帯に出ているチェックがまた失敗した時点で消え、記録行は残ります。音は帯に出た勝ち 1 回につき 1 回まで、前の音から 20 秒以内は鳴らさず、同じターンの 2 回目の勝ちは段階が上のときだけ帯を差し替えます。ターミナルでは光が走り、セルを描けないデスクトップでは帯の 1 行だけです。Claude には何も送らず、セッションを越えて何も残しません。
+
+#### 何を数えるか
+
+- **チェック:** done-gate と同じ判定のテスト・lint・型チェック・ビルド、`xcodebuild test`・`swift test`・`claude plugin test`・`pnpm exec <チェック>`・`pnpm vitest run <ファイル>`。ディレクトリごとに別のチェックとして扱います（`cd web && pnpm test` と `cd api && pnpm test` は別）。文面から行き先が分からない `cd`（`cd "$DIR"`・`cd -`）の後は読みません。
+- **パイプしたチェック**（`2>&1 | tail -20`・`| grep`・`|| true`・`; echo`）は終了コードが別のコマンドのものなので、チェック自身の出力で判定します。失敗件数があれば赤（cargo の `due to N previous errors` も件数）。失敗件数がなく成功件数が出ていれば、テスト名やログに FAIL とあっても緑。件数がなければ、ランナーやコンパイラ自身の失敗行で赤: `FAIL  x.test.ts`・`FAILED t.py::x`・`--- FAIL:`・`not ok`・`error:` / `error[E0308]:` / `x.swift:3:5: error:`・make の `*** [x] Error 1`。`tsc`・`eslint` の空の出力（それだけを動かす package script のヘッダーだけの出力も）、cargo の build/check/clippy の `Finished` 行、`swift build` の `Build complete!` は緑。それ以外は数えず、そのチェックの赤も消すので、ずっと後の成功が古い時間で鳴ることはありません。
+- **修正:** Edit・Write のほか、書き込み先がコマンドの文面から分かる Bash（`sed -i`・`perl -pi`・ヒアドキュメントや `>` でのファイル書き込み・`tee`・`cp`/`mv`・`git checkout -- <パス>`・`git restore`・`prettier --write`・`eslint --fix` などの整形・修正ツール）。同じコマンド行の中では、チェックより前の書き込みだけがそのチェックに効きます。編集は、そのファイルを含むディレクトリのチェックに効き、どのチェックのディレクトリにも入らないファイルなら全部のチェックに効きます。
+- **長い失敗**がモデル向けに途中で切られた場合は、保存された全文か書き出された出力ファイルに集計行があればそこから件数を読み、なければ記録行に件数を書きません。
+- **勝ちにならないもの:** 失敗の後に編集のない再実行。テストファイルだけを編集した後の成功（`tests/`・`__tests__/`・Swift や Xcode の `Tests/`・`AppTests/`・`*.test.*`・`*_test.go`・`*_spec.rb`・`test_*.py`・`PriceTests.swift`・`PriceSpec.kt`・`PriceTest.java` と `testPaths` の glob）。失敗より狭い範囲での成功（ファイル指定・`-t`・`-k`・`--lf`・フィルタ。失敗した範囲かそれより広い範囲が通る必要があります）。テストが 1 件も走らなかった実行。チェックの失敗ではないもの（終了コード 126・127。シェル自身の `command not found`・`No such file or directory`・`permission denied`・`Operation not permitted` の行、スクリプトや make ターゲットがない場合。ただし失敗件数も FAIL 行もない出力に限る。中断・バックグラウンド化・タイムアウト）。
+- **言語:** ja のロケール（`language` 設定、なければ `LC_ALL`・`LC_MESSAGES`・`LANG`）なら日本語、それ以外は英語。
+
+| 設定 | 既定値 | |
+| --- | --- | --- |
+| `sound` | `on` | `quiet`: 音量半分、tick は鳴らさない。`off` |
+| `motion` | `sweep` | `none`: 帯の 1 行だけ（動きを減らす） |
+| `minTier` | `click` | これより下の段階の勝ちは何も出さない。`tick` で初めての緑と検証済みコミットも出す。`chime`・`bell` で大きな直しだけに |
+| `commits` | `true` | オフ: コミットでは鳴らさない |
+| `testPaths` | `""` | テストファイルとして扱う glob をカンマ区切りで追加（`e2e/**,*.snap`。`*` はディレクトリ内、`**` はディレクトリをまたぐ、`?` は 1 文字）。パスの末尾 256 文字と照合 |
+
 ## 開発
 
 ```
@@ -371,7 +370,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts` と `mods/hit-rate/hooks/shell.ts` は done-gate のもの、side-effect-ledger・handoff-capsule・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
+mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts`・`mods/hit-rate/hooks/shell.ts`・`mods/kachi/hooks/shell.ts` は done-gate のもの、side-effect-ledger・handoff-capsule・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
 
 ## ライセンス
 

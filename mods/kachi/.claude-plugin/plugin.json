@@ -1,0 +1,42 @@
+{
+  "name": "kachi",
+  "version": "0.1.0",
+  "description": "When a check you broke turns green after a real fix, the band above the prompt sweeps green once with a short click, and the result row keeps the score; silent the rest of the time but for one dim line on a check's first red",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "sound": {
+      "type": "string",
+      "title": "Sound",
+      "description": "on, quiet (half the gain, no tick for a commit or a first green) or off",
+      "options": ["on", "quiet", "off"],
+      "default": "on"
+    },
+    "motion": {
+      "type": "string",
+      "title": "Motion",
+      "description": "sweep, or none for the static stamp only (reduced motion)",
+      "options": ["sweep", "none"],
+      "default": "sweep"
+    },
+    "minTier": {
+      "type": "string",
+      "title": "Smallest win",
+      "description": "Wins below this tier are ignored: tick (a clean commit or a first green, opt-in), click, chime, bell",
+      "options": ["tick", "click", "chime", "bell"],
+      "default": "click"
+    },
+    "commits": {
+      "type": "boolean",
+      "title": "Commit tick",
+      "description": "A commit made on a tree verified after its last edit earns a tick",
+      "default": true
+    },
+    "testPaths": {
+      "type": "string",
+      "title": "Extra test paths",
+      "description": "Comma-separated globs that also count as test files, whose edits alone never earn a win (e.g. e2e/**,*.snap)",
+      "default": ""
+    }
+  }
+}

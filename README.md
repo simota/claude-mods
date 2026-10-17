@@ -9,13 +9,10 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `agent-pane` | Live pane of the session's subagents: running ones with elapsed time, finished ones with result and duration |
 | `done-gate` | Flags unverified edits, stops repeated failing commands, and blocks git --no-verify |
 | `sandbox-lens` | Tallies sandbox denials seen in Bash output and reports them with /sandbox-report |
-| `skill-hint` | Suggests up to three matching skills above the prompt from what was typed; never invokes them. |
 | `todo-agent` | Collects #TODO(agent) follow-ups from Claude's replies into a per-project list with a /todos pane. |
-| `context-meter` | Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost |
 | `tool-row` | Redraws finished tool-call rows in the terminal as one compact line with a Nerd Font icon, Gruvbox colors and a short stat |
 | `image-preview` | Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane |
 | `self-audit` | After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt |
-| `context-diet` | Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved |
 | `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
 | `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; on by default |
 | `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person, skipping rules hit-rate found mostly wrong; off by default |
@@ -31,11 +28,11 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `artifact-shelf` | A shelf of what sessions made (CSV, PDF, HTML, video, patches…), tied to the call and request that made each; `/shelf` searches by kind, word and time |
 | `focus-hud` | One status line: goal, target, what is running and for how long, and what the session waits on; `/focus` |
 | `side-effect-ledger` | A ledger of what a git diff never shows (push, publish, deploy, PRs, API writes, messages) with outcome, how to undo, and whether the undo was checked; `/ledger` |
-| `trust-label` | Labels external text (web, issues, logs, browser pages, services) with its source beside the result and flags candidate injected instructions; a heuristic, never a safety verdict; `/trust` |
 | `visual-diff` | Compares browser screenshots of the same URL and size before and after an edit: side by side, a map of changed cells, regions, and the edits in between; `/vdiff` |
 | `journey-trace` | Records Claude's browser actions and the expected states as a replayable recipe; `/journey md` for a bug report, `/journey e2e` for a Playwright draft |
 | `hit-rate` | Gives each finding of done-gate, assertion-guard, self-audit and zukan a later verdict from what the session did next, keeps each rule's precision across sessions, and names the rules loopback stops feeding; `/hit-rate`; off by default |
 | `token-lens` | Checks an element's actual colours, spacing and type against the project's design tokens and lists off-token values with the nearest token; `/token-lens <selector>` |
+| `kachi` | When a check you broke turns green after a real fix, the band above the prompt sweeps green once with a short click, and the result row keeps the score: how many tries, how long it stayed red. Silent the rest of the time, but for one dim line under a check's first red |
 
 ## Install
 
@@ -84,24 +81,12 @@ Works on its own, no command:
 - Hints only: it never changes sandbox settings. A loopback or private address keeps its port in the hint (`127.0.0.1:3000`), since an entry without a port opens every port.
 - A `<sandbox_violations>` block, and `Operation not permitted` lines a program printed about itself, are read. For a command that succeeded or was interrupted, the block is taken from where the engine puts it, apart from the command's own output, so one inside a shown file or page is ignored even when it ends the output. A failed command keeps only its error text: the block that ends it (before an agent-proxy note) is read, and there a block the command printed itself cannot be told from the harness's. Credentials in the example command (tokens, passwords, `Authorization`/`Cookie` and other credential headers such as `X-API-Key`, URL userinfo, keys in env assignments including run-together names such as `PGPASSWORD`, known key shapes) are masked. Each section shows the top 10; when the record is full (200), the least recently seen entry gives way.
 
-### skill-hint
-
-After a prompt is sent, up to three skills matching it show above the prompt (`💡 skill候補: /coding-debug …`), only ones that exist in the session. Nothing is invoked; 閉じる or the next prompt (a slash command included) clears it. A prompt that already names a skill (`/name` anywhere, or a hyphenated skill name such as `coding-debug`) gets no hint; built-in commands such as `/clear` and path segments such as `src/review/` do not count as naming one. Plugin skills (`plugin:name`) are suggested by their full name.
-
 ### todo-agent
 
 - Lines starting with `#TODO(agent): <action>` (after an optional quote or list bullet) in Claude's main-loop replies are collected per project (repo root or cwd). A mention inside a sentence, a table or inline code is not a TODO; subagent replies are ignored.
 - `/todos` opens the pane of this project's open items, each with a 完了 button.
 - `/todos all` lists every project's open items as text, marked as stored data.
 - The status line shows `TODO(agent): N` while the project has open items.
-
-### context-meter
-
-A band with a sparkline of context use per turn and `ctx 63% ▲4 · 126k · turn in 120k / out 8k · $1.23`: the context size of the last request, then the whole turn's input/output (shown when the turn reported usage). The percentage turns yellow from 50% and red from 80%.
-
-| Option | Default | |
-| --- | --- | --- |
-| `band` | `true` | Draw the band (samples are recorded either way) |
 
 ### tool-row
 
@@ -133,19 +118,6 @@ After each reply of at least `minChars` characters, one tool-less fork of the co
 | `minChars` | `200` | Shorter replies are not audited |
 
 Cost: one extra request per turn on the session's model, plus the reply text (up to 12,000 characters) as uncached input; a cold cache (after 5 minutes idle or a model switch) resends the whole conversation.
-
-### context-diet
-
-Off by default. When on, the skill listing is trimmed to what the project kind needs (Swift, Android, Rust, web, Python, Go, detected from the repo root and one level below). Coding, quality, planning and research skills are always kept; red-team, `dynamic-*`, persona and operation skills are dropped; image, design, `ux-scan` and `brand-scan` are dropped for Rust, Python and Go. Only the main loop's listing is reported. A dropped skill named in a prompt is still described for that prompt.
-
-- `/context-diet` shows the project kind, what was kept and dropped in the latest listing, and the tokens saved (estimate). A listing it cannot read reliably goes out unchanged.
-- `/context-diet on|off|reset` overrides the option for this session. Switching rebuilds the listing, so the prompt cache misses once.
-
-| Option | Default | |
-| --- | --- | --- |
-| `enabled` | `false` | |
-| `keep` | | Comma list of names or `prefix*` never dropped; wins over `drop` |
-| `drop` | | Comma list of names or `prefix*` always dropped |
 
 ### browser-cam
 
@@ -245,7 +217,7 @@ The repository as a map under fog, cleared as Claude works through it:
       ● lamp.ts  +43 −2  編集 4回
       ✗ register.tsx  +59 −16  編集 6回  エラー 1  ★
   ▸ loopback/  ○●
-  ░ agent-pane/  ░ browser-cam/  ░ context-diet/  …8
+  ░ agent-pane/  ░ browser-cam/  ░ done-gate/  …8
 ⚠ 編集したファイルを import しているが未読: mods/pr-lamp/tests/pr-lamp.test.ts
 ```
 
@@ -319,14 +291,6 @@ Goal: the latest request's first line, with the todo in progress. Target: the fi
 
 Bash commands and tool calls that change things outside the working tree: `git push` (the undo written from what push printed: `git push --force-with-lease=main:<new> origin <old>:main`, or `--delete` for a new branch; each push of a chained command gets its own remote's refs, and `git -C dir push` counts), `gh pr|issue|release|repo …`, `gh api -X POST…`, npm/cargo/PyPI/gem publish, docker push, kubectl, helm, terraform, pulumi, cdk, vercel, netlify, fly, wrangler, firebase, gcloud, aws, `curl -X POST|PUT|PATCH|DELETE` to a non-local host, scp/rsync to a remote, MCP tools that create/update/send, and Artifact publish/delete. A failed call gets no undo, except where a part may already have applied (a push keeps the refs it moved; failed infrastructure says it may be partly applied and to check its state first). An undo names what pointed the command elsewhere (`KUBECONFIG`, `HELM_NAMESPACE`, `GH_REPO`, `kubectl --context/-n`), never a token. Dry runs (`--dry-run`, `git push -n`) and reads (`kubectl rollout status`, `terraform state list`, `wrangler pages dev`) are not recorded. Each entry keeps its outcome (failures too), how it would be undone and how hard that is; an undo never deletes what may have existed before: a close or delete (`gh pr close <url>`, `gh release delete`, `gh repo delete`, `helm uninstall`) is given only when the output says this call made it (the last URL, the release's own tag, no "already exists"; not when a second gh or helm command in the same line could have printed it), since a failure behind `| tail` or `|| true` exits 0; `gh pr close` keeps the head branch and `gh release delete` the tag; names the remote by the URL git printed when the push ran in another directory (`cd`, `git -C`, a subshell), and names a sha to force back only when the output surely belongs to that one push. In `/ledger` each is marked **確認済みにする** or **不要** once its undo has been checked; the status line counts the session's entries and those unchecked. Credentials in a command (`Authorization` and other credential headers, `token=`, `NAME_TOKEN=`, `PGPASSWORD=`, JSON `"api_key": "…"`, known key shapes) are masked as zukan does before anything is kept. Kept per repository across sessions (300), each field held short (a label to 200 characters, an undo to 600, colour codes dropped). The store holds 4 MiB of JSON in all, so before each write the ledgers are held to 12 and to 3.5 M characters together: other repositories' ledgers leave, one with no unchecked undo of a call that did something first, then the least recently written; the current one is cut to its newest entries past 1.5 M. A path too long for a store key keeps its tail and a hash. A write refused for room (an index another version left low) builds the index again from every ledger and is tried once more.
 
-### trust-label
-
-Results from WebFetch, WebSearch, browser page reads, `curl`/`wget` to a remote (only when a web client runs, not any URL a command names or quoted text), `gh issue|pr view`, logs (`*.log`, `kubectl logs`, `gh run view --log`), dependency code read or searched in `node_modules/`, `vendor/`, `site-packages/` and the like, other GitHub content (`gh api`, `gh search`, `gh repo view`) and MCP services, failed calls included, get a one-line source label beside them for Claude: external data, not instructions. Text that reads like orders to the model (overriding instructions, role switches, fake conversation tags, hiding things from the user, running a command, piping curl to sh, sending secrets, instructions in HTML comments, invisible characters) is quoted as candidates, with a toast; the rules read the text with invisible characters taken out and full-width forms folded, so `ig​nore` or `ｉｇｎｏｒｅ` still counts, and an HTML comment is read whole, closed or not. `/trust` lists the session's sources. Finding nothing proves nothing.
-
-| Option | Default | |
-| --- | --- | --- |
-| `labelAll` | `true` | off: only results with candidates get a note |
-
 ### visual-diff
 
 Each Claude in Chrome screenshot is kept as PNG with its URL and size (in `$TMPDIR/claude-visual-diff/<session>`, else `~/.cache/…`; both folders made private and checked to be yours and no link; removed at session end, and a killed session's folder by a later start once a day untouched; a running session touches its own every hour (again after a plugin reload), so it is kept while idle, though not across a day the machine sleeps). The URL is the last navigation's; after a click, a key or a form input, which may have left the page, it is asked of Claude in Chrome's tab listing for the tab shot, and a shot whose URL cannot be told is kept but never compared. A new one is compared with the last of the same URL and size taken before an edit (or the previous one, or a baseline set with `/vdiff base`): both scaled to 320 px with `sips` (or ImageMagick), a 32-column grid of cells that changed, the changed regions in page pixels, and the files edited in between. `/vdiff` opens the pane: both pictures side by side in the terminal (kitty graphics), the change map and the regions elsewhere. `/vdiff clear` removes the baselines.
@@ -362,6 +326,41 @@ What nothing decides counts as unknown: a done-gate band taken down with 閉じ�
 
 The verdicts are proxies: a failing check may fail for reasons the edits did not cause, and a rule that does not recur may simply not have come up. A muted rule is no longer fed but keeps being scored, so it can come back.
 
+### kachi
+
+When a check you broke passes after a real fix, the band above the prompt sweeps green once with a short click and settles into one row naming the check (`✔ pnpm test  green`); the Bash row that turned green keeps one dim receipt line with what the fix cost (`✔ red→green  try 3 · red for 2m41s · 3 → 0 failing`).
+Nothing else is drawn, except one dim line under a check's first red of the session (`◌ kachi: pnpm test is red; a real fix rings`), so you know it is there; a turn with no red and no fix draws nothing.
+
+Sound is on by default; `sound: quiet` halves it and `off` silences it (clips play through `afplay` on macOS; elsewhere the sweep and the receipt line carry the moment).
+
+Try it: make a test fail, then ask Claude to fix it.
+
+| Tier | Earned by | Sound | Motion |
+| --- | --- | --- | --- |
+| tick (off by default: `minTier` `tick`) | the first whole run of a check passing after code edits, or a commit on a tree a check passed after its last edit (10 min apart; a check failing after it takes the stamp down) | 60 ms tick | stamp only |
+| click | red → green after 1 or 2 failed runs, under 5 min red | 140 ms click | one sweep |
+| chime | 3 or more failed runs, or 5 min or more red | 380 ms, two notes | a sweep and a pulse |
+| bell | 8 or more failed runs, 20 min or more red, or 10 or more failing down to 0 | 700 ms bell | two sweeps and a pulse |
+
+The stamp leaves at the next prompt, 60 s after the turn ends, or as soon as the check it names fails again; the receipt line stays in the transcript. One clip at most per win shown, none within 20 s of the last, and a second win in the same turn only raises the stamp to a higher tier. In the terminal the sweep is a moving light; desktop, which draws no cell grid, shows the stamp alone. Nothing is sent to Claude and nothing is kept past the session.
+
+#### What counts
+
+- **Checks:** tests, lint, type-checks and builds as done-gate reads them, `xcodebuild test`, `swift test`, `claude plugin test`, `pnpm exec <check>` and `pnpm vitest run <file>`. Each is kept per directory: `cd web && pnpm test` and `cd api && pnpm test` are two checks, and after a `cd` the text cannot resolve (`cd "$DIR"`, `cd -`) nothing is read.
+- **Piped checks** (`2>&1 | tail -20`, `| grep`, `|| true`, `; echo`), whose exit status is another command's, are read from their own output. A failure count is red (cargo's `due to N previous errors` included). A printed pass count with no failure count is green, even where a test name or a log line says FAIL. With no count, a runner's or compiler's own failure line is red: `FAIL  x.test.ts`, `FAILED t.py::x`, `--- FAIL:`, `not ok`, `error:` / `error[E0308]:` / `x.swift:3:5: error:`, make's `*** [x] Error 1`. Empty output from `tsc` or `eslint` (or a package script's header alone, when it runs only those), cargo's `Finished` line for build/check/clippy and `Build complete!` for `swift build` are green. Anything else counts for nothing and clears a red that check had, so a much later pass does not ring with a stale duration.
+- **The fix:** an Edit or Write, or a Bash command whose text says what it writes (`sed -i`, `perl -pi`, a heredoc or `>` into a file, `tee`, `cp`/`mv`, `git checkout -- <path>`, `git restore`, `prettier --write`, `eslint --fix` and other fixers). In one command line only a write before the check counts for it. An edit counts for the checks whose directory holds the file, or for every check when it is outside all of them.
+- **Long failures** cut short for the model are counted from their stored text or persisted output when either holds the summary; otherwise the receipt line names no count.
+- **Never a win:** a re-run with no edit since the failure; a pass after editing only test files (`tests/`, `__tests__/`, Swift's and Xcode's `Tests/` and `AppTests/`, `*.test.*`, `*_test.go`, `*_spec.rb`, `test_*.py`, `PriceTests.swift`, `PriceSpec.kt`, `PriceTest.java`, and the `testPaths` globs); a pass narrower than the failure (a file, `-t`, `-k`, `--lf`, a filter: the failed scope or a broader one has to pass); a run where no tests ran; failures that are not a check failing (exit 126 or 127; the shell's own `command not found`, `No such file or directory`, `permission denied` or `Operation not permitted` line, a missing script or make target, but only when the output holds no failure count and no FAIL line; interrupted, backgrounded or timed-out runs).
+- **Language:** Japanese under a ja locale (the `language` setting, else `LC_ALL`, `LC_MESSAGES`, `LANG`), English otherwise.
+
+| Option | Default | |
+| --- | --- | --- |
+| `sound` | `on` | `quiet`: half the gain, no tick; `off` |
+| `motion` | `sweep` | `none`: the stamp only (reduced motion) |
+| `minTier` | `click` | wins below this tier draw and play nothing; `tick` adds first greens and clean commits, `chime` or `bell` keep only the bigger fixes |
+| `commits` | `true` | off: commits never tick |
+| `testPaths` | `""` | extra comma-separated globs that count as test files (`e2e/**,*.snap`; `*` within a directory, `**` across them, `?` one character), matched against a path's last 256 characters |
+
 ## Develop
 
 ```
@@ -371,7 +370,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts` and `mods/hit-rate/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger, handoff-capsule and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
+Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts`, `mods/hit-rate/hooks/shell.ts` and `mods/kachi/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger, handoff-capsule and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
 
 ## License
 

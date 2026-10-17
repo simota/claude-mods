@@ -1,7 +1,0 @@
-{
-  "name": "skill-hint",
-  "version": "0.1.3",
-  "description": "Suggests up to three matching skills above the prompt from what was typed; never invokes them.",
-  "author": { "name": "simota" },
-  "types": "./types/index.d.ts"
-}
