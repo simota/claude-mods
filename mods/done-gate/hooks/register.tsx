@@ -15,6 +15,10 @@ const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'] as const
 
 export const BAND_TEXT = '未検証の変更があります（テスト/lint/型チェック未実行）'
 
+/** What the band's 検証させる sends: a turn asking Claude to run the checks the edits touch. */
+export const VERIFY_PROMPT =
+  '編集した変更がまだ検証されていません。このリポジトリのテスト・lint・型チェック・ビルドのうち、変更に関わるものを実行してください。失敗したら原因を直し、通るまで繰り返してください。'
+
 export const normalizeCommand = (command: string) => command.trim().replace(/\s+/g, ' ')
 
 // Digits and whitespace vary between otherwise identical failures (times, pids, line counts).
@@ -136,6 +140,8 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Box>
           <Text color="yellow">{BAND_TEXT} </Text>
+          {/* The band stays until a check passes: asking is not verifying. */}
+          <Button key="verify" label="検証させる" onPress={() => void $.prompt.submit({ text: VERIFY_PROMPT })} />
           <Button key="dismiss" label="閉じる" role="dismiss" onPress={() => update($, isFlagged, () => false)} />
         </Box>
         {below}
