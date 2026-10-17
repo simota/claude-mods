@@ -36,6 +36,7 @@
 | `journey-trace` | Claude のブラウザ操作と期待状態を再現レシピとして記録し、`/journey md` でバグ報告、`/journey e2e` で Playwright の下書きに |
 | `hit-rate` | done-gate・assertion-guard・self-audit・zukan の各発見を、その後セッションで起きたことから当たり/外れと判定し、ルールごとの的中率をセッションをまたいで記録。的中率の低いルールは loopback が返さない。`/hit-rate`（既定オフ） |
 | `token-lens` | 要素の実際の色・余白・字体を登録済みデザイントークンと照合し、独自値と最寄りのトークンを一覧。`/token-lens <セレクタ>` |
+| `kachi` | 直した結果として落ちていたテスト・ビルド・型チェックが通った瞬間だけ、入力欄の上を緑の光が一度走って短い音が鳴り、その結果行に何回目で・何分赤だったかが残る。それ以外は、チェックが初めて赤になったときの薄い 1 行のほかは何も出さない |
 
 ## インストール
 
@@ -362,6 +363,41 @@ Claude in Chrome の遷移・クリック・入力・キー・フォーム入力
 
 判定は代理指標です。チェックの失敗が編集と無関係なこともあり、違反が再び出ないのは単にその場面がなかっただけかもしれません。止めたルールも判定は続けるので、的中率が戻れば再び返します。
 
+### kachi
+
+壊したチェックが本当の修正の後に通ると、入力欄の上の帯を緑の光が一度走って短い音が鳴り、チェック名の 1 行（`✔ pnpm test  緑`）に落ち着きます。緑になった Bash の結果行の下には、直すのにかかったものを薄い記録行で 1 行残します（`✔ 赤→緑  3 回目で · 2m41s 赤だった · 3 → 0 failing`）。
+それ以外に出すのは、セッションでそのチェックが初めて赤になったときの薄い 1 行（`◌ kachi: pnpm test が赤。本当の修正で鳴ります`）だけで、入っていることが分かります。赤も修正もないターンには何も出しません。
+
+音は既定でオンです。`sound: quiet` で半分、`off` で無音（macOS の `afplay` で鳴り、それ以外の環境では光と記録行が伝えます）。
+
+試すには: テストを 1 つ落としてから、Claude に直してもらってください。
+
+| 段階 | 条件 | 音 | 動き |
+| --- | --- | --- | --- |
+| tick（既定はオフ。`minTier` を `tick` に） | コード編集の後、そのチェックを初めて全体で走らせて通った、または最後の編集の後にチェックが通った状態でのコミット（10 分空ける。その後チェックが失敗すると帯は消える） | 60 ms のカチッ | 帯の 1 行だけ |
+| click | 1〜2 回の失敗の後に赤→緑、赤だったのが 5 分未満 | 140 ms のクリック | 1 回走る |
+| chime | 3 回以上の失敗、または 5 分以上赤 | 380 ms、2 音 | 走ってから 1 回光る |
+| bell | 8 回以上の失敗、20 分以上赤、または 10 件以上の失敗が 0 に | 700 ms のベル | 往復してから 1 回光る |
+
+帯は次のプロンプト、ターン終了の 60 秒後、または帯に出ているチェックがまた失敗した時点で消え、記録行は残ります。音は帯に出た勝ち 1 回につき 1 回まで、前の音から 20 秒以内は鳴らさず、同じターンの 2 回目の勝ちは段階が上のときだけ帯を差し替えます。ターミナルでは光が走り、セルを描けないデスクトップでは帯の 1 行だけです。Claude には何も送らず、セッションを越えて何も残しません。
+
+#### 何を数えるか
+
+- **チェック:** done-gate と同じ判定のテスト・lint・型チェック・ビルド、`xcodebuild test`・`swift test`・`claude plugin test`・`pnpm exec <チェック>`・`pnpm vitest run <ファイル>`。ディレクトリごとに別のチェックとして扱います（`cd web && pnpm test` と `cd api && pnpm test` は別）。文面から行き先が分からない `cd`（`cd "$DIR"`・`cd -`）の後は読みません。
+- **パイプしたチェック**（`2>&1 | tail -20`・`| grep`・`|| true`・`; echo`）は終了コードが別のコマンドのものなので、チェック自身の出力で判定します。失敗件数があれば赤（cargo の `due to N previous errors` も件数）。失敗件数がなく成功件数が出ていれば、テスト名やログに FAIL とあっても緑。件数がなければ、ランナーやコンパイラ自身の失敗行で赤: `FAIL  x.test.ts`・`FAILED t.py::x`・`--- FAIL:`・`not ok`・`error:` / `error[E0308]:` / `x.swift:3:5: error:`・make の `*** [x] Error 1`。`tsc`・`eslint` の空の出力（それだけを動かす package script のヘッダーだけの出力も）、cargo の build/check/clippy の `Finished` 行、`swift build` の `Build complete!` は緑。それ以外は数えず、そのチェックの赤も消すので、ずっと後の成功が古い時間で鳴ることはありません。
+- **修正:** Edit・Write のほか、書き込み先がコマンドの文面から分かる Bash（`sed -i`・`perl -pi`・ヒアドキュメントや `>` でのファイル書き込み・`tee`・`cp`/`mv`・`git checkout -- <パス>`・`git restore`・`prettier --write`・`eslint --fix` などの整形・修正ツール）。同じコマンド行の中では、チェックより前の書き込みだけがそのチェックに効きます。編集は、そのファイルを含むディレクトリのチェックに効き、どのチェックのディレクトリにも入らないファイルなら全部のチェックに効きます。
+- **長い失敗**がモデル向けに途中で切られた場合は、保存された全文か書き出された出力ファイルに集計行があればそこから件数を読み、なければ記録行に件数を書きません。
+- **勝ちにならないもの:** 失敗の後に編集のない再実行。テストファイルだけを編集した後の成功（`tests/`・`__tests__/`・Swift や Xcode の `Tests/`・`AppTests/`・`*.test.*`・`*_test.go`・`*_spec.rb`・`test_*.py`・`PriceTests.swift`・`PriceSpec.kt`・`PriceTest.java` と `testPaths` の glob）。失敗より狭い範囲での成功（ファイル指定・`-t`・`-k`・`--lf`・フィルタ。失敗した範囲かそれより広い範囲が通る必要があります）。テストが 1 件も走らなかった実行。チェックの失敗ではないもの（終了コード 126・127。シェル自身の `command not found`・`No such file or directory`・`permission denied`・`Operation not permitted` の行、スクリプトや make ターゲットがない場合。ただし失敗件数も FAIL 行もない出力に限る。中断・バックグラウンド化・タイムアウト）。
+- **言語:** ja のロケール（`language` 設定、なければ `LC_ALL`・`LC_MESSAGES`・`LANG`）なら日本語、それ以外は英語。
+
+| 設定 | 既定値 | |
+| --- | --- | --- |
+| `sound` | `on` | `quiet`: 音量半分、tick は鳴らさない。`off` |
+| `motion` | `sweep` | `none`: 帯の 1 行だけ（動きを減らす） |
+| `minTier` | `click` | これより下の段階の勝ちは何も出さない。`tick` で初めての緑と検証済みコミットも出す。`chime`・`bell` で大きな直しだけに |
+| `commits` | `true` | オフ: コミットでは鳴らさない |
+| `testPaths` | `""` | テストファイルとして扱う glob をカンマ区切りで追加（`e2e/**,*.snap`。`*` はディレクトリ内、`**` はディレクトリをまたぐ、`?` は 1 文字）。パスの末尾 256 文字と照合 |
+
 ## 開発
 
 ```
@@ -371,7 +407,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts` と `mods/hit-rate/hooks/shell.ts` は done-gate のもの、side-effect-ledger・handoff-capsule・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
+mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts`・`mods/hit-rate/hooks/shell.ts`・`mods/kachi/hooks/shell.ts` は done-gate のもの、side-effect-ledger・handoff-capsule・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
 
 ## ライセンス
 

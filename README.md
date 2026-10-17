@@ -36,6 +36,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `journey-trace` | Records Claude's browser actions and the expected states as a replayable recipe; `/journey md` for a bug report, `/journey e2e` for a Playwright draft |
 | `hit-rate` | Gives each finding of done-gate, assertion-guard, self-audit and zukan a later verdict from what the session did next, keeps each rule's precision across sessions, and names the rules loopback stops feeding; `/hit-rate`; off by default |
 | `token-lens` | Checks an element's actual colours, spacing and type against the project's design tokens and lists off-token values with the nearest token; `/token-lens <selector>` |
+| `kachi` | When a check you broke turns green after a real fix, the band above the prompt sweeps green once with a short click, and the result row keeps the score: how many tries, how long it stayed red. Silent the rest of the time, but for one dim line under a check's first red |
 
 ## Install
 
@@ -362,6 +363,41 @@ What nothing decides counts as unknown: a done-gate band taken down with 閉じ�
 
 The verdicts are proxies: a failing check may fail for reasons the edits did not cause, and a rule that does not recur may simply not have come up. A muted rule is no longer fed but keeps being scored, so it can come back.
 
+### kachi
+
+When a check you broke passes after a real fix, the band above the prompt sweeps green once with a short click and settles into one row naming the check (`✔ pnpm test  green`); the Bash row that turned green keeps one dim receipt line with what the fix cost (`✔ red→green  try 3 · red for 2m41s · 3 → 0 failing`).
+Nothing else is drawn, except one dim line under a check's first red of the session (`◌ kachi: pnpm test is red; a real fix rings`), so you know it is there; a turn with no red and no fix draws nothing.
+
+Sound is on by default; `sound: quiet` halves it and `off` silences it (clips play through `afplay` on macOS; elsewhere the sweep and the receipt line carry the moment).
+
+Try it: make a test fail, then ask Claude to fix it.
+
+| Tier | Earned by | Sound | Motion |
+| --- | --- | --- | --- |
+| tick (off by default: `minTier` `tick`) | the first whole run of a check passing after code edits, or a commit on a tree a check passed after its last edit (10 min apart; a check failing after it takes the stamp down) | 60 ms tick | stamp only |
+| click | red → green after 1 or 2 failed runs, under 5 min red | 140 ms click | one sweep |
+| chime | 3 or more failed runs, or 5 min or more red | 380 ms, two notes | a sweep and a pulse |
+| bell | 8 or more failed runs, 20 min or more red, or 10 or more failing down to 0 | 700 ms bell | two sweeps and a pulse |
+
+The stamp leaves at the next prompt, 60 s after the turn ends, or as soon as the check it names fails again; the receipt line stays in the transcript. One clip at most per win shown, none within 20 s of the last, and a second win in the same turn only raises the stamp to a higher tier. In the terminal the sweep is a moving light; desktop, which draws no cell grid, shows the stamp alone. Nothing is sent to Claude and nothing is kept past the session.
+
+#### What counts
+
+- **Checks:** tests, lint, type-checks and builds as done-gate reads them, `xcodebuild test`, `swift test`, `claude plugin test`, `pnpm exec <check>` and `pnpm vitest run <file>`. Each is kept per directory: `cd web && pnpm test` and `cd api && pnpm test` are two checks, and after a `cd` the text cannot resolve (`cd "$DIR"`, `cd -`) nothing is read.
+- **Piped checks** (`2>&1 | tail -20`, `| grep`, `|| true`, `; echo`), whose exit status is another command's, are read from their own output. A failure count is red (cargo's `due to N previous errors` included). A printed pass count with no failure count is green, even where a test name or a log line says FAIL. With no count, a runner's or compiler's own failure line is red: `FAIL  x.test.ts`, `FAILED t.py::x`, `--- FAIL:`, `not ok`, `error:` / `error[E0308]:` / `x.swift:3:5: error:`, make's `*** [x] Error 1`. Empty output from `tsc` or `eslint` (or a package script's header alone, when it runs only those), cargo's `Finished` line for build/check/clippy and `Build complete!` for `swift build` are green. Anything else counts for nothing and clears a red that check had, so a much later pass does not ring with a stale duration.
+- **The fix:** an Edit or Write, or a Bash command whose text says what it writes (`sed -i`, `perl -pi`, a heredoc or `>` into a file, `tee`, `cp`/`mv`, `git checkout -- <path>`, `git restore`, `prettier --write`, `eslint --fix` and other fixers). In one command line only a write before the check counts for it. An edit counts for the checks whose directory holds the file, or for every check when it is outside all of them.
+- **Long failures** cut short for the model are counted from their stored text or persisted output when either holds the summary; otherwise the receipt line names no count.
+- **Never a win:** a re-run with no edit since the failure; a pass after editing only test files (`tests/`, `__tests__/`, Swift's and Xcode's `Tests/` and `AppTests/`, `*.test.*`, `*_test.go`, `*_spec.rb`, `test_*.py`, `PriceTests.swift`, `PriceSpec.kt`, `PriceTest.java`, and the `testPaths` globs); a pass narrower than the failure (a file, `-t`, `-k`, `--lf`, a filter: the failed scope or a broader one has to pass); a run where no tests ran; failures that are not a check failing (exit 126 or 127; the shell's own `command not found`, `No such file or directory`, `permission denied` or `Operation not permitted` line, a missing script or make target, but only when the output holds no failure count and no FAIL line; interrupted, backgrounded or timed-out runs).
+- **Language:** Japanese under a ja locale (the `language` setting, else `LC_ALL`, `LC_MESSAGES`, `LANG`), English otherwise.
+
+| Option | Default | |
+| --- | --- | --- |
+| `sound` | `on` | `quiet`: half the gain, no tick; `off` |
+| `motion` | `sweep` | `none`: the stamp only (reduced motion) |
+| `minTier` | `click` | wins below this tier draw and play nothing; `tick` adds first greens and clean commits, `chime` or `bell` keep only the bigger fixes |
+| `commits` | `true` | off: commits never tick |
+| `testPaths` | `""` | extra comma-separated globs that count as test files (`e2e/**,*.snap`; `*` within a directory, `**` across them, `?` one character), matched against a path's last 256 characters |
+
 ## Develop
 
 ```
@@ -371,7 +407,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts` and `mods/hit-rate/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger, handoff-capsule and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
+Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts`, `mods/hit-rate/hooks/shell.ts` and `mods/kachi/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger, handoff-capsule and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
 
 ## License
 
