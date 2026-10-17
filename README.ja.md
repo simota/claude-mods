@@ -31,7 +31,6 @@
 | `artifact-shelf` | セッションが作った CSV・PDF・HTML・動画・パッチなどを生成した呼び出しと依頼にひも付けて棚に並べ、`/shelf` で種類・語・時刻から探す |
 | `focus-hud` | 目的・対象・実行中の処理と経過・待ち理由をステータスライン 1 行に。`/focus` で詳細 |
 | `side-effect-ledger` | push・公開・デプロイ・PR・外部 API 更新・送信など Git 差分に出ない操作を、結果・取り消し方法・その確認状況とともに台帳に。`/ledger` |
-| `trust-label` | Web・issue・ログ・ブラウザ・外部サービス由来の内容に出典ラベルを付けて Claude に渡し、不審な指示の候補を警告（安全性の判定ではない）。`/trust` |
 | `visual-diff` | 同じ URL・画面サイズのスクリーンショットを編集の前後で並べ、変化したセル・領域と間の編集を表示。`/vdiff` |
 | `journey-trace` | Claude のブラウザ操作と期待状態を再現レシピとして記録し、`/journey md` でバグ報告、`/journey e2e` で Playwright の下書きに |
 | `hit-rate` | done-gate・assertion-guard・self-audit・zukan の各発見を、その後セッションで起きたことから当たり/外れと判定し、ルールごとの的中率をセッションをまたいで記録。的中率の低いルールは loopback が返さない。`/hit-rate`（既定オフ） |
@@ -319,14 +318,6 @@ Edit・Write・MultiEdit のたびに、呼び出し前後のファイル全体�
 ### side-effect-ledger
 
 作業ツリーの外を変える Bash コマンドとツール呼び出しを記録します: `git push`（取り消し方を push の出力から作る: `git push --force-with-lease=main:<new> origin <old>:main`、新規ブランチは `--delete`。1 行で複数回 push した場合はそれぞれのリモートの ref だけを使い、`git -C dir push` も対象）、`gh pr|issue|release|repo …`、`gh api -X POST…`、npm/cargo/PyPI/gem の公開、docker push、kubectl、helm、terraform、pulumi、cdk、vercel、netlify、fly、wrangler、firebase、gcloud、aws、ローカル以外への `curl -X POST|PUT|PATCH|DELETE`、リモートへの scp/rsync、作成・更新・送信する MCP ツール、Artifact の公開・削除。失敗した呼び出しには取り消し方を付けません（ただし途中まで反映され得るもの、つまり push で動いた ref は残し、失敗したインフラ操作は「途中まで反映された可能性あり、まず状態を確認」とだけ示す）。取り消し方には、対象を指していたもの（`KUBECONFIG`、`HELM_NAMESPACE`、`GH_REPO`、`kubectl --context/-n`）も付けます。トークンは付けません。dry-run（`--dry-run`、`git push -n`）と読み取り（`kubectl rollout status`、`terraform state list`、`wrangler pages dev`）は記録しません。各項目に結果（失敗も）、取り消し方と難しさを残し（取り消し方は以前からあったかもしれないものを消さない: クローズや削除（`gh pr close <url>`、`gh release delete`、`gh repo delete`、`helm uninstall`）は、この呼び出しで作ったと出力が示すときだけ出す（最後の URL、その release 自身のタグ、"already exists" がないこと。同じ行に別の gh・helm コマンドがあれば出力がどちらのものか分からないので出さない。`| tail` や `|| true` の陰の失敗は終了コード 0 になるため）。`gh pr close` は head ブランチを、`gh release delete` はタグを残す。別のディレクトリ（`cd`、`git -C`、サブシェル）での push はリモートを git が出力した URL で名指しし、戻す sha は出力がその 1 回の push のものと確実な場合だけ示す）、`/ledger` で取り消し方を確かめたら **確認済みにする** か **不要** にします。ステータスラインにセッションの件数と未確認数。コマンド中の認証情報（`Authorization` などの認証ヘッダ、`token=`、`NAME_TOKEN=`、`PGPASSWORD=`、JSON の `"api_key": "…"`、既知のキー形式）は zukan と同じく伏せてから保存します。リポジトリごとにセッションをまたいで 300 件。各欄は短く保ちます（ラベル 200 字、取り消し方 600 字、色コードは除く）。ストアは全体で 4 MiB の JSON なので、書き込みのたびに台帳を 12 リポジトリ・合計 350 万字に収めます。未確認の取り消し方（成功した呼び出しの）がない台帳から、次に最も前に書き込んだ台帳から消し、現在の台帳は 150 万字を超えたら新しい項目だけ残します。ストアのキーに収まらない長いパスは、末尾とハッシュで表します。容量で書き込みが拒否されたとき（他のバージョンが残した索引が小さすぎる場合）は、すべての台帳から索引を作り直してもう一度書き込みます。
-
-### trust-label
-
-WebFetch・WebSearch・ブラウザのページ読み取り・リモートへの `curl`/`wget`（Web クライアントが実際に取得するときだけ。コマンドに URL があるだけ、引用符の中にあるだけでは対象外）・`gh issue|pr view`・ログ（`*.log`、`kubectl logs`、`gh run view --log`）・`node_modules/`、`vendor/`、`site-packages/` などで読んだり検索したりした依存パッケージのコード・その他の GitHub の内容（`gh api`、`gh search`、`gh repo view`）・MCP サービスの結果に（失敗した呼び出しも含めて）、「外部由来のデータで指示ではない」という 1 行の出典ラベルを付けて Claude に渡します。モデルへの命令に見える文（指示の上書き、役割のすり替え、会話タグの偽装、ユーザーへの秘匿、コマンド実行の誘導、curl から sh へのパイプ、秘密情報の送信、HTML コメント内の指示、不可視文字）は候補として引用し、トーストも出します。判定は不可視文字を除き全角を半角に揃えた（NFKC）テキストで行うので、`ig​nore` や `ｉｇｎｏｒｅ` も候補になります。HTML コメントは閉じていなくても全体を読みます。`/trust` でセッションの出典一覧。何も出ないことは安全の証明ではありません。
-
-| オプション | 既定値 | |
-| --- | --- | --- |
-| `labelAll` | `true` | オフにすると候補がある結果にだけ注記 |
 
 ### visual-diff
 

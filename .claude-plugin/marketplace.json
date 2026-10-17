@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, trust label, visual diff, journey trace, token lens, hit rate, earned-green click",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
   "owner": {
     "name": "simota"
   },
@@ -129,11 +129,6 @@
       "name": "side-effect-ledger",
       "source": "./mods/side-effect-ledger",
       "description": "A ledger of what a git diff never shows: pushes, publishes, deploys, pull requests, releases, API writes and messages sent, each with its outcome, how it would be undone, and whether that undo has been checked; /ledger"
-    },
-    {
-      "name": "trust-label",
-      "source": "./mods/trust-label",
-      "description": "Labels text that came from outside (web pages, search results, issues and PRs, logs, browser pages, MCP services) with where it came from, beside the tool's result, and flags candidate instructions hidden in it; a heuristic, never a judgement that a text is safe; /trust"
     },
     {
       "name": "visual-diff",
