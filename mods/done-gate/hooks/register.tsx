@@ -13,7 +13,7 @@ const nudged = atom({ plugin: 'done-gate', key: 'nudged' } as const, [] as strin
 
 const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit'] as const
 
-export const BAND_TEXT = '未検証の変更があります（テスト/lint/型チェック未実行）'
+export const BAND_TEXT = '🧪 未検証の変更があります（テスト/lint/型チェック未実行）'
 
 /** What the band's 検証させる sends: a turn asking Claude to run the checks the edits touch. */
 export const VERIFY_PROMPT =

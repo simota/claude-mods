@@ -51,7 +51,7 @@ const band = (surface: (typeof SURFACES)[number]) =>
 
 const isBandShown = async ($: Engine, surface: (typeof SURFACES)[number]) => {
   const ui = await $.ui.mount(band(surface))
-  const found = await ui.find({ text: /未検証の変更があります/ })
+  const found = await ui.find({ text: /^🧪 未検証の変更があります/ })
   await ui.unmount()
   return found !== undefined
 }
