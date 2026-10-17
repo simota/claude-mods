@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, focus HUD, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
   "owner": {
     "name": "simota"
   },
@@ -89,11 +89,6 @@
       "name": "perf-delta",
       "source": "./mods/perf-delta",
       "description": "/perf runs a benchmark command several times and compares it with its baseline (saved earlier, or a git ref run in a temporary worktree): median wall time, peak memory and the spread of the runs, and whether the difference is larger than the noise"
-    },
-    {
-      "name": "handoff-capsule",
-      "source": "./mods/handoff-capsule",
-      "description": "A capsule to resume from: before a compaction and at the end of a session it keeps the goal, the decisions, what is left, the commands to reproduce and the files touched; the next session (or the conversation after the compaction) chooses which parts to bring back"
     },
     {
       "name": "port-lantern",

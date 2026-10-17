@@ -1,7 +1,0 @@
-{
-  "name": "handoff-capsule",
-  "version": "0.1.2",
-  "description": "A capsule to resume from: before a compaction and at the end of a session it keeps the goal, the decisions, what is left, the commands to reproduce and the files touched; the next session (or the conversation after the compaction) chooses which parts to bring back",
-  "author": { "name": "simota" },
-  "types": "./types/index.d.ts"
-}

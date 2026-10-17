@@ -23,7 +23,6 @@
 | `negative-space` | 認可・入力検証・エラー処理を追加した編集を契機に、まだ触れていない拒否ケース・境界値のテスト候補を提示。`/negative-space` |
 | `mutation-tap` | `/mutate` で HEAD からの変更行に限ったミューテーションテストを実行し、テストが検出できなかった改変を表示 |
 | `perf-delta` | `/perf` でベンチマークの前後（保存した基準、または git ref を一時 worktree で）を比較し、実行時間・メモリ・ばらつきと有意差をまとめる |
-| `handoff-capsule` | 圧縮前・終了時に目的・決定事項・未完了・再現コマンド・関連ファイルをカプセルに保存し、再開時に取り込む項目を選べる |
 | `port-lantern` | セッションが起動した開発サーバの URL・ポート・生存状態・直近のログをステータスラインと `/ports` に表示 |
 | `artifact-shelf` | セッションが作った CSV・PDF・HTML・動画・パッチなどを生成した呼び出しと依頼にひも付けて棚に並べ、`/shelf` で種類・語・時刻から探す |
 | `focus-hud` | 目的・対象・実行中の処理と経過・待ち理由をステータスライン 1 行に。`/focus` で詳細 |
@@ -267,10 +266,6 @@ Edit・Write・MultiEdit のたびに、呼び出し前後のファイル全体�
 | `runs` | `5` | 3 以上 |
 | `timeoutSec` | `300` | |
 
-### handoff-capsule
-
-セッション中の依頼、Claude の返答にある決定と未完了（`#TODO(agent)`、「まだ」、TODO リスト）、再実行する価値のある Bash コマンドと最後の結果、編集したファイルを追います（依頼・返答の行・TODO・コマンド中の認証情報は zukan と同じく伏せます）。カプセルは圧縮の前、セッション終了時、`/handoff save` で保存します（リポジトリごとに 5 件）。人の気配がないセッション（画面がつながらず入力もない `-p` 実行や SDK。現状の Claude Code for VS Code のように画面をつながないホストもこれに数えます）はリポジトリごとに 1 件だけ残すので、自動実行が人のカプセルを押し出すことはなく、人のカプセルを先に出します。再開したセッションは自分のカプセルに書き足し、ほかのカプセルは出しません。`/clear` 後の会話は新しいカプセルとして始まり、直前に残したものを出します。マスク導入前に残したカプセルも、読むときに伏せます。同じリポジトリの次のセッション、または圧縮直後の会話で帯が出るので、目的・決定・未完了・コマンド・ファイルを切り替えて **取り込む** を押すと、選んだ部分が次のプロンプトと一緒に「現状と照合すべき記録」として Claude に渡ります。`/handoff` で表示、`/handoff load` で最新を再提示。
-
 ### port-lantern
 
 バックグラウンド実行の Bash コマンドやサーバ起動コマンド（`pnpm dev`、`vite`、`uvicorn`、`rails s` など）を追い、出力ファイルを 5 秒ごとに読んでローカル URL とポートを拾い（コマンドの `--port`・`PORT=` も）、`lsof` で待ち受けているかを確かめます。ステータスラインに `🏮 :5173● :8000○`、起動・停止はトーストで。`/ports` のペインに URL（押すとコピー）、コマンド、pid、直近のログ（エラーは赤）を出します。
@@ -370,7 +365,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts`・`mods/hit-rate/hooks/shell.ts`・`mods/kachi/hooks/shell.ts` は done-gate のもの、side-effect-ledger・handoff-capsule・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
+mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts`・`mods/hit-rate/hooks/shell.ts`・`mods/kachi/hooks/shell.ts` は done-gate のもの、side-effect-ledger・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
 
 ## ライセンス
 

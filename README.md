@@ -23,7 +23,6 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `negative-space` | When an edit adds authorization, validation or error handling, lists the refusal and boundary-value tests no test touched this session covers; `/negative-space` |
 | `mutation-tap` | `/mutate` runs a mutation test limited to the lines changed since HEAD and lists the mutants the tests did not catch |
 | `perf-delta` | `/perf` compares a benchmark before and after (a saved baseline, or a git ref in a temporary worktree): median time, peak memory, spread, and whether the change beats the noise |
-| `handoff-capsule` | Before a compaction and at session end, keeps the goal, decisions, open items, commands to reproduce and files touched; the next session picks which parts to bring back |
 | `port-lantern` | The dev servers the session started: URL, port, whether each still listens, and their latest log lines, in the status line and `/ports` |
 | `artifact-shelf` | A shelf of what sessions made (CSV, PDF, HTML, video, patches…), tied to the call and request that made each; `/shelf` searches by kind, word and time |
 | `focus-hud` | One status line: goal, target, what is running and for how long, and what the session waits on; `/focus` |
@@ -267,10 +266,6 @@ Time and peak memory come from `/usr/bin/time` (`-l` on macOS, `-v` on GNU). The
 | `runs` | `5` | at least 3 |
 | `timeoutSec` | `300` | |
 
-### handoff-capsule
-
-It follows the session: the person's requests, decision lines and open items from Claude's replies (`#TODO(agent)`, "まだ", the todo list), Bash commands worth rerunning with their last outcome, files edited; credentials in all of it (requests, reply lines, todos, commands) masked as zukan does. A capsule is saved before each compaction, at session end, and with `/handoff save` (five per repository; a session no person was seen in, a `-p` run or the SDK with no surface attached and nothing typed (a host that attaches none, as Claude Code for VS Code today, counts as one too), keeps one, so automated runs never push a person's off, and a person's is offered first). A resumed session adds to its own capsule and is offered no other; after `/clear` the next conversation starts a capsule of its own and is offered the one just kept. Capsules kept before masking are masked when read. The next session in the repository, or the conversation right after a compaction, shows a band: toggle 目的・決定・未完了・コマンド・ファイル and press **取り込む**; the chosen parts go to Claude beside the next prompt, marked as a record to check against the current state. `/handoff` shows the capsule, `/handoff load` offers the latest again.
-
 ### port-lantern
 
 A Bash command run in the background, or a server command (`pnpm dev`, `vite`, `uvicorn`, `rails s`…), is followed: its output file is read every 5 s for local URLs and ports (`--port`, `PORT=` in the command too), and `lsof` says whether a port listens. The status line keeps `🏮 :5173● :8000○`; a toast says when one starts listening or stops. `/ports` opens the pane: URL (press to copy), command, pid, and the latest log lines, errors in red.
@@ -370,7 +365,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts`, `mods/hit-rate/hooks/shell.ts` and `mods/kachi/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger, handoff-capsule and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
+Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts`, `mods/hit-rate/hooks/shell.ts` and `mods/kachi/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
 
 ## License
 
