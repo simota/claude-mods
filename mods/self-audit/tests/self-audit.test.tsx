@@ -231,12 +231,9 @@ test('a long main-loop reply is audited and its violations stack above the band 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'self-audit', surface, ...BAND })
     const rows = (await ui.findAll({ type: 'Text', text: /⚠ self-audit/ })).map(one => one.text)
-    expect(rows).toEqual([
-      '⚠ self-audit: 未検証の完了報告 — このターンでテストを実行していない',
-      '⚠ self-audit: スコープの水増し — 頼まれていない選択肢を並べた',
-    ])
+    // One row: the first violation and how many there are; the rest are in 詳細.
+    expect(rows).toEqual(['⚠ self-audit（3件）: 未検証の完了報告 — このターンでテストを実行していない '])
     expect((await ui.find({ type: 'Text', text: /⚠ self-audit/ }))?.props.color).toBe('#fb4934')
-    expect(await ui.find({ type: 'Text', text: /他1件/ })).toBeDefined()
     expect(await ui.find({ text: 'beneath' })).toBeDefined()
     await ui.unmount()
   }

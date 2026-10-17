@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { SelfAuditLatest, SelfAuditUsage, SelfAuditViolation } from '../types'
-import { buildPrompt, clip, compact, parseViolations, ruleName } from './audit'
+import { buildPrompt, compact, parseViolations, ruleName } from './audit'
 
 const violations = atom({ plugin: 'self-audit', key: 'violations' } as const, [] as SelfAuditViolation[])
 const isShown = atom({ plugin: 'self-audit', key: 'isShown' } as const, false)
@@ -12,7 +12,6 @@ const latest = atom({ plugin: 'self-audit', key: 'latest' } as const, { status: 
 const PANE = 'self-audit'
 const TITLE = '自己監査'
 const RED = '#fb4934'
-const BAND_ROWS = 2
 
 // Each audit carries the round it started in; a prompt or turn started since makes its answer stale.
 let round = 0
@@ -134,20 +133,16 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey || !(await read($, isShown)) || list.length === 0) return next(e)
 
     const { Box, Button, Text } = $.ui.resolve(e)
-    const room = Math.max(20, e.props.bodyColumns - 2)
-    const rest = list.length - BAND_ROWS
+    const first = list[0] as SelfAuditViolation
+    // One row, as every band that only tells: the count before the first violation, so a cut at the end keeps it; the rest are in 詳細.
+    const count = list.length > 1 ? `（${list.length}件）` : ''
 
-    // Stack these rows above what the plugins beneath and the engine draw, rather than in their place.
+    // Stack this row above what the plugins beneath and the engine draw, rather than in its place.
     const below = await next(e)
     return (
       <Box flexDirection="column">
-        {list.slice(0, BAND_ROWS).map((one, i) => (
-          <Text key={`v${i}`} color={RED}>
-            {clip(`⚠ self-audit: ${ruleName(one.rule)} — ${one.why}`, room)}
-          </Text>
-        ))}
         <Box>
-          {rest > 0 && <Text color={RED}>他{rest}件 </Text>}
+          <Text color={RED} wrap="truncate-end">{`⚠ self-audit${count}: ${ruleName(first.rule)} — ${first.why} `}</Text>
           <Button key="details" label="詳細" onPress={() => void $.ui.open({ id: PANE, title: TITLE })} />
           <Text> </Text>
           <Button key="dismiss" label="閉じる" role="dismiss" onPress={() => update($, isShown, () => false)} />

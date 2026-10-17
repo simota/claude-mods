@@ -198,21 +198,28 @@ test('the dismiss button hides the band', async ($, on) => {
   }
 })
 
-test('検証させる asks Claude to run the checks, and the band stays until one passes', async ($, on) => {
+test('検証させる puts the ask in the prompt, sends nothing, and the band stays until a check passes', async ($, on) => {
   engine(on)
   const sent: string[] = []
+  const filled: string[] = []
   on('prompt.submit', ($, e) => {
     sent.push(e.text)
     return { text: e.text }
   })
+  on('prompt.fill', ($, e) => {
+    filled.push(e.text)
+    return { isFilled: true } as never
+  })
   for (const surface of SURFACES) {
     sent.length = 0
+    filled.length = 0
     await startTurn($)
     await edit($)
     await endTurn($)
     const ui = await $.ui.mount(band(surface))
     await ui.press({ key: 'verify' })
-    expect(sent).toEqual([VERIFY_PROMPT])
+    expect(filled).toEqual([VERIFY_PROMPT])
+    expect(sent).toEqual([])
     expect(await ui.find({ text: /未検証の変更があります/ })).toBeDefined()
     await ui.unmount()
     await startTurn($)
