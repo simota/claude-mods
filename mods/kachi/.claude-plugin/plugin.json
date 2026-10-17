@@ -1,6 +1,6 @@
 {
   "name": "kachi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "When a check you broke turns green after a real fix, the band above the prompt sweeps green once with a short click, and the result row keeps the score; silent the rest of the time but for one dim line on a check's first red",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

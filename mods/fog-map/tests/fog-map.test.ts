@@ -189,9 +189,12 @@ describe('fog-map in a session', () => {
   test('clears the fog as Claude reads and edits, and says what is worth saying', async ($, on) => {
     const seen = world(on, { 'npx tsc -p .': 'src/a.ts(3,1): error TS2304' })
     await $.session.start(START)
-    expect(seen.status.at(-1)).toBe('🗺 0% · ●0')
+    // Nothing to look at yet: no error, no warning, so the status line holds nothing.
+    expect(seen.status.at(-1)).toBeUndefined()
 
     await $.tool.call({ tool: 'Read', file_path: `${ROOT}/src/a.ts` })
+    // Reading clears fog but asks for nothing: the line stays empty.
+    expect(seen.status.at(-1)).toBeUndefined()
     await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/src/a.ts`, old_string: 'a', new_string: 'a\nb' })
     await $.tool.call({ tool: 'Bash', command: 'cat README.md docs/guide.md' })
     await $.tool.call({ tool: 'Bash', command: 'npx tsc -p .' })

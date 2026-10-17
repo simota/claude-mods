@@ -127,11 +127,11 @@ async function write($: EngineInterface, fn: (list: LedgerEntry[]) => LedgerEntr
   })
 }
 
+// The status line holds only what needs a look: this session's succeeded calls whose undo is not
+// easy and nobody has checked. An easy undo (a plain push) and the full count stay in /ledger.
 const statusOf = (list: readonly LedgerEntry[], sessionId: string): string | undefined => {
-  const mine = list.filter(one => one.sessionId === sessionId && one.isOk)
-  if (mine.length === 0) return undefined
-  const open = mine.filter(one => one.undoState === 'unchecked').length
-  return `📒 ${mine.length}${open > 0 ? ` · 取消未確認 ${open}` : ''}`
+  const open = list.filter(one => one.sessionId === sessionId && one.isOk && one.undoState === 'unchecked' && one.reversibility !== 'easy').length
+  return open === 0 ? undefined : `📒 取消未確認 ${open}`
 }
 
 async function setState($: EngineInterface, id: string, undoState: LedgerEntry['undoState']): Promise<void> {

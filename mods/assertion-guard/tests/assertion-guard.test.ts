@@ -50,6 +50,15 @@ describe('guard', () => {
     expect(kinds('src/a.ts', 'await run()', 'await run().catch(() => undefined)')).toEqual(['swallowed'])
     expect(kinds('app.py', 'run()', 'try:\n    run()\nexcept Exception:\n    pass')).toEqual(['swallowed'])
     expect(kinds('package.json', '"test": "jest"', '"test": "jest || true"')).toEqual(['swallowed'])
+  })
+
+  test('prose that quotes a swallow is no swallow: a report or a README swallows nothing', () => {
+    for (const path of ['build-report.md', 'docs/guide.MDX', 'NOTES.txt', 'README.rst', 'a.adoc']) {
+      expect(kinds(path, '', 'cargo with `|| true`, go with `; echo`')).toEqual([])
+      expect(kinds(path, '', '```ts\ntry { run() } catch {}\n```')).toEqual([])
+    }
+    // A test file in prose clothes is still read for weakened assertions.
+    expect(kinds('src/a.md.ts', 'run()', 'try { run() } catch {}')).toEqual(['swallowed'])
     expect(kinds('src/a.ts', 'try { a() } catch {}\nb()', 'try { a() } catch {}\nc()')).toEqual([])
   })
 

@@ -218,7 +218,9 @@ export function warningsOf(touched: Readonly<Record<string, FogFile>>, importers
 
 export const markOf = (one: FogFile): string => (one.errors > 0 ? '✗' : one.isNew ? '✚' : one.edits > 0 ? '●' : '○')
 
-export function statusOf(counts: Counts, warnings: number, hasRepo: boolean): string {
+/** The status line entry, only while there is something to look at: an error or a warning. The map and its share stay in `/map`. */
+export function statusOf(counts: Counts, warnings: number, hasRepo: boolean): string | undefined {
+  if (counts.errors === 0 && warnings === 0) return undefined
   const parts = [hasRepo ? `🗺 ${counts.percent}%` : '🗺', `●${counts.edited}`]
   if (counts.errors > 0) parts.push(`✗${counts.errors}`)
   if (warnings > 0) parts.push(`⚠${warnings}`)

@@ -1,7 +1,7 @@
 import type { On, RenderElement } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { boundsOf, candidatesOf, digestOf, enclosingName, MAX_TESTS_CHARS, namesOn, requestOf, testsFor, triggersOf, withTest } from '../hooks/space'
+import { boundsOf, candidatesOf, codeOf, digestOf, enclosingName, MAX_TESTS_CHARS, namesOn, requestOf, testsFor, triggersOf, withTest } from '../hooks/space'
 
 const kinds = (path: string, before: string, after: string) => triggersOf(path, before, after, 1).map(one => one.kind)
 
@@ -13,6 +13,31 @@ describe('space', () => {
     expect(kinds('src/api.ts', '', "// check permission later\nimport { authorize } from './auth'")).toEqual([])
     expect(kinds('src/api.test.ts', '', 'expect(res.status).toBe(403)')).toEqual([])
     expect(kinds('README.md', '', 'requires permission')).toEqual([])
+  })
+
+  test('words inside a string or a regex literal are text the code holds, not a check it makes', () => {
+    expect(kinds('src/win.ts', '', 'const NOT_RUN = /command not found|permission denied/i')).toEqual([])
+    expect(kinds('src/a.ts', '', "log('validate the permission later')")).toEqual([])
+    expect(kinds('src/a.ts', '', 'const hint = `retry when forbidden`')).toEqual([])
+    // The code around the literal still counts.
+    expect(kinds('src/api.ts', '', "if (!user.isAdmin) throw new Forbidden('permission denied')")).toEqual(['auth', 'error'])
+    // Division is no regex literal.
+    expect(kinds('src/a.ts', '', 'const ratio = total / count / 2; if (ratio > 3) return')).toEqual(['validation'])
+    expect(codeOf("a('x', \"y\"); const re = /z[/]\\//g")).toBe("a('', \"\"); const re = //")
+  })
+
+  test('Math.max and Math.min clamp a value; they bound no input', () => {
+    expect(kinds('src/a.ts', '', 'const seconds = Math.max(0, Math.round(ms / 1000))')).toEqual([])
+    expect(kinds('src/a.ts', '', 'const width = Math.min(columns, MAX_COLUMNS)')).toEqual([])
+    expect(boundsOf('if (columns < 40) return text.slice(0, Math.max(4, columns))')).toEqual([40])
+    // A schema's .max() still is one.
+    expect(boundsOf('z.string().max(255)')).toEqual([255])
+  })
+
+  test('the literal reader takes a long line in linear time', () => {
+    const started = performance.now()
+    for (const line of ["'".repeat(1_999), '"a'.repeat(999), '= /['.repeat(499), `= /${'\\'.repeat(1_996)}`, '`'.repeat(1_999)]) codeOf(line)
+    expect(performance.now() - started).toBeLessThan(50)
   })
 
   test('reads the bounds a line compares against, leaving HTTP statuses out', () => {

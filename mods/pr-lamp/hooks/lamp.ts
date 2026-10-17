@@ -288,7 +288,10 @@ const REVIEW_WORDS: Record<string, string> = {
   REVIEW_REQUIRED: '👀 承認待ち',
 }
 
-/** The status line entry. */
+/** The status line entry while the pull request is open; a merged or closed one was told once by a toast and leaves the line. */
+export const statusLineOf = (s: PrSnapshot): string | undefined => (s.state === 'OPEN' ? statusOf(s) : undefined)
+
+/** The pull request in one line, whatever its state (`/pr` text). */
 export function statusOf(s: PrSnapshot): string {
   const head = `⎇ #${s.number}`
   if (s.state === 'MERGED') return `${head} 🎉 マージ済み`

@@ -31,6 +31,9 @@ const SWALLOW = [
   /\|\|\s*true\b/g,
 ]
 
+// Prose runs nothing: a report or a README quoting `|| true` or `catch {}` swallows no error.
+const PROSE = /\.(?:md|mdx|markdown|txt|rst|adoc)$/i
+
 const isComment = (line: string) => /^(?:\/\/|\/\*|\*|--|#(?![[!]|expect|require))/.test(line)
 const isAssertion = (line: string) => !isComment(line) && ASSERT.test(line)
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim()
@@ -245,7 +248,7 @@ export function inspect(path: string, before: string, after: string): GuardFindi
     }
     for (const line of added) if (!isComment(line) && SKIP.test(line)) findings.push({ kind: 'skipped', path, after: clip(line) })
   }
-  for (const pattern of SWALLOW) for (const found of newMatches(pattern, before, after)) findings.push({ kind: 'swallowed', path, after: clip(found) })
+  if (!PROSE.test(path)) for (const pattern of SWALLOW) for (const found of newMatches(pattern, before, after)) findings.push({ kind: 'swallowed', path, after: clip(found) })
   return findings
 }
 

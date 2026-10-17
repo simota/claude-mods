@@ -12,7 +12,7 @@ export const isSourcePath = (path: string): boolean => SOURCE.test(path) && !isT
 const PATTERNS: Record<NegativeTrigger['kind'], RegExp> = {
   auth: /\b(?:authori[sz]e\w*|authenticate\w*|isAuthenticated|requireAuth\w*|require_?login|login_required|permission\w*|[a-z]\w*Permissions?|permitted|can\?|cannot\?|forbid\w*|Forbidden\w*|Unauthori[sz]ed\w*|isAdmin|is_admin|admin_required|ownerId|owner_id|currentUser|current_user|session\.user|policy|@PreAuthorize|@Secured|@RolesAllowed)\b|\b(?:401|403)\b/,
   validation:
-    /\b(?:validat\w*|isValid|is_valid|sanitize\w*|BadRequest\w*|ValueError|InvalidArgument\w*|ArgumentError|RangeError|ValidationError|@Valid|@NotNull|@Size|@Min|@Max|Joi\.|yup\.|z\.(?:object|string|number|array|enum|union)|field_validator|validator)\b|\b(?:400|422)\b|\.(?:min|max|length|regex|email|url|uuid|positive|nonnegative|int|nonempty)\(|\bif\b[^\n]{0,200}?(?:<=?|(?<!=)>=?)\s*-?\d|\b(?:maxLength|minLength|maximum|minimum|max_length|min_length)\s*[:=]/,
+    /\b(?:validat\w*|isValid|is_valid|sanitize\w*|BadRequest\w*|ValueError|InvalidArgument\w*|ArgumentError|RangeError|ValidationError|@Valid|@NotNull|@Size|@Min|@Max|Joi\.|yup\.|z\.(?:object|string|number|array|enum|union)|field_validator|validator)\b|\b(?:400|422)\b|(?<!\bMath)\.(?:min|max|length|regex|email|url|uuid|positive|nonnegative|int|nonempty)\(|\bif\b[^\n]{0,200}?(?:<=?|(?<!=)>=?)\s*-?\d|\b(?:maxLength|minLength|maximum|minimum|max_length|min_length)\s*[:=]/,
   error:
     /\b(?:catch|except|rescue|recover|throw|raise|panic!|reject|onError|on_error|fallback|retry|retries|timeout|ErrorBoundary)\b|\bErr\(|\breturn\s+(?:nil,\s*)?(?:err|fmt\.Errorf|errors\.New)\b/,
 }
@@ -52,6 +52,13 @@ export function addedAt(before: string, after: string): { line: string; index: n
 /** Lines of `after` not matched by an equal line of `before`, trimmed, in order. */
 export const addedLines = (before: string, after: string): string[] => addedAt(before, after).map(one => one.line)
 
+// A string or a regex literal is text the code holds, not a check it makes: `/permission denied/`
+// names no authorization. Each alternative takes characters the others cannot, so a line is read once.
+const LITERAL = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`|((?:^|[=(,:[!&|?{};]|\breturn)\s*)\/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[a-z]*/g
+
+/** The line with every string's and regex literal's contents taken out, its code kept. */
+export const codeOf = (line: string): string => line.replace(LITERAL, (whole, before: string | undefined) => (before === undefined ? whole[0] + whole[0] : `${before}//`))
+
 const isComment = (line: string) => /^(?:\/\/|\/\*|\*|#(?!\[)|--)/.test(line)
 const isImport = (line: string) => /^(?:import\b|from\s+\S+\s+import\b|use\s|require\(|#include|using\s)/.test(line)
 
@@ -66,7 +73,8 @@ export function boundsOf(line: string): number[] {
   // `=>` is an arrow, not a comparison.
   for (const m of line.matchAll(/(?:<=?|(?<!=)>=?|===?|!==?)\s*(-?\d+(?:\.\d+)?)\b/g)) pick(m[1])
   for (const m of line.matchAll(/\b(-?\d+(?:\.\d+)?)\s*(?:<=?|>=?)(?!>)/g)) pick(m[1])
-  for (const m of line.matchAll(/\.(?:min|max|length|gte?|lte?|size)\(\s*(-?\d+(?:\.\d+)?)/g)) pick(m[1])
+  // `Math.max(0, x)` clamps a value; it bounds no input.
+  for (const m of line.matchAll(/(?<!\bMath)\.(?:min|max|length|gte?|lte?|size)\(\s*(-?\d+(?:\.\d+)?)/g)) pick(m[1])
   for (const m of line.matchAll(/\b(?:maxLength|minLength|maximum|minimum|max_length|min_length|max|min)\s*[:=]\s*(-?\d+(?:\.\d+)?)/g)) pick(m[1])
   return [...found]
 }
@@ -108,12 +116,13 @@ export function triggersOf(path: string, before: string, after: string, at: numb
   for (const { line, index } of addedAt(before, after)) {
     // A minified bundle's line is no code to test, and its length would make every pattern slow.
     if (line.length > MAX_LINE || isComment(line) || isImport(line)) continue
-    const kinds = (['auth', 'validation', 'error'] as const).filter(kind => PATTERNS[kind].test(line))
+    const code = codeOf(line)
+    const kinds = (['auth', 'validation', 'error'] as const).filter(kind => PATTERNS[kind].test(code))
     if (kinds.length === 0) continue
     // The function this very line sits in, not the first other line that reads the same.
     const enclosing = enclosingName(lines, index)
     const names = [...new Set([...(enclosing === undefined ? [] : [enclosing]), ...namesOn(line)])]
-    for (const kind of kinds) out.push({ kind, path, line: clip(line), bounds: kind === 'validation' ? boundsOf(line) : [], names, at })
+    for (const kind of kinds) out.push({ kind, path, line: clip(line), bounds: kind === 'validation' ? boundsOf(code) : [], names, at })
   }
   return out
 }

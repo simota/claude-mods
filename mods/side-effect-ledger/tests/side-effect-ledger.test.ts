@@ -196,6 +196,7 @@ function world(on: On): World {
   on('tool.call', ($, e) => {
     const command = (e as unknown as { command?: string }).command
     if (command === 'git push origin main') return { result: {}, text: PUSH }
+    if (command === 'git push origin feature') return { result: {}, text: 'To github.com:me/app.git\n   1a2b3c4..5d6e7f8  feature -> feature' }
     if (command === 'npm publish') return { result: {}, text: 'npm error 403 Forbidden', isError: true }
     if (command === 'git push -u origin feat && gh pr create --fill') return { result: {}, text: 'To github.com:o/r.git\n * [new branch]      feat -> feat\na pull request for branch "feat" into branch "main" already exists:\nhttps://github.com/o/r/pull/7', isError: true }
     if (command === 'helm install web ./chart -n prod') return { result: {}, text: 'Error: INSTALLATION FAILED: cannot re-use a name that is still in use', isError: true }
@@ -218,7 +219,7 @@ describe('side-effect-ledger in a session', () => {
       await $.tool.call({ tool: 'Bash', command: 'git status' })
       expect(w.toasts[0]).toMatch(/^📒 git push origin main（強制） — 取り消し: git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main/)
       expect(w.toasts[1]).toBe('📒 失敗を記録: npm publish')
-      expect(w.status.at(-1)).toBe('📒 1 · 取消未確認 1')
+      expect(w.status.at(-1)).toBe('📒 取消未確認 1')
 
       const ui = await $.ui.mount({
         plugin: 'side-effect-ledger',
@@ -232,10 +233,19 @@ describe('side-effect-ledger in a session', () => {
       const confirm = (await ui.findAll({ type: 'Button' })).find(one => one.key?.startsWith('ok:'))
       await ui.press({ key: confirm?.key ?? '' })
       expect(await ui.find({ type: 'Text', text: /☑ 取消確認済み/ })).toBeDefined()
-      expect(w.status.at(-1)).toBe('📒 1')
+      // Checked: nothing needs a look, and the line clears.
+      expect(w.status.at(-1)).toBeUndefined()
       await ui.unmount()
     })
   }
+
+  test('an undo that is easy (a plain push) is kept in the ledger but never held in the status line', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
+    expect(w.toasts.some(text => text.startsWith('📒 git push origin feature'))).toBe(true)
+    expect(w.status.filter(text => text !== undefined)).toEqual([])
+  })
 
   test('a call that failed is given no undo that would act on what was there before', async ($, on) => {
     const w = world(on)

@@ -19,6 +19,7 @@ import {
   repoOf,
   SLOW_MS,
   snapshotOf,
+  statusLineOf,
   statusOf,
   THREADS_QUERY,
   threadsOf,
@@ -144,7 +145,7 @@ async function ask($: EngineInterface, isSoon: boolean): Promise<void> {
   }
   await update($, snapshot, () => next)
   await update($, problem, () => null)
-  $.ui.status(statusOf(next))
+  $.ui.status(statusLineOf(next))
 
   // The first sight of a pull request is its baseline: only what changes after is news.
   if (isSame(prev)) {

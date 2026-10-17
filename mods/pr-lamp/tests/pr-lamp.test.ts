@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { bodiesPosted, cappedFeed, changeOf, contextOf, logEntry, logTail, pinOf, remaining, snapshotOf, statusOf, threadsOf } from '../hooks/lamp'
+import { bodiesPosted, cappedFeed, changeOf, contextOf, logEntry, logTail, pinOf, remaining, snapshotOf, statusLineOf, statusOf, threadsOf } from '../hooks/lamp'
 
 // `pr` answers for the checked-out branch, `named` for a number or branch given to gh, `mine`
 // lists the person's open pull requests.
@@ -135,6 +135,13 @@ describe('lamp', () => {
     const ready = snapshotOf(PR({ reviewDecision: 'APPROVED', statusCheckRollup: [check('lint', 'SUCCESS')] }), [], 'b', 0)!
     expect(statusOf(ready)).toBe('⎇ #42 · ✓1 · ✅ 承認 · 🟢 マージ可能')
     expect(statusOf({ ...ready, state: 'MERGED' })).toBe('⎇ #42 🎉 マージ済み')
+  })
+
+  test('the status line holds an open pull request only: a merged or closed one leaves it', () => {
+    const open = snapshotOf(PR(), [], 'b', 0)!
+    expect(statusLineOf(open)).toBe(statusOf(open))
+    expect(statusLineOf({ ...open, state: 'MERGED' })).toBeUndefined()
+    expect(statusLineOf({ ...open, state: 'CLOSED' })).toBeUndefined()
   })
 
   test('a change names red checks, new comments, approval and the last step', () => {
@@ -452,6 +459,9 @@ describe('pr-lamp in a session', () => {
     gh.pr = PR({ state: 'MERGED' })
     await clock.advance(60_000)
     expect(seen.toasts).toEqual(['🎉 #42 がマージされました'])
+    // The toast told it once; the status line, which held the open pull request, clears.
+    expect(seen.status.at(-2)).toMatch(/^⎇ #42/)
+    expect(seen.status.at(-1)).toBeUndefined()
     const asked = seen.runs.length
     await clock.advance(600_000)
     expect(seen.runs.length).toBe(asked)

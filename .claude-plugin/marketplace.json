@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, focus HUD, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
   "owner": {
     "name": "simota"
   },
@@ -99,11 +99,6 @@
       "name": "artifact-shelf",
       "source": "./mods/artifact-shelf",
       "description": "A shelf of what the sessions made: CSV, PDF, HTML, video, audio, images, patches and archives, each tied to the call that made it and the request it answered; /shelf finds them by kind, word, place or time"
-    },
-    {
-      "name": "focus-hud",
-      "source": "./mods/focus-hud",
-      "description": "One status line that says what is going on: the goal (the request, or the todo in progress), the target (the file, page or command in hand), what is running and for how long, and what it waits on (you, a permission, an answer, a tool); /focus gives the detail"
     },
     {
       "name": "side-effect-ledger",

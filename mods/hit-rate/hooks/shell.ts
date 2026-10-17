@@ -539,6 +539,9 @@ function isCheckProgram(words: readonly string[]): boolean {
       return args.some(arg => arg === 'test' || arg === 'verify')
     case 'node':
       return args.includes('--test')
+    case 'claude':
+      // A plugin's own suite and its validation: `claude plugin test <dir>`, `claude plugin validate <dir>`.
+      return args[0] === 'plugin' && (args[1] === 'test' || args[1] === 'validate')
     case 'python':
     case 'python3': {
       const m = args.indexOf('-m')

@@ -211,7 +211,7 @@ test('a failing check leaves the edits unverified', async ($, on) => {
 
 test('a command that only mentions a check word does not verify', async ($, on) => {
   engine(on)
-  for (const command of ['ls build', 'cat build.gradle', 'mkdir test', 'pnpm install', 'npm run dev', 'git checkout -b check-x']) {
+  for (const command of ['ls build', 'cat build.gradle', 'mkdir test', 'pnpm install', 'npm run dev', 'git checkout -b check-x', 'claude plugin list', 'claude plugin test --help']) {
     await startTurn($)
     await edit($)
     await bash($, command)
@@ -231,6 +231,8 @@ test('real checks verify, whatever runs them', async ($, on) => {
     'CI=1 make test',
     'npx prettier --check .',
     'yarn lint',
+    'claude plugin test mods/kachi',
+    'claude plugin validate .',
     'find . -maxdepth 0 -exec npm test {} +',
     "script -eqc 'npm test' /dev/null",
   ]) {
