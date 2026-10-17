@@ -142,7 +142,6 @@ async function mutateAll($: EngineInterface, options: Options, given: string): P
   const command = await testCommand($, root, given || options.command)
   if (command === undefined) return void (await fail('テストコマンドが分かりません。/mutate <コマンド> で指定するか、testCommand を設定してください'))
 
-  await update($, isStopping, () => false)
   await update($, run, (): MutationRun => ({ status: 'running', command, root, startedAt: at, mutants: [], ran: 0, note: 'リポジトリの複製を作成中' }))
   $.ui.status('🧬 複製を作成中')
   const copy = await makeCopy($, root)
@@ -265,7 +264,10 @@ export const register: Register = (on, options) => {
     }
     if (current?.status === 'running') return { text: '🧬 実行中です。/mutate stop で止められます。' }
 
-    await update($, run, () => null)
+    // Running from here, so the pane says so and a second /mutate waits; a stop asked while it prepares is kept.
+    const at = await $.clock.now()
+    await update($, isStopping, () => false)
+    await update($, run, (): MutationRun => ({ status: 'running', command: '', root: '', startedAt: at, mutants: [], ran: 0, note: '準備中' }))
     $.clock.after(0, () => {
       void mutateAll($, settings, args).catch(async err => {
         $.ui.status(undefined)
@@ -279,7 +281,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const shown = await read($, run)
-    if (shown === null) return <Text dimColor>準備中…</Text>
+    if (shown === null) return <Text dimColor>まだ実行していません。/mutate [テストコマンド] で始めます。</Text>
 
     const t = tallyOf(shown.mutants)
     const survivors = shown.mutants.filter(one => one.outcome === 'survived')

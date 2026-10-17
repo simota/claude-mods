@@ -350,7 +350,7 @@ export function changeOf(prev: PrSnapshot, next: PrSnapshot): Change {
   }
 
   if (prev.review !== next.review) {
-    if (next.review === 'APPROVED') change.toasts.push('✅ Approved')
+    if (next.review === 'APPROVED') change.toasts.push('✅ 承認されました')
     if (next.review === 'CHANGES_REQUESTED') {
       change.toasts.push('🛑 変更要求されました')
       change.feed.push('A reviewer requested changes.')

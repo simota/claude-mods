@@ -117,14 +117,15 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const [head, ...rows] = bookLines(await read($, entries))
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 4)
+    // The pane's own rows, less the head and the overflow line.
+    const room = Math.max(1, e.props.scroll.bodyRows - 2)
 
     return (
       <Box flexDirection="column">
-        <Text bold>{head}</Text>
+        <Text bold wrap="truncate-end">{head}</Text>
         {rows.length === 0 && <Text dimColor>まだ何も捕まえていません。Bash のエラーが出ると、ここに並びます。</Text>}
         {rows.slice(0, room).map(row => (
-          <Text dimColor={row.startsWith('📙')}>{row}</Text>
+          <Text wrap="truncate-end" dimColor={row.startsWith('📙')}>{row}</Text>
         ))}
         {rows.length > room && <Text dimColor>…ほか {rows.length - room} 種</Text>}
       </Box>

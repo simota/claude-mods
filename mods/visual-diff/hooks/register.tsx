@@ -302,9 +302,10 @@ export const register: Register = on => {
       )
     }
     const head = `🖼 ${shown.after.url || '(URL 不明)'} @${shown.after.width}×${shown.after.height} · 変化 ${shown.changedPct}% · ${shown.regions.length}領域`
+    const map = mapLines(shown.cells)
     const details = (
       <Box flexDirection="column">
-        {mapLines(shown.cells).map((line, index) => (
+        {map.map((line, index) => (
           <Text key={`m-${index}`} color="magenta">{line}</Text>
         ))}
         {shown.regions.slice(0, 5).map((r, index) => (
@@ -317,7 +318,10 @@ export const register: Register = on => {
     if (e.surface === 'terminal') {
       const { Image } = $.ui.resolve(e)
       const columns = Math.max(8, Math.min(255, Math.floor((e.props.bodyColumns - 3) / 2)))
-      const rows = Math.max(3, Math.min(40, Math.round((columns * shown.after.height) / shown.after.width / 2)))
+      // The pictures take what the pane has left once the head, their labels and the details fit.
+      const detailRows = map.length + Math.min(5, shown.regions.length) + 1 + (problem !== null ? 1 : 0)
+      const room = e.props.scroll.bodyRows - 2 - detailRows
+      const rows = Math.max(3, Math.min(40, room, Math.round((columns * shown.after.height) / shown.after.width / 2)))
       return (
         <Box flexDirection="column">
           <Text bold wrap="truncate-end">{head}</Text>

@@ -139,7 +139,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Box>
-          <Text color="yellow">{BAND_TEXT} </Text>
+          <Text color="yellow" wrap="truncate-end">{BAND_TEXT} </Text>
           {/* The band stays until a check passes: asking is not verifying. */}
           <Button key="verify" label="検証させる" onPress={() => void $.prompt.submit({ text: VERIFY_PROMPT })} />
           <Button key="dismiss" label="閉じる" role="dismiss" onPress={() => update($, isFlagged, () => false)} />

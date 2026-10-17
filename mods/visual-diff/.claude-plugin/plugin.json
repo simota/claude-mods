@@ -1,6 +1,6 @@
 {
   "name": "visual-diff",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Compares the browser screenshots Claude takes of the same URL at the same size, before and after an edit: both side by side, a map of the cells that changed, the changed regions in page pixels and the files edited in between; /vdiff",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"

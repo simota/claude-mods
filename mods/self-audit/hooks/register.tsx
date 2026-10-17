@@ -181,7 +181,7 @@ export const register: Register = (on, options) => {
         ))}
         {cost !== null && (
           <Text dimColor>
-            fork: cache_read {compact(cost.cacheRead)} · in {compact(cost.input)} · out {compact(cost.output)}
+            fork: キャッシュ読込 {compact(cost.cacheRead)} · 入力 {compact(cost.input)} · 出力 {compact(cost.output)}
           </Text>
         )}
       </Box>

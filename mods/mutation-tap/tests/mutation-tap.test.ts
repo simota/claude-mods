@@ -154,6 +154,27 @@ const pane = async ($: Engine) => {
 }
 
 describe('mutation-tap in a session', () => {
+  test('the pane tells not yet run from preparing, and a stop asked while it prepares is kept', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    expect((await $.command.run(run('show'))).text).toBe('🧬 まだ実行していません。')
+    const idle = await pane($)
+    expect(await idle.find({ type: 'Text', text: /まだ実行していません/ })).toBeDefined()
+    await idle.unmount()
+
+    await $.command.run(run(''))
+    const preparing = await pane($)
+    expect(await preparing.find({ type: 'Text', text: '準備中' })).toBeDefined()
+    await preparing.unmount()
+    expect((await $.command.run(run(''))).text).toContain('実行中です')
+    expect((await $.command.run(run('stop'))).text).toContain('停止します')
+    await w.clock.settle()
+
+    const stopped = await pane($)
+    expect(await stopped.find({ type: 'Text', text: /🧬 停止/ })).toBeDefined()
+    await stopped.unmount()
+  })
+
   test('runs each mutant in a copy, never in the working tree, and shows what survived', async ($, on) => {
     const w = world(on)
     await $.session.start(START)

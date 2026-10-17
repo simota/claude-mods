@@ -223,7 +223,11 @@ export const register: Register = on => {
               {`${one.isOk ? '✓' : '✗'} [${KIND_LABEL[one.kind]}] ${one.label}`}
             </Text>
             <Text dimColor wrap="truncate-end">{`  ${new Date(one.at).toLocaleString()} · ${one.outcome}`}</Text>
-            <Text wrap="truncate-end" color={one.reversibility === 'hard' ? 'yellow' : undefined}>{`  ↩ ${REVERSIBILITY_LABEL[one.reversibility]}: ${one.undo}`}</Text>
+            {/* The undo is cut to the pane's width: the copy takes it whole. */}
+            <Box>
+              <Text wrap="truncate-end" color={one.reversibility === 'hard' ? 'yellow' : undefined}>{`  ↩ ${REVERSIBILITY_LABEL[one.reversibility]}: ${one.undo}`}</Text>
+              {one.isOk && <Button key={`copy:${one.id}`} plain label=" [コピー]" onPress={press => $.ui.copy({ text: one.undo, surface: press.surface })} />}
+            </Box>
             {one.isOk && (
               <Box>
                 <Text color={one.undoState === 'unchecked' ? 'yellow' : 'green'}>{`  ${mark[one.undoState]} `}</Text>

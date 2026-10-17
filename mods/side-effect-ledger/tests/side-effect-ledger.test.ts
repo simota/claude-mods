@@ -155,10 +155,10 @@ describe('ledger', () => {
   })
 })
 
-type World = { toasts: string[]; status: (string | undefined)[]; kept: Record<string, unknown>; race?: (mine: unknown) => unknown; limit?: number }
+type World = { toasts: string[]; status: (string | undefined)[]; kept: Record<string, unknown>; copied: string[]; race?: (mine: unknown) => unknown; limit?: number }
 
 function world(on: On): World {
-  const w: World = { toasts: [], status: [], kept: {} }
+  const w: World = { toasts: [], status: [], kept: {}, copied: [] }
   // A store in memory the test can read back.
   on('store.get', ($, e) => ({ value: w.kept[e.key] }) as never)
   on('store.set', ($, e) => {
@@ -192,6 +192,10 @@ function world(on: On): World {
   on('ui.status', ($, e) => {
     w.status.push(e.text)
     return { value: undefined }
+  })
+  on('ui.copy', ($, e) => {
+    w.copied.push(e.text)
+    return { value: { isCopied: true } } as never
   })
   on('tool.call', ($, e) => {
     const command = (e as unknown as { command?: string }).command
@@ -230,6 +234,11 @@ describe('side-effect-ledger in a session', () => {
       })
       expect(await ui.find({ type: 'Text', text: /✗ \[公開\] npm publish/ })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /↩ 戻すのが難しい: git push --force-with-lease=main:5d6e7f8/ })).toBeDefined()
+      // The undo is cut to the pane's width; its copy is whole. A failed call has none.
+      const copy = (await ui.findAll({ type: 'Button' })).filter(one => one.key?.startsWith('copy:'))
+      expect(copy).toHaveLength(1)
+      await ui.press({ key: copy[0]?.key ?? '' })
+      expect(w.copied).toEqual(['git push --force-with-lease=main:5d6e7f8 origin 1a2b3c4:main / git push origin --delete feat/x / git push --force-with-lease=wip:8b8b8b8 origin 9a9a9a9:wip'])
       const confirm = (await ui.findAll({ type: 'Button' })).find(one => one.key?.startsWith('ok:'))
       await ui.press({ key: confirm?.key ?? '' })
       expect(await ui.find({ type: 'Text', text: /☑ 取消確認済み/ })).toBeDefined()

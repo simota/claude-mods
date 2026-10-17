@@ -1,6 +1,6 @@
 {
   "name": "self-audit",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

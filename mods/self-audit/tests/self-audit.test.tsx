@@ -394,7 +394,7 @@ test('the pane lists every violation with its quote and the fork cost', async ($
     const texts = (await ui.findAll({ type: 'Text' })).map(one => one.text)
     expect(texts).toContain('「テストは全部通ります」')
     expect(texts).toContain('⚠ 未確認の断定（R3）')
-    expect(texts).toContain('fork: cache_read 110k · in 1k · out 180')
+    expect(texts).toContain('fork: キャッシュ読込 110k · 入力 1k · 出力 180')
     await ui.unmount()
   }
 })

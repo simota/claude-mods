@@ -152,7 +152,7 @@ describe('lamp', () => {
     expect(red.feed[1]).toContain('@rev on src/a.ts:12: "rename this"')
 
     const done = changeOf(before, snapshotOf(PR({ reviewDecision: 'APPROVED', statusCheckRollup: [check('lint', 'SUCCESS')] }), [], 'b', 1)!)
-    expect(done.toasts).toEqual(['✅ Approved', '🟢 #42 マージまであと0'])
+    expect(done.toasts).toEqual(['✅ 承認されました', '🟢 #42 マージまであと0'])
     expect(done.feed).toEqual([])
   })
 
@@ -501,7 +501,7 @@ describe('pr-lamp in a session', () => {
         surface,
         component: 'Pane',
         requestId: 'pr-lamp',
-        props: { title: 'Pull request', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+        props: { title: 'プルリクエスト', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
       })
       expect(await ui.find({ type: 'Text', text: /#42 Add the lamp/ })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /マージまであと3: CI 実行中 1件 · 承認待ち · 未解決スレッド 1件/ })).toBeDefined()
@@ -509,6 +509,26 @@ describe('pr-lamp in a session', () => {
       await ui.unmount()
     })
   }
+
+  test("the pane fits its checks to the pane's own rows, not the screen's", async ($, on) => {
+    const checks = Array.from({ length: 12 }, (_, i) => check(`job-${String(i).padStart(2, '0')}`, 'SUCCESS'))
+    world(on, { pr: PR({ statusCheckRollup: checks }), threads: [], log: '' })
+    const clock = mock.clock(on, { now: 0 })
+    await $.session.start(START)
+    await clock.settle()
+    await $.command.run(RUN)
+    const ui = await $.ui.mount({
+      plugin: 'pr-lamp',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'pr-lamp',
+      props: { title: 'プルリクエスト', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 10 }, view: {} },
+      viewport: { columns: 200, rows: 50, isFullscreen: true },
+    })
+    expect(await ui.find({ type: 'Text', text: '…ほか 7 行' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'https://github.com/me/app/pull/42' })).toBeDefined()
+    await ui.unmount()
+  })
 })
 
 test('a command naming gh api many times is read in linear time, on every tool call', () => {

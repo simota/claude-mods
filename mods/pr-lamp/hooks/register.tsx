@@ -252,7 +252,7 @@ export const register: Register = (on, options) => {
     if (arg === 'clear') await update($, pinned, () => null)
     else if (arg !== '' && !arg.startsWith('-')) await update($, pinned, () => arg.replace(/^#/, ''))
     await refresh($, false)
-    await $.ui.open({ id: PANE, title: 'Pull request' })
+    await $.ui.open({ id: PANE, title: 'プルリクエスト' })
     const s = await read($, snapshot)
     return { text: s === null ? (await read($, problem)) ?? 'PR はありません' : statusOf(s) }
   })
@@ -262,17 +262,18 @@ export const register: Register = (on, options) => {
     const s = await read($, snapshot)
     if (s === null) return <Text dimColor>{(await read($, problem)) ?? 'まだ PR を見ていません。'}</Text>
     const lines = paneLines(s)
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 8)
+    // The pane's own rows, less the head, meta, what is left, the overflow line and the URL.
+    const room = Math.max(1, e.props.scroll.bodyRows - 5)
     const rows = [...lines.checks, ...lines.threads]
     return (
       <Box flexDirection="column">
-        <Text bold>{lines.head}</Text>
+        <Text bold wrap="truncate-end">{lines.head}</Text>
         <Text dimColor>{lines.meta}</Text>
         {lines.left.map(line => (
-          <Text bold color={line.startsWith('🟢') ? 'green' : 'yellow'}>{line}</Text>
+          <Text bold wrap="truncate-end" color={line.startsWith('🟢') ? 'green' : 'yellow'}>{line}</Text>
         ))}
         {rows.slice(0, room).map(row => (
-          <Text color={row.startsWith('✗') ? 'red' : undefined} dimColor={row.startsWith('✓') || row.startsWith('–')}>{row}</Text>
+          <Text wrap="truncate-end" color={row.startsWith('✗') ? 'red' : undefined} dimColor={row.startsWith('✓') || row.startsWith('–')}>{row}</Text>
         ))}
         {rows.length > room && <Text dimColor>…ほか {rows.length - room} 行</Text>}
         <Text dimColor>{s.url}</Text>

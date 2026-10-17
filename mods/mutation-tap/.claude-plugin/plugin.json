@@ -1,6 +1,6 @@
 {
   "name": "mutation-tap",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "/mutate runs a mutation test limited to the lines changed since HEAD: each small change to the code (a flipped comparison, && for ||, a constant) is run against the tests, and the ones the tests did not catch are listed",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

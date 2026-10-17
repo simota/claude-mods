@@ -184,12 +184,13 @@ export const register: Register = on => {
     const warnings = warningsOf(all, await read($, importers))
     const width = Math.max(30, e.props.bodyColumns - 2)
     const rows = rowsOf(known?.files ?? [], all, await read($, focus), width, await read($, tree))
-    const room = Math.max(3, (e.viewport?.rows ?? e.props.scroll.bodyRows ?? 24) - 5 - Math.min(3, warnings.length))
+    // The pane's own rows, not the screen's: a docked pane shares the screen.
+    const room = Math.max(3, e.props.scroll.bodyRows - 5 - Math.min(3, warnings.length))
     const color = { error: 'red', new: 'green', edit: 'yellow', 'focus-dir': 'cyan' } as Record<string, string>
 
     return (
       <Box flexDirection="column">
-        <Text bold>
+        <Text bold wrap="truncate-end">
           {known === null
             ? `🗺 リポジトリの外 · 編 ${counts.edited}`
             : `🗺 探索率 ${counts.percent}%  ${bar(counts.percent, 20)}  読 ${counts.read} · 編 ${counts.edited} · ✗ ${counts.errors} / ${counts.total}`}

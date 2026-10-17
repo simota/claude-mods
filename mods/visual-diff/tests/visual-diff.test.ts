@@ -176,6 +176,21 @@ describe('visual-diff in a session', () => {
       expect(await ui.find({ type: 'Text', text: /間の編集: App\.css/ })).toBeDefined()
       await ui.unmount()
     }
+
+    // In a short pane the pictures shrink so the map and regions below them still fit.
+    const short = await $.ui.mount({
+      plugin: 'visual-diff',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'visual-diff',
+      props: { title: '画面の差分', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 24 }, view: {} },
+    })
+    const pictures = await short.findAll({ type: 'Image' })
+    // Text rows, less one: the two labels sit side by side on one row above the pictures.
+    const textRows = (await short.findAll({ type: 'Text' })).length - 1
+    expect(pictures.map(one => one.props.rows)).toEqual([12, 12])
+    expect(textRows + 12).toBeLessThanOrEqual(24)
+    await short.unmount()
   })
 
   test('the folder is checked at both levels, names cannot collide, and folders of killed sessions are swept', async ($, on) => {
