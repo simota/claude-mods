@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, skill hints, TODO(agent) list, context meter, compact tool rows, image preview, quick actions, self-audit, context diet, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, handoff capsule, port lantern, artifact shelf, focus HUD, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
   "owner": {
     "name": "simota"
   },
@@ -21,19 +21,9 @@
       "description": "Tallies sandbox denials seen in Bash output and reports them with /sandbox-report"
     },
     {
-      "name": "skill-hint",
-      "source": "./mods/skill-hint",
-      "description": "Suggests up to three matching skills above the prompt from what was typed; never invokes them."
-    },
-    {
       "name": "todo-agent",
       "source": "./mods/todo-agent",
       "description": "Collects #TODO(agent) follow-ups from Claude's replies into a per-project list with a /todos pane."
-    },
-    {
-      "name": "context-meter",
-      "source": "./mods/context-meter",
-      "description": "Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost"
     },
     {
       "name": "tool-row",
@@ -49,11 +39,6 @@
       "name": "self-audit",
       "source": "./mods/self-audit",
       "description": "After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt"
-    },
-    {
-      "name": "context-diet",
-      "source": "./mods/context-diet",
-      "description": "Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved"
     },
     {
       "name": "browser-cam",

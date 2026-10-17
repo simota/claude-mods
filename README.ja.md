@@ -9,13 +9,10 @@
 | `agent-pane` | セッションのサブエージェントをペインで表示。実行中は経過時間、完了したものは結果と所要時間 |
 | `done-gate` | 未検証の変更を指摘し、同じ失敗の繰り返しを止め、`git --no-verify` を拒否 |
 | `sandbox-lens` | Bash 出力に現れた sandbox の拒否を集計し、`/sandbox-report` で報告 |
-| `skill-hint` | 入力したプロンプトに合う skill を最大 3 件、入力欄の上に提案（自動では起動しない） |
 | `todo-agent` | Claude の返答にある `#TODO(agent)` をプロジェクトごとに集め、`/todos` ペインで管理 |
-| `context-meter` | 入力欄の上に、ターンごとのコンテキスト使用率のスパークライン（Gruvbox 配色）とトークン数・コスト |
 | `tool-row` | ターミナルで、完了したツール呼び出しの行を、Nerd Font のアイコンと Gruvbox 配色、短い統計付きの 1 行に描き直す |
 | `image-preview` | セッションが書き出し・読み込み・生成した画像のサムネイルを、ツール行の下と `/images` ペインに表示 |
 | `self-audit` | ターンごとに会話の fork（キャッシュ利用）で Claude 自身の返答を CLAUDE.md の報告ルールに照らし、違反を入力欄の上に表示 |
-| `context-diet` | skill 一覧をプロジェクトの種類に必要なものだけに絞る（既定オフ）。`/context-diet` で省いた skill と削減トークン数を表示 |
 | `browser-cam` | Claude が操作中のブラウザをペインで表示。Claude in Chrome の最新スクリーンショット、ページの URL、直近の操作 |
 | `prompt-coach` | 曖昧に見えるプロンプト（完了条件がない、対象が不明確）の送信を止め、意図の推定候補・そのまま送る・補足するから選ばせる（既定オン） |
 | `loopback` | self-audit・done-gate・sandbox-lens の発見を、人に見せるだけでなく次のプロンプトに添えて Claude へ返す。hit-rate が外れが多いと判定したルールは返さない（既定オフ） |
@@ -84,24 +81,12 @@ echo '{"enabled":"true"}' | claude plugin configure <mod>@simota-mods --values-s
 - ヒントを出すだけで、sandbox の設定は変更しません。loopback やプライベートアドレスはポート付きでヒントに出します（例: `127.0.0.1:3000`）。ポートなしで登録すると全ポートが開くためです。
 - 読むのは、`<sandbox_violations>` ブロックと、プログラム自身が出した `Operation not permitted` の行です。成功したコマンドと中断したコマンドでは、エンジンがコマンド自身の出力とは別に置くブロックだけを読むので、表示したファイルやページの中のブロックは、出力の末尾にあっても無視します。失敗したコマンドにはエラー文しか残らないため、その末尾（agent proxy の注記の前）にあるブロックを読みます。この場合は、コマンド自身が出力したブロックとハーネスのブロックを区別できません。コマンド例に含まれる認証情報（トークン、パスワード、`Authorization`/`Cookie` や `X-API-Key` などの認証ヘッダ、URL のユーザー情報、`PGPASSWORD` のような区切りのない名前も含む環境変数の代入の鍵、既知のキー形式）は伏せ字にします。各セクションは上位 10 件を表示し、記録が上限（200 件）に達すると、最後に見てから最も時間が経ったものが入れ替わります。
 
-### skill-hint
-
-プロンプトを送ると、それに合いそうな skill を最大 3 件、入力欄の上に出します（`💡 skill候補: /coding-debug …`）。出すのはセッションに実在する skill だけです。自動で起動はしません。「閉じる」か次のプロンプト（slash コマンドを含む）で消えます。すでに skill 名を含むプロンプト（どこかに `/name`、または `coding-debug` のようなハイフン付きの skill 名）には出しません。`/clear` のような組み込みコマンドや、`src/review/` のようなパスの一部は skill 名として数えません。plugin の skill（`plugin:name`）は完全な名前で提案します。
-
 ### todo-agent
 
 - Claude のメインの返答で、行頭（引用記号やリスト記号の後でも可）に `#TODO(agent): <action>` がある行を、プロジェクト（リポジトリのルートか cwd）ごとに集めます。文中・表の中・インラインコードでの言及は TODO として扱いません。サブエージェントの返答は対象外です。
 - `/todos` で、このプロジェクトの未完了項目をペインに出します。各項目に「完了」ボタンがあります。
 - `/todos all` で、全プロジェクトの未完了項目を、保存済みのデータであることを明記してテキストで一覧表示します。
 - 未完了の項目がある間は、ステータス行に `TODO(agent): N` と出ます。
-
-### context-meter
-
-ターンごとのコンテキスト使用率のスパークラインと、`ctx 63% ▲4 · 126k · turn in 120k / out 8k · $1.23` を帯に出します。最後のリクエストのコンテキストサイズに続けて、ターン全体の入出力（ターンが使用量を報告した場合のみ）を出します。使用率は 50% から黄色、80% から赤になります。
-
-| 設定 | 既定値 | |
-| --- | --- | --- |
-| `band` | `true` | 帯を描く（オフでも記録は続ける） |
 
 ### tool-row
 
@@ -133,19 +118,6 @@ echo '{"enabled":"true"}' | claude plugin configure <mod>@simota-mods --values-s
 | `minChars` | `200` | これより短い返答はチェックしない |
 
 コスト: ターンごとに、セッションのモデルで追加リクエストが 1 回走り、返答本文（最大 12,000 文字）がキャッシュされない入力として加わります。キャッシュが冷えていると（5 分以上空いた後やモデルの切り替え後）、会話全体を送り直します。
-
-### context-diet
-
-既定はオフです。オンにすると、skill 一覧をプロジェクトの種類に必要なものだけに絞ります。種類（Swift、Android、Rust、Web、Python、Go）は、リポジトリのルートとその 1 階層下から判定します。coding、quality、planning、research 系の skill は常に残し、red-team、`dynamic-*`、persona、operation 系は省きます。image、design 系と `ux-scan`、`brand-scan` は Rust、Python、Go のときに省きます。報告するのはメインの一覧だけです。省いた skill でも、プロンプトで名前を出せば、そのプロンプトには説明を添えます。
-
-- `/context-diet` で、プロジェクトの種類、直近の一覧で残した skill と省いた skill、削減トークン数（推定）を表示します。確実に読み取れない形式の一覧は、そのまま送ります。
-- `/context-diet on|off|reset` で、このセッションだけ設定を上書きします。切り替えると一覧を組み直すので、プロンプトキャッシュが 1 回効かなくなります。
-
-| 設定 | 既定値 | |
-| --- | --- | --- |
-| `enabled` | `false` | |
-| `keep` | | 常に残す名前か `prefix*` のカンマ区切り。`drop` より優先 |
-| `drop` | | 常に省く名前か `prefix*` のカンマ区切り |
 
 ### browser-cam
 
@@ -245,7 +217,7 @@ hit-rate がオンなら、hit-rate が止めたルールは返しません（`s
       ● lamp.ts  +43 −2  編集 4回
       ✗ register.tsx  +59 −16  編集 6回  エラー 1  ★
   ▸ loopback/  ○●
-  ░ agent-pane/  ░ browser-cam/  ░ context-diet/  …8
+  ░ agent-pane/  ░ browser-cam/  ░ done-gate/  …8
 ⚠ 編集したファイルを import しているが未読: mods/pr-lamp/tests/pr-lamp.test.ts
 ```
 

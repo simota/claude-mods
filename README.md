@@ -9,13 +9,10 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `agent-pane` | Live pane of the session's subagents: running ones with elapsed time, finished ones with result and duration |
 | `done-gate` | Flags unverified edits, stops repeated failing commands, and blocks git --no-verify |
 | `sandbox-lens` | Tallies sandbox denials seen in Bash output and reports them with /sandbox-report |
-| `skill-hint` | Suggests up to three matching skills above the prompt from what was typed; never invokes them. |
 | `todo-agent` | Collects #TODO(agent) follow-ups from Claude's replies into a per-project list with a /todos pane. |
-| `context-meter` | Band above the prompt with a Gruvbox sparkline of context use per turn, plus tokens and cost |
 | `tool-row` | Redraws finished tool-call rows in the terminal as one compact line with a Nerd Font icon, Gruvbox colors and a short stat |
 | `image-preview` | Thumbnails of the images a session writes, reads or generates: under the tool's row in the terminal, and in an /images pane |
 | `self-audit` | After each turn, a cached fork of the conversation audits Claude's own reply against the CLAUDE.md reporting rules and flags violations above the prompt |
-| `context-diet` | Trims the skill listing to what the project kind needs (off by default); /context-diet shows what was dropped and the tokens saved |
 | `browser-cam` | Live pane of the browser Claude drives: the latest screenshot from Claude in Chrome, the page URL and the recent actions |
 | `prompt-coach` | Holds back a typed prompt that looks ambiguous (no done-condition, unclear target) and offers guesses at what it meant, sending it as is, or adding one; on by default |
 | `loopback` | Feeds what self-audit, done-gate and sandbox-lens found back to Claude beside the next prompt, instead of only showing it to the person, skipping rules hit-rate found mostly wrong; off by default |
@@ -84,24 +81,12 @@ Works on its own, no command:
 - Hints only: it never changes sandbox settings. A loopback or private address keeps its port in the hint (`127.0.0.1:3000`), since an entry without a port opens every port.
 - A `<sandbox_violations>` block, and `Operation not permitted` lines a program printed about itself, are read. For a command that succeeded or was interrupted, the block is taken from where the engine puts it, apart from the command's own output, so one inside a shown file or page is ignored even when it ends the output. A failed command keeps only its error text: the block that ends it (before an agent-proxy note) is read, and there a block the command printed itself cannot be told from the harness's. Credentials in the example command (tokens, passwords, `Authorization`/`Cookie` and other credential headers such as `X-API-Key`, URL userinfo, keys in env assignments including run-together names such as `PGPASSWORD`, known key shapes) are masked. Each section shows the top 10; when the record is full (200), the least recently seen entry gives way.
 
-### skill-hint
-
-After a prompt is sent, up to three skills matching it show above the prompt (`💡 skill候補: /coding-debug …`), only ones that exist in the session. Nothing is invoked; 閉じる or the next prompt (a slash command included) clears it. A prompt that already names a skill (`/name` anywhere, or a hyphenated skill name such as `coding-debug`) gets no hint; built-in commands such as `/clear` and path segments such as `src/review/` do not count as naming one. Plugin skills (`plugin:name`) are suggested by their full name.
-
 ### todo-agent
 
 - Lines starting with `#TODO(agent): <action>` (after an optional quote or list bullet) in Claude's main-loop replies are collected per project (repo root or cwd). A mention inside a sentence, a table or inline code is not a TODO; subagent replies are ignored.
 - `/todos` opens the pane of this project's open items, each with a 完了 button.
 - `/todos all` lists every project's open items as text, marked as stored data.
 - The status line shows `TODO(agent): N` while the project has open items.
-
-### context-meter
-
-A band with a sparkline of context use per turn and `ctx 63% ▲4 · 126k · turn in 120k / out 8k · $1.23`: the context size of the last request, then the whole turn's input/output (shown when the turn reported usage). The percentage turns yellow from 50% and red from 80%.
-
-| Option | Default | |
-| --- | --- | --- |
-| `band` | `true` | Draw the band (samples are recorded either way) |
 
 ### tool-row
 
@@ -133,19 +118,6 @@ After each reply of at least `minChars` characters, one tool-less fork of the co
 | `minChars` | `200` | Shorter replies are not audited |
 
 Cost: one extra request per turn on the session's model, plus the reply text (up to 12,000 characters) as uncached input; a cold cache (after 5 minutes idle or a model switch) resends the whole conversation.
-
-### context-diet
-
-Off by default. When on, the skill listing is trimmed to what the project kind needs (Swift, Android, Rust, web, Python, Go, detected from the repo root and one level below). Coding, quality, planning and research skills are always kept; red-team, `dynamic-*`, persona and operation skills are dropped; image, design, `ux-scan` and `brand-scan` are dropped for Rust, Python and Go. Only the main loop's listing is reported. A dropped skill named in a prompt is still described for that prompt.
-
-- `/context-diet` shows the project kind, what was kept and dropped in the latest listing, and the tokens saved (estimate). A listing it cannot read reliably goes out unchanged.
-- `/context-diet on|off|reset` overrides the option for this session. Switching rebuilds the listing, so the prompt cache misses once.
-
-| Option | Default | |
-| --- | --- | --- |
-| `enabled` | `false` | |
-| `keep` | | Comma list of names or `prefix*` never dropped; wins over `drop` |
-| `drop` | | Comma list of names or `prefix*` always dropped |
 
 ### browser-cam
 
@@ -245,7 +217,7 @@ The repository as a map under fog, cleared as Claude works through it:
       ● lamp.ts  +43 −2  編集 4回
       ✗ register.tsx  +59 −16  編集 6回  エラー 1  ★
   ▸ loopback/  ○●
-  ░ agent-pane/  ░ browser-cam/  ░ context-diet/  …8
+  ░ agent-pane/  ░ browser-cam/  ░ done-gate/  …8
 ⚠ 編集したファイルを import しているが未読: mods/pr-lamp/tests/pr-lamp.test.ts
 ```
 
