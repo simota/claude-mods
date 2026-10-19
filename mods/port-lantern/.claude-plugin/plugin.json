@@ -1,6 +1,6 @@
 {
   "name": "port-lantern",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Keeps track of the dev servers the session started: their URLs and ports from the server's own output, whether each still listens, and its latest log lines, in the status line and a /ports pane; a toast when one starts or stops",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"

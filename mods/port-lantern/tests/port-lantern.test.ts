@@ -44,7 +44,9 @@ describe('lantern', () => {
     const server: LanternServer = { id: 'b1', command: 'pnpm dev', startedAt: 0, urls: [], ports: [5173], state: 'unknown', tail: [], changedAt: 0 }
     expect(judge(server, listening, 9)).toMatchObject({ state: 'listening', pid: 501, changedAt: 9 })
     expect(judge(server, [], 9).state).toBe('down')
-    expect(statusOf([{ ...server, state: 'listening' }])).toBe('🏮 :5173●')
+    expect(statusOf([{ ...server, state: 'listening' }])).toBe('🏮 ● :5173')
+    expect(statusOf([{ ...server, state: 'down' }, { ...server, id: 'b2', state: 'down' }, { ...server, id: 'b3', ports: [8000], state: 'listening' }])).toBe('🏮 ○ :5173 停止 · ● :8000')
+    expect(statusOf([{ ...server, state: 'listening' }, { ...server, id: 'b2', state: 'down' }])).toBe('🏮 ● :5173')
   })
 })
 
@@ -86,13 +88,13 @@ describe('port-lantern in a session', () => {
     await $.session.start(START)
     await $.tool.call({ tool: 'Bash', command: 'pnpm dev', run_in_background: true })
     await $.tool.call({ tool: 'Bash', command: 'ls' })
-    expect(w.status.at(-1)).toBe('🏮 pnpm dev…')
+    expect(w.status.at(-1)).toBe('🏮 … pnpm dev')
 
     w.output = 'VITE v5 ready in 300 ms\n  ➜  Local:   http://localhost:5173/\n'
     w.lsof = 'p501\ncnode\nn*:5173\n'
     await w.clock.advance(5_000)
     expect(w.toasts).toEqual(['🏮 起動: http://localhost:5173/'])
-    expect(w.status.at(-1)).toBe('🏮 :5173●')
+    expect(w.status.at(-1)).toBe('🏮 ● :5173')
 
     w.lsof = ''
     await w.clock.advance(5_000)

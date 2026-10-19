@@ -115,8 +115,17 @@ export function withOutput(server: LanternServer, text: string): LanternServer {
 
 export const label = (server: LanternServer): string => (server.ports.length > 0 ? server.ports.map(port => `:${port}`).join(' ') : server.command.split(/\s+/).slice(0, 2).join(' '))
 
+const RANK = { listening: 0, unknown: 1, down: 2 } as const
+
+/** One part per port: the same port started twice is one, told by its liveliest state. */
 export function statusOf(servers: readonly LanternServer[]): string | undefined {
   if (servers.length === 0) return undefined
-  const mark = (one: LanternServer) => (one.state === 'listening' ? '●' : one.state === 'down' ? '○' : '…')
-  return `🏮 ${servers.map(one => `${label(one)}${mark(one)}`).join(' ')}`
+  const byLabel = new Map<string, LanternServer>()
+  for (const one of servers) {
+    const was = byLabel.get(label(one))
+    if (was === undefined || RANK[one.state] <= RANK[was.state]) byLabel.set(label(one), one)
+  }
+  const part = (one: LanternServer) =>
+    one.state === 'listening' ? `● ${label(one)}` : one.state === 'down' ? `○ ${label(one)} 停止` : `… ${label(one)}`
+  return `🏮 ${[...byLabel.values()].map(part).join(' · ')}`
 }

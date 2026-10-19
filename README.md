@@ -267,7 +267,7 @@ Time and peak memory come from `/usr/bin/time` (`-l` on macOS, `-v` on GNU). The
 
 ### port-lantern
 
-A Bash command run in the background, or a server command (`pnpm dev`, `vite`, `uvicorn`, `rails s`…), is followed: its output file is read every 5 s for local URLs and ports (`--port`, `PORT=` in the command too), and `lsof` says whether a port listens. The status line keeps `🏮 :5173● :8000○`; a toast says when one starts listening or stops. `/ports` opens the pane: URL (press to copy), command, pid, and the latest log lines, errors in red.
+A Bash command run in the background, or a server command (`pnpm dev`, `vite`, `uvicorn`, `rails s`…), is followed: its output file is read every 5 s for local URLs and ports (`--port`, `PORT=` in the command too), and `lsof` says whether a port listens. The status line keeps `🏮 ● :5173 · ○ :8000 停止`, one part per port; a toast says when one starts listening or stops. `/ports` opens the pane: URL (press to copy), command, pid, and the latest log lines, errors in red.
 
 ### artifact-shelf
 
