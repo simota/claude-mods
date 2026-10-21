@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click, Codex cross-check",
   "owner": {
     "name": "simota"
   },
@@ -129,6 +129,11 @@
       "name": "kachi",
       "source": "./mods/kachi",
       "description": "When a check you broke turns green after a real fix, the band above the prompt sweeps green once with a short click, and the result row keeps the score; silent the rest of the time but for one dim line on a check's first red"
+    },
+    {
+      "name": "cross-check",
+      "source": "./mods/cross-check",
+      "description": "A second opinion from Codex in one press: the band above the prompt reviews the current diff with codex exec (read-only), shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; a /codex pane lists them"
     }
   ]
 }
