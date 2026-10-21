@@ -1,0 +1,42 @@
+{
+  "name": "ci-rehearsal",
+  "version": "0.1.0",
+  "description": "CI before the push, in one press: the band above the prompt runs the push workflows with runthrough, shows the failing job and step with the count, and puts the failures and their log tails into the prompt for Claude to fix when asked; /ci lists every job",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "mode": {
+      "type": "string",
+      "title": "Where jobs run",
+      "description": "container runs each job in Docker; host runs the workflows' commands on this machine; apple-container uses Apple's container CLI (macOS 26+)",
+      "options": ["container", "host", "apple-container"],
+      "default": "container"
+    },
+    "scope": {
+      "type": "string",
+      "title": "What is run",
+      "description": "worktree runs the working tree, uncommitted changes included; committed runs the HEAD commit as a push would",
+      "options": ["worktree", "committed"],
+      "default": "worktree"
+    },
+    "event": {
+      "type": "string",
+      "title": "Event",
+      "description": "The event that triggers the workflows",
+      "default": "push"
+    },
+    "auto": {
+      "type": "string",
+      "title": "Run on its own",
+      "description": "turn-end runs the workflows when Claude's turn ends with the working tree changed; off waits for a press",
+      "options": ["off", "turn-end"],
+      "default": "off"
+    },
+    "timeoutMin": {
+      "type": "number",
+      "title": "Timeout (minutes)",
+      "description": "How long one run may take before it is stopped; 20 by default",
+      "default": 20
+    }
+  }
+}

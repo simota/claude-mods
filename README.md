@@ -32,6 +32,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `token-lens` | Checks an element's actual colours, spacing and type against the project's design tokens and lists off-token values with the nearest token; `/token-lens <selector>` |
 | `kachi` | When a check you broke turns green after a real fix, the band above the prompt sweeps green once with a short click, and the result row keeps the score: how many tries, how long it stayed red. Silent the rest of the time, but for one dim line under a check's first red |
 | `cross-check` | A second opinion from Codex in one press: the band above the prompt reviews the current diff with `codex exec` in its read-only sandbox, shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; `/codex` lists them |
+| `ci-rehearsal` | CI before the push, in one press: the band above the prompt runs the push workflows locally with `runthrough`, shows the failing job and step with the count, and puts the failures and their log tails into the prompt for Claude to fix when asked; `/ci` lists every job |
 
 ## Install
 
@@ -360,6 +361,22 @@ The diff is measured again after each turn; once it changes, the findings are ma
 | --- | --- | --- |
 | `model` | `""` | the model Codex runs with (`-m`); empty for Codex's own default |
 | `timeoutMin` | `15` | a review still running after this many minutes is stopped |
+
+### ci-rehearsal
+
+Needs [runthrough](https://github.com/simota/runthrough) on `PATH`, and Docker running unless `mode` says otherwise. While `runthrough -l` lists jobs for the event, the band above the prompt shows `CI 未確認 · push 3 jobs [ 走らせる ]`. One press runs `runthrough push --json --no-history --no-cache-server` on the working tree, uncommitted and untracked changes included (`scope: committed` adds `--committed`); the band then shows the elapsed time, the job running and how many are done, with 止める. Without Docker the band says so and offers host で走らせる for that one run; it never switches to the host by itself.
+
+When it ends, a pass shows `CI ✅ 3/3 1:12`; a failure shows the first failing step and how many more (`CI ❌ CI / test › Run npm test · ほか1件`), and a toast says how many. **Claude に頼む** puts each failure with its last 40 log lines into the prompt, quoted as data, for you to send; nothing is sent by itself. **詳細** and `/ci` open the pane: every job's result, each failure's log tail, 直させる (that one alone) and このジョブだけ (reruns it with `-j`). `/ci-run` starts a run as the button does. The status line keeps `CI ✅`, `CI ❌ 2` or `CI 古い`.
+
+The tree is measured again after each turn; once it changes, the result is marked 古い and the band offers a run again. 閉じる hides the band until the tree changes. A run that ends without runthrough's summary says why (its last error line) with 再試行. runthrough reads `.secrets`, `.vars` and `.env` as it does by default and masks secrets in its logs; the mod never passes `--insecure-secrets`. In `host` mode the workflows' commands run on this machine, outside any container. Nothing is kept past the session.
+
+| Option | Default | |
+| --- | --- | --- |
+| `mode` | `container` | `container` (Docker), `host` (`--host`: on this machine) or `apple-container` (`--engine container`, macOS 26+) |
+| `scope` | `worktree` | `committed`: run the HEAD commit as a push would (`--committed`) |
+| `event` | `push` | the event that triggers the workflows |
+| `auto` | `off` | `turn-end`: run when Claude's turn ends with the tree changed since the last result |
+| `timeoutMin` | `20` | a run still going after this many minutes is stopped |
 
 ## Develop
 
