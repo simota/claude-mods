@@ -364,7 +364,7 @@ Codex CLI（`codex`）が `PATH` にあり、ログイン済みであること�
 
 ### ci-rehearsal
 
-[runthrough](https://github.com/simota/runthrough) が `PATH` にあり、`mode` を変えない限り Docker が動いていることが前提です。`runthrough -l` がそのイベントのジョブを挙げる間、入力欄の上の帯に `CI 未確認 · push 3 jobs [ 走らせる ]` が出ます。押すと作業ツリー（未コミット・untracked を含む。`scope: committed` なら `--committed`）に対して `runthrough push --json --no-history --no-cache-server` を実行します。実行中の帯には経過時間・走っているジョブ・終わったジョブ数が出て、止める ことができます。Docker が動いていなければ帯がそう告げ、その 1 回だけ host で走らせる を出します。勝手に host へ切り替えることはしません。
+[runthrough](https://github.com/simota/runthrough) が `PATH` にあり、`mode` を変えない限り Docker が動いていることが前提です。`runthrough -n <event>` がこのブランチでそのイベントのジョブを計画する間（ブランチ・タグの絞り込み込み）、入力欄の上の帯に `CI 未確認 · push 3 jobs [ 走らせる ]` が出ます。そのイベントではここで何も走らないとき（`pull_request` だけのリポジトリや、`main` に絞った `push` を別ブランチで使うとき）は、`runthrough -l` が挙げるイベントのうち最初に走るものを、そう書き添えて出します: `CI 未確認 · pull_request 2 jobs（push では走らない）`。押すと作業ツリー（未コミット・untracked を含む。`scope: committed` なら `--committed`）に対して `runthrough push --json --no-history --no-cache-server` を実行します。実行中の帯には経過時間・走っているジョブ・終わったジョブ数が出て、止める ことができます。Docker が動いていなければ帯がそう告げ、その 1 回だけ host で走らせる を出します。勝手に host へ切り替えることはしません。
 
 終わると、通れば `CI ✅ 3/3 1:12`、落ちれば最初に落ちたステップと残りの件数（`CI ❌ CI / test › Run npm test · ほか1件`）が出て、件数をトーストで知らせます。**Claude に頼む** は各失敗とログ末尾 40 行をデータとして引用した依頼文を入力欄に入れるだけで、送るのはあなたです。**詳細** と `/ci` でペインが開き、全ジョブの結果、失敗ごとのログ末尾、直させる（その 1 件だけ）と このジョブだけ（`-j` で再実行）があります。`/ci-run` はボタンと同じく実行を始めます。ステータスラインには `CI ✅`・`CI ❌ 2`・`CI 古い` が残ります。
 
@@ -374,7 +374,7 @@ Codex CLI（`codex`）が `PATH` にあり、ログイン済みであること�
 | --- | --- | --- |
 | `mode` | `container` | `container`（Docker）・`host`（`--host`: このマシン上）・`apple-container`（`--engine container`、macOS 26 以降） |
 | `scope` | `worktree` | `committed`: push と同じく HEAD のコミットを実行（`--committed`） |
-| `event` | `push` | ワークフローを起動するイベント |
+| `event` | `push` | ワークフローを起動するイベント。このブランチで何も走らなければ、一覧にある別のイベントを使う |
 | `auto` | `off` | `turn-end`: Claude のターンが終わり、前回の結果からツリーが変わっていれば実行 |
 | `timeoutMin` | `20` | この分数を過ぎても終わらない実行は止める |
 

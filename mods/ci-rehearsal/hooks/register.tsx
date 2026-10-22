@@ -4,7 +4,7 @@ import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 import type { Failure, Problem, Result, Run, Tree } from '../types'
 
 import type { Mode } from './runthrough'
-import { clockText, countJobs, failureLabel, fixPrompt, hash, lineSplitter, logReader, problemText, runArgv, secsText } from './runthrough'
+import { clockText, failureLabel, fixPrompt, hash, lineSplitter, listedEvents, logReader, planJobs, problemText, runArgv, secsText } from './runthrough'
 
 const PANE = 'ci-rehearsal'
 const PANE_TITLE = 'ローカル CI'
@@ -34,23 +34,44 @@ async function git($: Api, args: string[], stdin?: string) {
   return ran.exitCode === 0 ? ran.stdout : undefined
 }
 
+/** The jobs the event triggers on this branch: the plan applies the branch and tag filters `-l` ignores. */
+async function jobsFor($: Api, ev: string) {
+  const plan = await $.process.run(['runthrough', '-n', ev])
+  return plan.exitCode === 0 ? planJobs(plan.stdout) : 0
+}
+
+/** The configured event, else the first listed event that triggers a job here, as a pull_request-only repository needs. */
+async function pickEvent($: Api) {
+  const jobs = await jobsFor($, event)
+  if (jobs > 0) {
+    return { event, jobs }
+  }
+  const listed = await $.process.run(['runthrough', '-l'])
+  for (const other of listed.exitCode === 0 ? listedEvents(listed.stdout) : []) {
+    const found = other === event ? 0 : await jobsFor($, other)
+    if (found > 0) {
+      return { event: other, jobs: found }
+    }
+  }
+  return undefined
+}
+
 /** What a run would see now, and its key: HEAD alone when committed, else HEAD with every change. */
 async function measure($: Api): Promise<Tree | null> {
-  const listed = await $.process.run(['runthrough', '-l'])
-  const jobs = listed.exitCode === 0 ? countJobs(listed.stdout, event) : 0
-  if (jobs === 0) {
+  const picked = await pickEvent($)
+  if (picked === undefined) {
     return null
   }
   const head = (await git($, ['rev-parse', 'HEAD']))?.trim() ?? ''
   if (isCommitted) {
-    return { key: hash(head), jobs }
+    return { key: hash(`${picked.event}\n${head}`), ...picked }
   }
   const patch = (await git($, ['diff', 'HEAD'])) ?? ''
   // -z: the names as they are, not quoted as core.quotePath quotes a non-ASCII one.
   const untracked = ((await git($, ['ls-files', '-z', '--others', '--exclude-standard'])) ?? '').split('\0').filter(name => name !== '')
   // An untracked file's content is in no diff: every one's blob hash stands for it, in one process.
   const blobs = untracked.length === 0 ? '' : ((await git($, ['hash-object', '--stdin-paths'], untracked.join('\n'))) ?? '')
-  return { key: hash(`${head}\n${patch}\n${untracked.join('\0')}\n${blobs}`), jobs }
+  return { key: hash(`${picked.event}\n${head}\n${patch}\n${untracked.join('\0')}\n${blobs}`), ...picked }
 }
 
 async function refresh($: Api) {
@@ -88,7 +109,8 @@ async function tickRun($: Api) {
 async function rehearse($: Api, how: { mode: Mode; only?: string }) {
   const target = await refresh($)
   if (target === null) {
-    await update($, problem, () => said(`${event} で走るジョブがありません`))
+    await update($, problem, () => said(`${event} でもほかのイベントでも、このブランチで走るジョブがありません`))
+    await setStatus($)
     return
   }
   if (how.mode === 'container' && (await $.process.run(['docker', 'info'])).exitCode !== 0) {
@@ -113,7 +135,7 @@ async function rehearse($: Api, how: { mode: Mode; only?: string }) {
   let isTimedOut = false
 
   const tick = $.clock.every(1000, () => void tickRun($))
-  const stream = $.process.spawn({ argv: runArgv({ event, mode: how.mode, isCommitted, only: how.only }) })
+  const stream = $.process.spawn({ argv: runArgv({ event: target.event, mode: how.mode, isCommitted, only: how.only }) })
   stop = () => void stream.return(undefined as never)
   const limit = $.clock.after(timeoutMin * 60_000, () => {
     isTimedOut = true
@@ -157,7 +179,7 @@ async function rehearse($: Api, how: { mode: Mode; only?: string }) {
     await update($, problem, () => said(startError ?? problemText(stderr, code ?? null)))
   } else {
     const failures = log.failures()
-    await update($, result, () => ({ key: target.key, ...summary, failures, only: how.only }))
+    await update($, result, () => ({ key: target.key, event: target.event, ...summary, failures, only: how.only }))
     $.ui.toast(summary.ok ? `CI ✅ ${summary.jobs.length} jobs 通過` : `CI ❌ ${failures.length}件の失敗`)
   }
   await update($, run, () => null)
@@ -180,8 +202,8 @@ function cancel() {
   stop?.()
 }
 
-async function fill($: Api, failures: readonly Failure[]) {
-  await $.prompt.fill({ text: fixPrompt(failures), mode: 'insert' })
+async function fill($: Api, failures: readonly Failure[], ev: string) {
+  await $.prompt.fill({ text: fixPrompt(failures, ev), mode: 'insert' })
 }
 
 async function openPane($: Api) {
@@ -312,7 +334,7 @@ export const register: Register = (on, options) => {
             CI ❌ {failureLabel(top)}
             {done.failures.length > 1 ? ` · ほか${done.failures.length - 1}件` : ''}{' '}
           </Text>
-          <Button key="fix" label="Claude に頼む" variant="primary" onPress={() => fill($, done.failures)} />
+          <Button key="fix" label="Claude に頼む" variant="primary" onPress={() => fill($, done.failures, done.event)} />
           <Button key="detail" label="詳細" onPress={() => openPane($)} />
           <Button key="again" label="再実行" onPress={() => start($, { only: done.only })} />
           {close}
@@ -324,7 +346,7 @@ export const register: Register = (on, options) => {
     return stack(
       <Box>
         <Text dimColor wrap="truncate-end">
-          CI 未確認 · {event} {now.jobs} jobs{isCommitted ? '（HEAD）' : ''}
+          CI 未確認 · {now.event} {now.jobs} jobs{now.event === event ? '' : `（${event} では走らない）`}{isCommitted ? '（HEAD）' : ''}
           {stale}{' '}
         </Text>
         <Button key="run" label="走らせる" variant="primary" onPress={() => start($)} />
@@ -375,7 +397,7 @@ export const register: Register = (on, options) => {
               <Text color="red" bold dimColor={isStale} wrap="truncate-end">
                 {failureLabel(f)}{' '}
               </Text>
-              <Button key={`fix-${f.id}`} label="直させる" onPress={() => fill($, [f])} />
+              <Button key={`fix-${f.id}`} label="直させる" onPress={() => fill($, [f], done.event)} />
               {running === null && <Button key={`only-${f.id}`} label="このジョブだけ" onPress={() => start($, { only: f.jobId })} />}
             </Box>
             {f.tail.map((line, i) => (

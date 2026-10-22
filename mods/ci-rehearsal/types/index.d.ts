@@ -3,12 +3,15 @@ export type Failure = { id: string; workflow: string; jobId: string; step: strin
 
 export type JobResult = { job: string; result: string }
 
-/** The tree a run would see, and how many jobs the event triggers; `key` tells one tree from another. */
-export type Tree = { key: string; jobs: number }
+/**
+ * The tree a run would see, the event it runs (the configured one, or the first listed one that
+ * triggers jobs here when that triggers none), and how many jobs; `key` tells one tree from another.
+ */
+export type Tree = { key: string; event: string; jobs: number }
 
 export type Run = { key: string; startedAt: number; elapsedS: number; job: string; done: number; total: number; only?: string }
 
-export type Result = { key: string; ok: boolean; jobs: JobResult[]; failures: Failure[]; secs: number; only?: string }
+export type Result = { key: string; event: string; ok: boolean; jobs: JobResult[]; failures: Failure[]; secs: number; only?: string }
 
 /** Why the last press gave no result: Docker not running, or anything else in words. */
 export type Problem = { kind: 'no-docker' } | { kind: 'other'; text: string }

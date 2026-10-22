@@ -1,6 +1,6 @@
 {
   "name": "ci-rehearsal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CI before the push, in one press: the band above the prompt runs the push workflows with runthrough, shows the failing job and step with the count, and puts the failures and their log tails into the prompt for Claude to fix when asked; /ci lists every job",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

@@ -364,7 +364,7 @@ The diff is measured again after each turn; once it changes, the findings are ma
 
 ### ci-rehearsal
 
-Needs [runthrough](https://github.com/simota/runthrough) on `PATH`, and Docker running unless `mode` says otherwise. While `runthrough -l` lists jobs for the event, the band above the prompt shows `CI 未確認 · push 3 jobs [ 走らせる ]`. One press runs `runthrough push --json --no-history --no-cache-server` on the working tree, uncommitted and untracked changes included (`scope: committed` adds `--committed`); the band then shows the elapsed time, the job running and how many are done, with 止める. Without Docker the band says so and offers host で走らせる for that one run; it never switches to the host by itself.
+Needs [runthrough](https://github.com/simota/runthrough) on `PATH`, and Docker running unless `mode` says otherwise. While `runthrough -n <event>` plans jobs for the event on this branch (its branch and tag filters applied), the band above the prompt shows `CI 未確認 · push 3 jobs [ 走らせる ]`. When the event triggers nothing here (a `pull_request`-only repository, or `push` filtered to `main` on another branch), the band offers the first event `runthrough -l` lists that does, saying so: `CI 未確認 · pull_request 2 jobs（push では走らない）`. One press runs `runthrough push --json --no-history --no-cache-server` on the working tree, uncommitted and untracked changes included (`scope: committed` adds `--committed`); the band then shows the elapsed time, the job running and how many are done, with 止める. Without Docker the band says so and offers host で走らせる for that one run; it never switches to the host by itself.
 
 When it ends, a pass shows `CI ✅ 3/3 1:12`; a failure shows the first failing step and how many more (`CI ❌ CI / test › Run npm test · ほか1件`), and a toast says how many. **Claude に頼む** puts each failure with its last 40 log lines into the prompt, quoted as data, for you to send; nothing is sent by itself. **詳細** and `/ci` open the pane: every job's result, each failure's log tail, 直させる (that one alone) and このジョブだけ (reruns it with `-j`). `/ci-run` starts a run as the button does. The status line keeps `CI ✅`, `CI ❌ 2` or `CI 古い`.
 
@@ -374,7 +374,7 @@ The tree is measured again after each turn; once it changes, the result is marke
 | --- | --- | --- |
 | `mode` | `container` | `container` (Docker), `host` (`--host`: on this machine) or `apple-container` (`--engine container`, macOS 26+) |
 | `scope` | `worktree` | `committed`: run the HEAD commit as a push would (`--committed`) |
-| `event` | `push` | the event that triggers the workflows |
+| `event` | `push` | the event that triggers the workflows; another listed one is used when it triggers nothing on this branch |
 | `auto` | `off` | `turn-end`: run when Claude's turn ends with the tree changed since the last result |
 | `timeoutMin` | `20` | a run still going after this many minutes is stopped |
 
