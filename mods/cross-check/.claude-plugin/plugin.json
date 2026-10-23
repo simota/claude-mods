@@ -1,16 +1,10 @@
 {
   "name": "cross-check",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A second opinion from Codex in one press: the band above the prompt reviews the current diff with codex exec (read-only), shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; a /codex pane lists them",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",
   "userConfig": {
-    "model": {
-      "type": "string",
-      "title": "Codex model",
-      "description": "The model codex runs with (-m); empty for codex's own default",
-      "default": ""
-    },
     "timeoutMin": {
       "type": "number",
       "title": "Timeout (minutes)",

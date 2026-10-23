@@ -18,7 +18,11 @@ export const reviewPrompt = (scope: Scope) =>
     'Write title, body and summary in Japanese. An empty findings list is a valid answer. Do not modify any file.',
   ].join('\n')
 
-export const reviewArgv = (scope: Scope, schemaPath: string, model: string) => [
+// Every review runs on the same model and effort; there is no option to change them.
+const MODEL = 'gpt-6.1-sol'
+const EFFORT = 'medium'
+
+export const reviewArgv = (scope: Scope, schemaPath: string) => [
   'codex',
   'exec',
   '--sandbox',
@@ -27,7 +31,10 @@ export const reviewArgv = (scope: Scope, schemaPath: string, model: string) => [
   '--ephemeral',
   '--output-schema',
   schemaPath,
-  ...(model === '' ? [] : ['-m', model]),
+  '-m',
+  MODEL,
+  '-c',
+  `model_reasoning_effort="${EFFORT}"`,
   reviewPrompt(scope),
 ]
 

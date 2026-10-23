@@ -106,11 +106,11 @@ const endTurn = ($: Engine) => $.turn.complete({ answer: 'done', durationMs: 1, 
 
 describe('codex', () => {
   test('runs exec in the read-only sandbox with the schema, never review', () => {
-    const argv = reviewArgv({ kind: 'uncommitted' }, '/p/hooks/schema.json', '')
+    const argv = reviewArgv({ kind: 'uncommitted' }, '/p/hooks/schema.json')
     expect(argv.slice(0, 4)).toEqual(['codex', 'exec', '--sandbox', 'read-only'])
     expect(argv).toContain('--output-schema')
     expect(argv).not.toContain('review')
-    expect(reviewArgv({ kind: 'base', base: 'origin/main' }, 's', 'o3')).toContain('o3')
+    expect(argv).toEqual(expect.arrayContaining(['-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="medium"']))
   })
 
   test('reads findings by severity, and keeps prose whole as the summary', () => {

@@ -32,7 +32,6 @@ const SEVERITY_COLOR = { high: 'red', medium: 'yellow', low: 'gray' } as const
 type Api = EngineInterface
 
 // Set by register from the options; module-local, as a reload runs register again.
-let model = ''
 let timeoutMin = 15
 // The running child's stop: module-local, as the child dies with the module anyway.
 let stop: (() => void) | undefined
@@ -139,7 +138,7 @@ async function review($: Api) {
   let isTimedOut = false
 
   const tick = $.clock.every(1000, () => void tickRun($))
-  const stream = $.process.spawn({ argv: reviewArgv(target.scope, `${$.plugin.root}/hooks/schema.json`, model) })
+  const stream = $.process.spawn({ argv: reviewArgv(target.scope, `${$.plugin.root}/hooks/schema.json`) })
   stop = () => void stream.return(undefined as never)
   const limit = $.clock.after(timeoutMin * 60_000, () => {
     isTimedOut = true
@@ -219,7 +218,6 @@ async function openPane($: Api) {
 }
 
 export const register: Register = (on, options) => {
-  model = typeof options.model === 'string' ? options.model.trim() : ''
   timeoutMin = typeof options.timeoutMin === 'number' && options.timeoutMin > 0 ? options.timeoutMin : 15
 
   on('session.start', async ($, e, next) => {

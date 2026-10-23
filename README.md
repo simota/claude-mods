@@ -355,11 +355,10 @@ Needs the Codex CLI (`codex`) on `PATH`, logged in. While the repository has som
 
 When it ends, the band shows the most severe finding and how many more (`🔍 high · m.py:4 空リストで ZeroDivisionError · ほか2件`), and a toast says how many. **Claude に直させる** puts the findings into the prompt, quoted as data, for you to send; nothing is sent by itself. **詳細** and `/codex` open the pane: each finding with 直させる (that one alone) and 却下. `/codex-review` starts a review as the button does. The status line keeps `🔍 codex 3件`.
 
-The diff is measured again after each turn; once it changes, the findings are marked 古い and the band offers a review again. 閉じる hides the band until the diff changes. A failure says why (`codex login が必要`, `codex が見つかりません`, Codex's own error) with 再試行. Codex reads the repository and may run commands in its read-only sandbox; what it reads is sent to the model provider your Codex is set up with. Nothing is kept past the session.
+The diff is measured again after each turn; once it changes, the findings are marked 古い and the band offers a review again. 閉じる hides the band until the diff changes. A failure says why (`codex login が必要`, `codex が見つかりません`, Codex's own error) with 再試行. Codex reads the repository and may run commands in its read-only sandbox; Codex always runs `gpt-6.1-sol` at medium reasoning effort; what it reads is sent to the model provider your Codex is set up with. Nothing is kept past the session.
 
 | Option | Default | |
 | --- | --- | --- |
-| `model` | `""` | the model Codex runs with (`-m`); empty for Codex's own default |
 | `timeoutMin` | `15` | a review still running after this many minutes is stopped |
 
 ### ci-rehearsal
