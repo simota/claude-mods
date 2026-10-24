@@ -31,7 +31,7 @@ declare module 'claude-code' {
       doctor: Doctor | null
       /** The root's stack in devrouter's registry, with each service as last seen. */
       stack: Stack | null
-      /** Set when the registry could not be read as expected. */
+      /** Set when the registry or Docker's container list could not be read as expected. */
       registryNote: string | null
       run: Run | null
       failure: Failure | null

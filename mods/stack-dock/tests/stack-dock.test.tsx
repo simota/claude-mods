@@ -53,13 +53,19 @@ const ps = (api: string, code = 0) =>
 type World = {
   isInstalled: boolean
   doctor: string
+  doctorExitCode?: number
+  doctorStderr?: string
+  doctorError?: string
   /** registry.json as written; undefined when there is none yet. */
   registry: string | undefined
+  registryError?: string
   ps: string
+  psExitCode?: number
+  psStderr?: string
   http: Record<string, { status: number; text: string } | 'tls'>
   files: string[]
   /** What `devrouter up` does: write the registry and exit with `code`. */
-  up: { code: number; stderr: string; registry?: string; hangMs?: number }
+  up: { code: number; stderr: string; registry?: string; hangMs?: number; progress?: { stream: 'stdout' | 'stderr'; text: string }[]; pauseAfterProgressMs?: number }
   runs: string[]
   spawned: string[][]
   filled: string[]
@@ -114,8 +120,9 @@ function world(on: On): World {
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false }, text: '' }))
   on('tool.call', () => ({ result: {}, text: 'ok' }))
   on('fs.read', ($, e) => {
+    if (e.path === '/h/.devrouter/registry.json' && w.registryError !== undefined) return { deny: w.registryError }
     if (e.path === '/h/.devrouter/registry.json' && w.registry !== undefined) return { value: w.registry } as never
-    throw new Error(`ENOENT: ${e.path}`)
+    return { deny: `ENOENT: ${e.path}` }
   })
   on('fs.exists', ($, e) => ({ value: w.files.includes(e.path) }) as never)
   on('http.fetch', ($, e) => {
@@ -130,9 +137,10 @@ function world(on: On): World {
     w.runs.push(argv)
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } }) as never
     if (argv === 'git rev-parse --show-toplevel') return ok(`${ROOT}\n`)
-    if (e.argv[0] === 'devrouter' && !w.isInstalled) throw new Error('spawn devrouter ENOENT')
-    if (argv === `devrouter doctor ${ROOT}`) return { value: { exitCode: w.doctor.includes('[ERROR]') ? 1 : 0, stdout: w.doctor, stderr: '' } } as never
-    if (argv === `docker compose -f ${COMPOSE} ps --all --format json`) return ok(w.ps)
+    if (e.argv[0] === 'devrouter' && !w.isInstalled) return { deny: 'spawn devrouter ENOENT' }
+    if (argv === `devrouter doctor ${ROOT}` && w.doctorError !== undefined) return { deny: w.doctorError }
+    if (argv === `devrouter doctor ${ROOT}`) return { value: { exitCode: w.doctorExitCode ?? (w.doctor.includes('[ERROR]') ? 1 : 0), stdout: w.doctor, stderr: w.doctorStderr ?? '' } } as never
+    if (argv === `docker compose -f ${COMPOSE} ps --all --format json`) return { value: { exitCode: w.psExitCode ?? 0, stdout: w.ps, stderr: w.psStderr ?? '' } } as never
     if (argv.startsWith(`docker compose -f ${COMPOSE} logs`)) return ok('app-api-1  | listening\napp-api-1  | Error: connect ECONNREFUSED db:5432 password=hunter2\n')
     if (argv === `devrouter down ${ROOT}`) {
       w.registry = JSON.stringify({ version: 1, stacks: [] })
@@ -151,6 +159,8 @@ function world(on: On): World {
     }
     yield { stream: 'stderr' as const, text: ' Container app-web  Start' }
     yield { stream: 'stderr' as const, text: 'ing\n' }
+    for (const chunk of w.up.progress ?? []) yield chunk
+    if (w.up.pauseAfterProgressMs !== undefined) await w.clock.sleep(w.up.pauseAfterProgressMs)
     if (w.up.stderr !== '') yield { stream: 'stderr' as const, text: w.up.stderr }
     if (w.up.code === 0) {
       w.registry = w.up.registry
@@ -192,13 +202,27 @@ describe('devrouter', () => {
     expect(stackOf('nope', ROOT).note).toBeDefined()
   })
 
+  test('invalid registry shapes return a diagnostic rather than throwing', () => {
+    for (const value of [null, [], 1, { version: 1, stacks: [null] }, { version: 1, stacks: [{ repoPath: ROOT, services: {} }] }, { version: 1, stacks: [{ repoPath: ROOT, services: [null] }] }]) {
+      expect(stackOf(JSON.stringify(value), ROOT).note).toContain('registry.json')
+    }
+  })
+
   test('reads compose ps as lines or as one array, a running container speaking for its service', () => {
-    expect(parseComposePs(ps('exited', 1)).get('app-api')).toEqual({ state: 'exited', exitCode: 1 })
+    expect(parseComposePs(ps('exited', 1))?.get('app-api')).toEqual({ state: 'exited', exitCode: 1 })
     const array = JSON.stringify([
       { Service: 'web', State: 'exited', ExitCode: 137 },
       { Service: 'web', State: 'running', ExitCode: 0 },
     ])
-    expect(parseComposePs(array).get('web')).toEqual({ state: 'running', exitCode: undefined })
+    expect(parseComposePs(array)?.get('web')).toEqual({ state: 'running', exitCode: undefined })
+  })
+
+  test('invalid compose output is unavailable, distinct from an empty container list', () => {
+    for (const out of ['null', '[null]', '{}', 'not JSON', '[{"Service":"web"}]', 'null\n' + ps('running')]) {
+      expect(parseComposePs(out)).toBeUndefined()
+    }
+    expect(parseComposePs('')?.size).toBe(0)
+    expect(parseComposePs('[]')?.size).toBe(0)
   })
 
   test('takes Traefik 502 for down, its own 404 for unrouted, and a certificate error for unknown', () => {
@@ -233,6 +257,133 @@ describe('devrouter', () => {
 })
 
 describe('band', () => {
+  test('live startup output is masked before truncation in state and on both surfaces', async ($, on) => {
+    const w = world(on)
+    const kept: unknown[] = []
+    on('state.set', ($, e, next) => {
+      if (e.plugin === 'stack-dock' && e.key === 'run') kept.push(e.value)
+      return next(e)
+    })
+    await $.session.start(START)
+    for (const stream of ['stdout', 'stderr'] as const) {
+      w.up.progress = [
+        { stream, text: `${'x'.repeat(175)} GITHUB_TOKEN=SYNTHETIC` },
+        { stream, text: '-ONLY-SECRET-1234567\n' },
+      ]
+      w.up.pauseAfterProgressMs = 30_000
+      await $.command.run({ command: 'stack-up', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
+      await w.clock.advance(1_000)
+      expect(JSON.stringify(kept)).not.toContain('SYNTHETIC')
+      for (const surface of SURFACES) {
+        const ui = await $.ui.mount(band(surface))
+        const text = (await ui.find({ type: 'Text', text: /起動中/ }))?.text
+        expect(text).toContain('GITHUB_TOKEN=***')
+        expect(text).not.toContain('SYNTHETIC')
+        await ui.unmount()
+      }
+      await w.clock.advance(30_000)
+    }
+  })
+
+  test('a failed doctor without an ERROR check never starts automatically', { options: { auto: 'session-start' } }, async ($, on) => {
+    const w = world(on)
+    w.doctor = '[OK] docker: docker info OK\n'
+    w.doctorExitCode = 1
+    w.doctorStderr = 'error: doctor terminated password=SYNTHETIC-ONLY\n'
+    await $.session.start(START)
+    await w.clock.settle()
+    expect(w.spawned).toHaveLength(0)
+    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    const result = JSON.parse(ran.result as string)
+    expect(result.phase).toBe('broken')
+    expect(result.problem).toContain('doctor terminated')
+    expect(result.problem).not.toContain('SYNTHETIC')
+  })
+
+  test('doctor output with no recognized checks is not proof that a stack is ready', { options: { auto: 'session-start' } }, async ($, on) => {
+    const w = world(on)
+    w.doctor = 'unrecognized doctor output\n'
+    await $.session.start(START)
+    await w.clock.settle()
+    expect(w.spawned).toHaveLength(0)
+    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    expect(JSON.parse(ran.result as string).phase).toBe('broken')
+  })
+
+  test('doctor execution errors remain visible instead of pretending devrouter is absent', { options: { auto: 'session-start' } }, async ($, on) => {
+    const w = world(on)
+    for (const message of ['EACCES: permission denied', 'process timed out after 30000 ms']) {
+      w.doctorError = message
+      await $.session.start(START)
+      await w.clock.settle()
+      expect(w.spawned).toHaveLength(0)
+      const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+      expect(JSON.parse(ran.result as string)).toMatchObject({ phase: 'broken', problem: expect.stringContaining(message) })
+    }
+  })
+
+  test('a malformed registry keeps polling and recovers without claiming the stack stopped', { options: { auto: 'session-start' } }, async ($, on) => {
+    const w = world(on)
+    w.registry = 'null'
+    await $.session.start(START)
+    await w.clock.settle()
+    expect(w.spawned).toHaveLength(0)
+    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    expect(JSON.parse(ran.result as string)).toMatchObject({ phase: 'unavailable', problem: expect.stringContaining('registry.json') })
+    const ui = await $.ui.mount(band('terminal'))
+    expect(await ui.find({ type: 'Text', text: /状態を確認できません/ })).toBeDefined()
+    expect(await ui.find({ key: 'up' })).toBeUndefined()
+    w.registry = REGISTRY
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
+    expect(w.toasts.some(text => text.includes('停止'))).toBe(false)
+    await ui.unmount()
+  })
+
+  test('an unreadable registry stays unavailable until reading it succeeds', { options: { auto: 'session-start' } }, async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY
+    w.registryError = 'EACCES: permission denied'
+    await $.session.start(START)
+    await w.clock.settle()
+    expect(w.spawned).toHaveLength(0)
+    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    expect(JSON.parse(ran.result as string)).toMatchObject({ phase: 'unavailable', problem: expect.stringContaining('permission denied') })
+    w.registryError = undefined
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
+  })
+
+  test('invalid or failed compose ps is unavailable and a later successful poll recovers', { options: { auto: 'session-start' } }, async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY
+    w.ps = '[null]'
+    await $.session.start(START)
+    await w.clock.settle()
+    expect(w.spawned).toHaveLength(0)
+    const malformed = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    expect(JSON.parse(malformed.result as string)).toMatchObject({ phase: 'unavailable', problem: expect.stringContaining('docker compose ps') })
+    w.ps = ps('running')
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
+    w.psExitCode = 1
+    w.psStderr = 'cannot connect to Docker\n'
+    await w.clock.advance(10_000)
+    const failed = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    expect(JSON.parse(failed.result as string)).toMatchObject({ phase: 'unavailable', problem: expect.stringContaining('cannot connect to Docker') })
+    expect(w.toasts.some(text => text.includes('停止'))).toBe(false)
+    w.psExitCode = 0
+    w.ps = ps('exited', 1)
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 1/2')
+    expect(w.toasts.at(-1)).toContain('api exited (1)')
+    await type($)
+    expect(w.contexts[0]?.at(-1)).toContain('api exited (1)')
+    w.ps = ps('running')
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
+  })
+
   test('a ready stack starts in one press, then the band gives way to the status line and a toast', async ($, on) => {
     const w = world(on)
     await $.session.start(START)
@@ -359,6 +510,42 @@ describe('band', () => {
     expect((await ui.find({ type: 'Text', text: /devrouter ·/ }))?.text).toContain('app 2 services')
     expect(await ui.find({ key: 'up' })).toBeDefined()
     await ui.unmount()
+    await type($)
+    expect(w.contexts[0]).toBeUndefined()
+  })
+
+  test('a single service crashing is a failure with logs and a feed, not a clean stop', async ($, on) => {
+    const w = world(on)
+    const reg = JSON.parse(REGISTRY)
+    reg.stacks[0].services = reg.stacks[0].services.slice(0, 1)
+    w.registry = JSON.stringify(reg)
+    await $.session.start(START)
+    w.ps = JSON.stringify({ Service: 'app-web', State: 'exited', ExitCode: 1 })
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 0/1')
+    expect(w.toasts.at(-1)).toContain('web exited (1)')
+    const ui = await $.ui.mount(band('terminal'))
+    expect((await ui.find({ type: 'Text', text: /❌/ }))?.text).toContain('web exited (1)')
+    await ui.press({ key: 'fix' })
+    expect(w.filled[0]).toContain('Error: connect ECONNREFUSED')
+    await type($)
+    expect(w.contexts[0]?.at(-1)).toContain('web exited (1)')
+    await ui.unmount()
+  })
+
+  test('all services crashing stays degraded, and recovery clears the pending failure feed', async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY
+    await $.session.start(START)
+    w.ps = [JSON.stringify({ Service: 'app-web', State: 'dead', ExitCode: 0 }), JSON.stringify({ Service: 'app-api', State: 'exited', ExitCode: 2 })].join('\n')
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 0/2')
+    expect(w.toasts.at(-1)).toContain('api exited (2)')
+    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    expect(JSON.parse(ran.result as string).phase).toBe('degraded')
+    w.ps = ps('running')
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
     await type($)
     expect(w.contexts[0]).toBeUndefined()
   })
