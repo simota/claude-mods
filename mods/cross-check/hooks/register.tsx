@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Diff, Finding, Result, Run, Scope } from '../types'
+import { untrackedHashes } from './fingerprint'
 
 import {
   clockText,
@@ -24,6 +25,7 @@ const diff = atom({ plugin: 'cross-check', key: 'diff' } as const, null as Diff 
 const run = atom({ plugin: 'cross-check', key: 'run' } as const, null as Run | null)
 const result = atom({ plugin: 'cross-check', key: 'result' } as const, null as Result | null)
 const error = atom({ plugin: 'cross-check', key: 'error' } as const, null as string | null)
+const measurementError = atom({ plugin: 'cross-check', key: 'measurementError' } as const, null as string | null)
 const dismissed = atom({ plugin: 'cross-check', key: 'dismissed' } as const, [] as string[])
 const hiddenFor = atom({ plugin: 'cross-check', key: 'hiddenFor' } as const, null as string | null)
 
@@ -39,7 +41,13 @@ let isCancelled = false
 
 async function git($: Api, args: string[], stdin?: string) {
   const ran = await $.process.run(['git', ...args], stdin === undefined ? undefined : { stdin })
-  return ran.exitCode === 0 ? ran.stdout : undefined
+  return ran.exitCode === 0 && !ran.isStdoutTruncated ? ran.stdout : undefined
+}
+
+async function checkedGit($: Api, args: string[]) {
+  const text = await git($, args)
+  if (text === undefined) throw new Error('Git の差分を確認できません')
+  return text
 }
 
 /** The base a branch is reviewed against: origin's default branch, else a local main. */
@@ -58,13 +66,12 @@ async function measure($: Api): Promise<Diff | null> {
     return null
   }
 
-  const stat = (await git($, ['diff', 'HEAD', '--shortstat'])) ?? ''
+  const stat = await checkedGit($, ['diff', 'HEAD', '--shortstat'])
   // -z: the names as they are, not quoted as core.quotePath quotes a non-ASCII one.
-  const untracked = ((await git($, ['ls-files', '-z', '--others', '--exclude-standard'])) ?? '').split('\0').filter(name => name !== '')
+  const untracked = (await checkedGit($, ['ls-files', '-z', '--others', '--exclude-standard'])).split('\0').filter(name => name !== '')
   if (stat.trim() !== '' || untracked.length > 0) {
-    const patch = (await git($, ['diff', 'HEAD'])) ?? ''
-    // An untracked file's content is in no diff: every one's blob hash stands for it, in one process.
-    const blobs = untracked.length === 0 ? '' : ((await git($, ['hash-object', '--stdin-paths'], untracked.join('\n'))) ?? '')
+    const patch = await checkedGit($, ['diff', 'HEAD'])
+    const blobs = await untrackedHashes($, untracked)
     const counted = parseShortstat(stat)
     return {
       key: hash(`${head}\n${patch}\n${untracked.join('\0')}\n${blobs}`),
@@ -75,22 +82,29 @@ async function measure($: Api): Promise<Diff | null> {
   }
 
   const base = await baseRef($)
-  if (base === undefined || Number((await git($, ['rev-list', '--count', `${base}..HEAD`]))?.trim() ?? 0) === 0) {
+  if (base === undefined || Number((await checkedGit($, ['rev-list', '--count', `${base}..HEAD`])).trim()) === 0) {
     return null
   }
   const range = `${base}...HEAD`
-  const patch = (await git($, ['diff', range])) ?? ''
+  const patch = await checkedGit($, ['diff', range])
   return {
     key: hash(`${base}\n${head}\n${patch}`),
     scope: { kind: 'base', base },
-    ...parseShortstat((await git($, ['diff', range, '--shortstat'])) ?? ''),
+    ...parseShortstat(await checkedGit($, ['diff', range, '--shortstat'])),
   }
 }
 
 async function refresh($: Api) {
-  const now = await measure($)
-  await update($, diff, () => now)
-  return now
+  try {
+    const now = await measure($)
+    await update($, diff, () => now)
+    await update($, measurementError, () => null)
+    return now
+  } catch (err) {
+    await update($, diff, () => null)
+    await update($, measurementError, () => `差分を確認できません: ${String(err).slice(0, 200)}`)
+    return null
+  }
 }
 
 const visibleFindings = (all: readonly Finding[], hidden: readonly string[]) => all.filter(f => !hidden.includes(f.id))
@@ -101,7 +115,7 @@ async function setStatus($: Api) {
     $.ui.status(`🔍 codex ${clockText(r.elapsedS)}`)
     return
   }
-  if ((await read($, error)) !== null) {
+  if ((await read($, measurementError)) !== null || (await read($, error)) !== null) {
     $.ui.status('🔍 codex 失敗')
     return
   }
@@ -118,7 +132,8 @@ async function tickRun($: Api) {
 async function review($: Api) {
   const target = await refresh($)
   if (target === null) {
-    await update($, error, () => 'レビューする差分がありません')
+    if ((await read($, measurementError)) === null) await update($, error, () => 'レビューする差分がありません')
+    await setStatus($)
     return
   }
 
@@ -235,6 +250,7 @@ export const register: Register = (on, options) => {
     const done = await next(e)
     if (e.agentId === undefined) {
       await refresh($)
+      await setStatus($)
     }
     return done
   })
@@ -259,7 +275,8 @@ export const register: Register = (on, options) => {
     const now = await read($, diff)
     const running = await read($, run)
     const done = await read($, result)
-    const failed = await read($, error)
+    const unmeasured = await read($, measurementError)
+    const failed = unmeasured ?? (await read($, error))
     const hidden = await read($, dismissed)
     const closedFor = await read($, hiddenFor)
     const { Box, Button, Text } = $.ui.resolve(e)
@@ -290,7 +307,14 @@ export const register: Register = (on, options) => {
             🔍 codex 失敗: {failed}{' '}
           </Text>
           {now !== null && <Button key="retry" label="再試行" variant="primary" onPress={() => startReview($)} />}
-          <Button key="close" label="閉じる" role="dismiss" onPress={() => update($, error, () => null)} />
+          {unmeasured !== null ? (
+            <Button key="remeasure" label="再確認" onPress={async () => {
+              await refresh($)
+              await setStatus($)
+            }} />
+          ) : (
+            <Button key="close" label="閉じる" role="dismiss" onPress={() => update($, error, () => null)} />
+          )}
         </Box>,
       )
     }
@@ -344,7 +368,7 @@ export const register: Register = (on, options) => {
     const now = await read($, diff)
     const running = await read($, run)
     const done = await read($, result)
-    const failed = await read($, error)
+    const failed = (await read($, measurementError)) ?? (await read($, error))
     const hidden = await read($, dismissed)
     const left = done === null ? [] : visibleFindings(done.findings, hidden)
     const isStale = done !== null && now?.key !== done.key

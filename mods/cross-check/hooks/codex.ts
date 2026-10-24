@@ -97,26 +97,28 @@ export const readEvent = (line: string): Seen => {
   return {}
 }
 
-/** The last message held to the schema; anything else is kept whole as the summary, not dropped. */
+/** Only a complete schema-shaped answer can establish that a review found no defects. */
 export const parseReview = (text: string): { findings: Finding[]; summary: string } => {
+  const invalid = () => new Error('Codex のレビュー結果の形式が不正です（JSON スキーマに一致しません）')
+  const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+  let raw: unknown
   try {
-    const raw = JSON.parse(text) as { summary?: unknown; findings?: unknown }
-    if (Array.isArray(raw.findings)) {
-      const findings = raw.findings.flatMap((one: Record<string, unknown>): Finding[] => {
-        const severity = SEVERITIES.find(s => s === one.severity) ?? 'medium'
-        const file = typeof one.file === 'string' ? one.file : ''
-        const line = typeof one.line === 'number' ? one.line : 0
-        const title = typeof one.title === 'string' ? one.title : ''
-        const body = typeof one.body === 'string' ? one.body : ''
-        return title === '' ? [] : [{ id: hash(`${file}:${line}:${title}`), file, line, severity, title, body }]
-      })
-      findings.sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity))
-      return { findings, summary: typeof raw.summary === 'string' ? raw.summary : '' }
-    }
+    raw = JSON.parse(text)
   } catch {
-    // Prose: the summary below.
+    throw invalid()
   }
-  return { findings: [], summary: text.trim() }
+  if (!object(raw) || typeof raw.summary !== 'string' || !Array.isArray(raw.findings) || Object.keys(raw).length !== 2) throw invalid()
+  const findings = raw.findings.map((one: unknown): Finding => {
+    if (!object(one) || Object.keys(one).length !== 5) throw invalid()
+    const { file, line, title, body } = one
+    const severity = SEVERITIES.find(s => s === one.severity)
+    if (typeof file !== 'string' || typeof line !== 'number' || !Number.isInteger(line) || typeof title !== 'string' || typeof body !== 'string' || severity === undefined) {
+      throw invalid()
+    }
+    return { id: hash(`${file}:${line}:${title}`), file, line, severity, title, body }
+  })
+  findings.sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity))
+  return { findings, summary: raw.summary }
 }
 
 /** Why the run failed, in the words the band shows. */
