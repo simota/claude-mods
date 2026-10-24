@@ -20,17 +20,6 @@ function trimSlashes(path: string): string {
 // No path is longer: a `cd` past it is not followed, so a chain of them is not read on forever.
 const PATH_MAX = 4096
 
-// An absolute directory with `.` and `..` folded, as the shell's would be after a cd.
-function folding(path: string): string {
-  const parts: string[] = []
-  for (const part of path.split('/')) {
-    if (part === '' || part === '.') continue
-    if (part === '..') parts.pop()
-    else parts.push(part)
-  }
-  return `/${parts.join('/')}`
-}
-
 export function inRepo(path: string, root: string, cwd: string): string | undefined {
   const full = path.startsWith('/') ? path : `${trimSlashes(cwd)}/${path}`
   const parts: string[] = []
@@ -100,24 +89,41 @@ export function bashTouches(
 ): { reads: string[]; edits: string[] } {
   const reads = new Set<string>()
   const edits = new Set<string>()
-  let here: string | undefined = cwd
+  // Fold only each new cd operand, not the whole growing path again. Materialize
+  // the directory only when a reader needs it; no cd leaves the original cwd as is.
+  let directory: string[] | undefined
+  let directoryLength = 0
   for (const part of command.split(/&&|\|\||;|\||\n/)) {
     const [program = '', ...rest] = words(part)
     if (program === 'cd') {
       const to = rest[0]
-      const next: string | undefined = to === undefined || to === '-' || to.startsWith('~') || to.includes('$') || here === undefined
-        ? undefined
-        : to.startsWith('/') ? to : `${trimSlashes(here)}/${to}`
-      const folded = next === undefined ? undefined : folding(next)
-      here = folded !== undefined && folded.length <= PATH_MAX ? folded : undefined
+      // Once the directory is unknown, no later part was followed anyway.
+      if (to === undefined || to === '-' || to.startsWith('~') || to.includes('$')) break
+      const path = to.startsWith('/') || directory !== undefined ? to : `${trimSlashes(cwd)}/${to}`
+      if (directory === undefined || to.startsWith('/')) {
+        directory = []
+        directoryLength = 0
+      }
+      for (const segment of path.split('/')) {
+        if (segment === '' || segment === '.') continue
+        if (segment === '..') {
+          const removed = directory.pop()
+          if (removed !== undefined) directoryLength -= removed.length + 1
+        } else {
+          directory.push(segment)
+          directoryLength += segment.length + 1
+        }
+      }
+      if (Math.max(1, directoryLength) > PATH_MAX) break
       continue
     }
     const name = program.slice(program.lastIndexOf('/') + 1)
-    if (here === undefined || !READERS.has(name)) continue
+    if (!READERS.has(name)) continue
+    const currentDirectory = directory === undefined ? cwd : `/${directory.join('/')}`
     const isInPlace = name === 'sed' && rest.some(word => /^-[a-zA-Z]*i/.test(word) || word === '--in-place')
     for (const word of rest) {
       if (word.startsWith('-')) continue
-      const path = isKnown(word, here)
+      const path = isKnown(word, currentDirectory)
       if (path !== undefined) (isInPlace ? edits : reads).add(path)
     }
   }
