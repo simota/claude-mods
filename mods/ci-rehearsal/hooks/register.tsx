@@ -4,7 +4,8 @@ import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 import type { Failure, Problem, Result, Run, Tree } from '../types'
 
 import type { Mode } from './runthrough'
-import { clockText, failureLabel, fixPrompt, hash, lineSplitter, listedEvents, logReader, planJobs, problemText, runArgv, secsText } from './runthrough'
+import { clockText, failureLabel, fixPrompt, hash, lineSplitter, listedEvents, logReader, planJobs, problemText, rerunJobId, runArgv, secsText, withJobResults } from './runthrough'
+import { untrackedHashes } from './fingerprint'
 
 const PANE = 'ci-rehearsal'
 const PANE_TITLE = 'ローカル CI'
@@ -12,6 +13,7 @@ const PANE_TITLE = 'ローカル CI'
 const tree = atom({ plugin: 'ci-rehearsal', key: 'tree' } as const, null as Tree | null)
 const run = atom({ plugin: 'ci-rehearsal', key: 'run' } as const, null as Run | null)
 const result = atom({ plugin: 'ci-rehearsal', key: 'result' } as const, null as Result | null)
+const partial = atom({ plugin: 'ci-rehearsal', key: 'partial' } as const, null as Result | null)
 const problem = atom({ plugin: 'ci-rehearsal', key: 'problem' } as const, null as Problem | null)
 const hiddenFor = atom({ plugin: 'ci-rehearsal', key: 'hiddenFor' } as const, null as string | null)
 
@@ -31,12 +33,13 @@ let isCancelled = false
 
 async function git($: Api, args: string[], stdin?: string) {
   const ran = await $.process.run(['git', ...args], stdin === undefined ? undefined : { stdin })
-  return ran.exitCode === 0 ? ran.stdout : undefined
+  if (ran.exitCode !== 0 || ran.isStdoutTruncated) throw new Error(`git ${args[0]} の結果を取得できません`)
+  return ran.stdout
 }
 
 /** The jobs the event triggers on this branch: the plan applies the branch and tag filters `-l` ignores. */
 async function jobsFor($: Api, ev: string) {
-  const plan = await $.process.run(['runthrough', '-n', ev])
+  const plan = await $.process.run(['runthrough', '-n', ev, ...(isCommitted ? ['--committed'] : [])])
   return plan.exitCode === 0 ? planJobs(plan.stdout) : 0
 }
 
@@ -46,7 +49,7 @@ async function pickEvent($: Api) {
   if (jobs > 0) {
     return { event, jobs }
   }
-  const listed = await $.process.run(['runthrough', '-l'])
+  const listed = await $.process.run(['runthrough', '-l', ...(isCommitted ? ['--committed'] : [])])
   for (const other of listed.exitCode === 0 ? listedEvents(listed.stdout) : []) {
     const found = other === event ? 0 : await jobsFor($, other)
     if (found > 0) {
@@ -62,20 +65,27 @@ async function measure($: Api): Promise<Tree | null> {
   if (picked === undefined) {
     return null
   }
-  const head = (await git($, ['rev-parse', 'HEAD']))?.trim() ?? ''
+  const head = (await git($, ['rev-parse', 'HEAD'])).trim()
   if (isCommitted) {
     return { key: hash(`${picked.event}\n${head}`), ...picked }
   }
-  const patch = (await git($, ['diff', 'HEAD'])) ?? ''
+  const patch = await git($, ['diff', 'HEAD'])
   // -z: the names as they are, not quoted as core.quotePath quotes a non-ASCII one.
-  const untracked = ((await git($, ['ls-files', '-z', '--others', '--exclude-standard'])) ?? '').split('\0').filter(name => name !== '')
+  const untracked = (await git($, ['ls-files', '-z', '--others', '--exclude-standard'])).split('\0').filter(name => name !== '')
   // An untracked file's content is in no diff: every one's blob hash stands for it, in one process.
-  const blobs = untracked.length === 0 ? '' : ((await git($, ['hash-object', '--stdin-paths'], untracked.join('\n'))) ?? '')
+  const blobs = await untrackedHashes($, untracked)
   return { key: hash(`${picked.event}\n${head}\n${patch}\n${untracked.join('\0')}\n${blobs}`), ...picked }
 }
 
 async function refresh($: Api) {
-  const now = await measure($)
+  let now: Tree | null
+  try {
+    now = await measure($)
+    await update($, problem, old => old?.kind === 'measurement' ? null : old)
+  } catch (err) {
+    now = null
+    await update($, problem, () => ({ kind: 'measurement', text: `変更の計測に失敗しました: ${String(err).slice(0, 160)}` }))
+  }
   await update($, tree, () => now)
   await setStatus($)
   return now
@@ -92,12 +102,15 @@ async function setStatus($: Api) {
     return
   }
   const done = await read($, result)
-  if (done === null) {
+  const part = await read($, partial)
+  const current = part ?? done
+  if (current === null) {
     $.ui.status(undefined)
     return
   }
-  const isStale = (await read($, tree))?.key !== done.key
-  $.ui.status(isStale ? 'CI 古い' : done.ok ? 'CI ✅' : `CI ❌ ${done.failures.length}`)
+  const isStale = (await read($, tree))?.key !== current.key
+  const failures = done?.key === part?.key ? done?.failures ?? [] : current.failures
+  $.ui.status(isStale ? 'CI 古い' : part !== null ? `CI 一部 ${failures.length > 0 || !part.ok ? '❌' : '✅'}` : current.ok ? 'CI ✅' : `CI ❌ ${current.failures.length}`)
 }
 
 async function tickRun($: Api) {
@@ -109,7 +122,7 @@ async function tickRun($: Api) {
 async function rehearse($: Api, how: { mode: Mode; only?: string }) {
   const target = await refresh($)
   if (target === null) {
-    await update($, problem, () => said(`${event} でもほかのイベントでも、このブランチで走るジョブがありません`))
+    await update($, problem, old => old?.kind === 'measurement' ? old : said(`${event} でもほかのイベントでも、このブランチで走るジョブがありません`))
     await setStatus($)
     return
   }
@@ -179,8 +192,16 @@ async function rehearse($: Api, how: { mode: Mode; only?: string }) {
     await update($, problem, () => said(startError ?? problemText(stderr, code ?? null)))
   } else {
     const failures = log.failures()
-    await update($, result, () => ({ key: target.key, event: target.event, ...summary, failures, only: how.only }))
-    $.ui.toast(summary.ok ? `CI ✅ ${summary.jobs.length} jobs 通過` : `CI ❌ ${failures.length}件の失敗`)
+    const fresh = { key: target.key, event: target.event, ...summary, failures, only: how.only }
+    if (how.only === undefined) {
+      await update($, result, () => fresh)
+      await update($, partial, () => null)
+    } else {
+      await update($, partial, old => withJobResults(old, fresh))
+      await update($, result, full => full?.key === fresh.key ? { ...withJobResults(full, fresh), only: undefined, secs: full.secs } : full)
+    }
+    const scope = how.only === undefined ? '' : `一部（${how.only}） `
+    $.ui.toast(summary.ok ? `CI ${scope}✅ ${summary.jobs.length} jobs 通過` : `CI ${scope}❌ ${failures.length}件の失敗`)
   }
   await update($, run, () => null)
   await setStatus($)
@@ -224,6 +245,12 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     // A reload killed any child this module had: what it was doing is over.
     await update($, run, () => null)
+    // Before partial results had their own atom, a single-job run occupied result.
+    const previous = await read($, result)
+    if (previous?.only !== undefined) {
+      await update($, partial, current => current ?? previous)
+      await update($, result, () => null)
+    }
     await $.command.register({ name: 'ci-run', description: 'runthrough で CI のワークフローをローカル実行する' })
     await $.command.register({ name: 'ci', description: 'ローカル CI の結果をペインで開く' })
     await refresh($)
@@ -263,6 +290,7 @@ export const register: Register = (on, options) => {
     const now = await read($, tree)
     const running = await read($, run)
     const done = await read($, result)
+    const part = await read($, partial)
     const stopped = await read($, problem)
     const closedFor = await read($, hiddenFor)
     const { Box, Button, Text } = $.ui.resolve(e)
@@ -304,7 +332,7 @@ export const register: Register = (on, options) => {
           <Text color="red" wrap="truncate-end">
             CI 止まった: {stopped.text}{' '}
           </Text>
-          {now !== null && <Button key="retry" label="再試行" variant="primary" onPress={() => start($)} />}
+          {(now !== null || stopped.kind === 'measurement') && <Button key="retry" label="再試行" variant="primary" onPress={() => start($)} />}
           {dismissProblem}
         </Box>,
       )
@@ -314,6 +342,20 @@ export const register: Register = (on, options) => {
     }
 
     const close = <Button key="close" label="閉じる" role="dismiss" onPress={() => update($, hiddenFor, () => now.key)} />
+    if (part !== null && part.key === now.key) {
+      const known = done?.key === part.key ? done : part
+      return stack(
+        <Box>
+          <Text color={known.ok ? 'yellow' : 'red'} wrap="truncate-end">
+            CI 一部{part.ok ? '✅' : '❌'} · 直近: {part.only} · 全体未確認
+            {known.failures.length === 0 ? '' : ` · ${known.failures.length}件の失敗`}{' '}
+          </Text>
+          <Button key="run" label="全部走らせる" variant="primary" onPress={() => start($)} />
+          <Button key="detail" label="詳細" onPress={() => openPane($)} />
+          {close}
+        </Box>,
+      )
+    }
     if (done !== null && done.key === now.key) {
       const top = done.failures[0]
       if (done.ok || top === undefined) {
@@ -342,7 +384,8 @@ export const register: Register = (on, options) => {
       )
     }
 
-    const stale = done === null ? '' : ` · 前回の${done.ok ? '✅' : '❌'}は古い`
+    const previous = part ?? done
+    const stale = previous === null ? '' : ` · 前回の${previous.ok ? '✅' : '❌'}は古い`
     return stack(
       <Box>
         <Text dimColor wrap="truncate-end">
@@ -360,8 +403,10 @@ export const register: Register = (on, options) => {
     const now = await read($, tree)
     const running = await read($, run)
     const done = await read($, result)
+    const part = await read($, partial)
     const stopped = await read($, problem)
-    const isStale = done !== null && now?.key !== done.key
+    const latest = part ?? done
+    const isStale = latest !== null && now?.key !== latest.key
     const head =
       running !== null
         ? `実行中 ${clockText(running.elapsedS)} · ${running.job} ${running.done}/${running.total}`
@@ -369,9 +414,40 @@ export const register: Register = (on, options) => {
           ? stopped.kind === 'no-docker'
             ? 'Docker が動いていません'
             : `止まった: ${stopped.text}`
-          : done === null
+          : latest === null
             ? 'まだ走らせていません'
-            : `${done.ok ? '✅ 通過' : `❌ ${done.failures.length}件の失敗`} · ${secsText(done.secs)}${isStale ? ' · 古い' : ''}`
+            : part !== null
+              ? `一部${part.ok ? '✅' : '❌'} · 直近: ${part.only} · 全体未確認${isStale ? ' · 古い' : ''}`
+              : `${latest.ok ? '✅ 通過' : `❌ ${latest.failures.length}件の失敗`} · ${secsText(latest.secs)}${isStale ? ' · 古い' : ''}`
+
+    // Keep the full run visible. On the same tree its rerun jobs have been updated;
+    // on another tree it remains explicitly stale, never evidence for the new tree.
+    const rows = part !== null && done?.key !== part.key ? part : done
+    const oldFull = part !== null && done !== null && part.key !== done.key ? done : null
+    const showResults = (entry: Result, prefix = '') => {
+      const stale = now?.key !== entry.key
+      return (
+        <Box flexDirection="column" key={`${prefix}results`}>
+          {entry.jobs.map(j => (
+            <Text key={`${prefix}j-${j.job}`} color={j.result === 'success' ? 'green' : j.result === 'failure' ? 'red' : 'gray'} dimColor={stale} wrap="truncate-end">
+              {j.result === 'success' ? '✅' : j.result === 'failure' ? '❌' : '·'} {j.job} {j.result}
+            </Text>
+          ))}
+          {entry.failures.map(f => (
+            <Box flexDirection="column" key={`${prefix}f-${f.id}`}>
+              <Box>
+                <Text color="red" bold dimColor={stale} wrap="truncate-end">{failureLabel(f)}{' '}</Text>
+                <Button key={`${prefix}fix-${f.id}`} label="直させる" onPress={() => fill($, [f], entry.event)} />
+                {running === null && <Button key={`${prefix}only-${f.id}`} label="このジョブだけ" onPress={() => start($, { only: rerunJobId(f.jobId) })} />}
+              </Box>
+              {f.tail.map((line, i) => (
+                <Text key={`${prefix}t-${f.id}-${i}`} dimColor wrap="truncate-end">{'  '}{line}</Text>
+              ))}
+            </Box>
+          ))}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column">
@@ -385,29 +461,13 @@ export const register: Register = (on, options) => {
             now !== null && <Button key="run" label="全部走らせる" variant="primary" onPress={() => start($)} />
           )}
         </Box>
-        {done?.jobs.map(j => (
-          <Text key={`j-${j.job}`} color={j.result === 'success' ? 'green' : j.result === 'failure' ? 'red' : 'gray'} dimColor={isStale} wrap="truncate-end">
-            {j.result === 'success' ? '✅' : j.result === 'failure' ? '❌' : '·'} {j.job} {j.result}
-          </Text>
-        ))}
-        {done?.failures.map(f => (
-          // Every line: the engine scrolls the pane's body over a tree taller than it.
-          <Box flexDirection="column" key={`f-${f.id}`}>
-            <Box>
-              <Text color="red" bold dimColor={isStale} wrap="truncate-end">
-                {failureLabel(f)}{' '}
-              </Text>
-              <Button key={`fix-${f.id}`} label="直させる" onPress={() => fill($, [f], done.event)} />
-              {running === null && <Button key={`only-${f.id}`} label="このジョブだけ" onPress={() => start($, { only: f.jobId })} />}
-            </Box>
-            {f.tail.map((line, i) => (
-              <Text key={`t-${f.id}-${i}`} dimColor wrap="truncate-end">
-                {'  '}
-                {line}
-              </Text>
-            ))}
+        {rows !== null && showResults(rows)}
+        {oldFull !== null && (
+          <Box flexDirection="column">
+            <Text dimColor>前回の全体結果 · {now?.key === oldFull.key ? 'このツリー' : '古い'}</Text>
+            {showResults(oldFull, 'old-')}
           </Box>
-        ))}
+        )}
       </Box>
     )
   })
