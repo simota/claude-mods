@@ -169,6 +169,20 @@ describe('fog', () => {
     expect(bashTouches('cd src && cd util// && cat c.ts', '/r', known).reads).toEqual(['src/util/c.ts'])
   })
 
+  test('incremental cd folding preserves root, absolute resets, and the path limit', () => {
+    const directories: string[] = []
+    const known = (word: string, cwd: string) => {
+      directories.push(cwd)
+      return `${cwd}/${word}`
+    }
+    bashTouches('cat a; cd ../src//; cat b; cd /x/../; cd ../../; cat c', '/r/tmp/../tmp', known)
+    expect(directories).toEqual(['/r/tmp/../tmp', '/r/src', '/'])
+    const within = `/${'a'.repeat(4095)}`
+    expect(bashTouches(`cd ${within}; cat a`, '/', () => 'a').reads).toEqual(['a'])
+    expect(bashTouches(`cd ${within}b; cd /; cat a`, '/', () => 'a').reads).toEqual([])
+    expect(bashTouches('cat before; cd -; cd /; cat after', '/r', word => word).reads).toEqual(['before'])
+  })
+
   test('a touched path the list lacks is drawn, and the cached tree is left as it was', () => {
     const tree = treeOf(FILES)
     const once = rowsOf(FILES, { 'src/new.ts': { ...blank(1), edits: 1, isNew: true } }, null, 80, tree)

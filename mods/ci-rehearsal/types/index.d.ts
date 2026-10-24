@@ -14,7 +14,7 @@ export type Run = { key: string; startedAt: number; elapsedS: number; job: strin
 export type Result = { key: string; event: string; ok: boolean; jobs: JobResult[]; failures: Failure[]; secs: number; only?: string }
 
 /** Why the last press gave no result: Docker not running, or anything else in words. */
-export type Problem = { kind: 'no-docker' } | { kind: 'other'; text: string }
+export type Problem = { kind: 'no-docker' } | { kind: 'other' | 'measurement'; text: string }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -22,6 +22,8 @@ declare module 'claude-code' {
       tree: Tree | null
       run: Run | null
       result: Result | null
+      /** Latest partial results, kept separately so they never stand for a full CI run. */
+      partial: Result | null
       problem: Problem | null
       /** The tree key the band was closed for: it stays down until the tree changes. */
       hiddenFor: string | null

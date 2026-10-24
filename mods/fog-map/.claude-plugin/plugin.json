@@ -1,6 +1,6 @@
 {
   "name": "fog-map",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Exploration map: the repository as a tree under fog, cleared where Claude read, marked where it edited, made a file or hit an error, with what the edits may have broken unseen; /map opens it",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"

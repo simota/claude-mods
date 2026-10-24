@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
-import { fixPrompt, parseReview, parseShortstat, readEvent, reviewArgv } from '../hooks/codex'
+import { fixPrompt, hash, parseReview, parseShortstat, readEvent, reviewArgv } from '../hooks/codex'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -28,8 +28,15 @@ type World = {
   patch: string
   // Untracked files by name, each with the blob hash git would give its content.
   untracked: Record<string, string>
+  links: Record<string, string>
+  nonFiles: string[]
+  gitFailure?: string
+  gitTruncated?: string
+  headMode?: 'no-repository' | 'unborn'
+  hashOutput?: string
   spawned: string[][]
   filled: string[]
+  status: (string | undefined)[]
   // What the next spawn does: answer, fail, or hang until the clock passes `hangMs`.
   child: { stdout: string; stderr: string; code: number; hangMs?: number }
   clock: MockClock
@@ -40,8 +47,11 @@ function world(on: On): World {
   const w: World = {
     patch: 'diff --git a/m.py b/m.py\n+def avg(xs):\n',
     untracked: {},
+    links: {},
+    nonFiles: [],
     spawned: [],
     filled: [],
+    status: [],
     child: { stdout: events(JSON.stringify(FINDINGS)), stderr: '', code: 0 },
     clock: mock.clock(on, { now: 1_000 }),
   }
@@ -49,7 +59,10 @@ function world(on: On): World {
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', () => ({ value: undefined }))
-  on('ui.status', () => ({ value: undefined }))
+  on('ui.status', ($, e) => {
+    w.status.push(e.text)
+    return { value: undefined }
+  })
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('prompt.fill', ($, e) => {
     w.filled.push(e.text)
@@ -57,16 +70,47 @@ function world(on: On): World {
   })
   on('process.run', ($, e) => {
     const argv = e.argv.join(' ')
-    const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } }) as never
-    if (argv === 'git rev-parse HEAD') return ok('abc\n')
+    const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: argv === w.gitTruncated } }) as never
+    const failed = () => ({ value: { exitCode: 128, stdout: '', stderr: 'cannot read the working tree' } }) as never
+    if (argv === w.gitFailure) return failed()
+    if (argv === 'git rev-parse HEAD') {
+      if (w.headMode === 'no-repository') return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n' } } as never
+      if (w.headMode === 'unborn') return { value: { exitCode: 128, stdout: 'HEAD\n', stderr: 'fatal: ambiguous argument HEAD: unknown revision\n' } } as never
+      return ok('abc\n')
+    }
+    if (argv === 'git rev-parse --is-inside-work-tree') return w.headMode === 'no-repository' ? failed() : ok('true\n')
+    if (argv === 'git symbolic-ref --quiet HEAD') return ok('refs/heads/main\n')
+    if (argv === 'git show-ref --verify --quiet refs/heads/main') return { value: { exitCode: w.headMode === 'unborn' ? 1 : 0, stdout: '', stderr: '' } } as never
     if (argv === 'git diff HEAD --shortstat') return ok(w.patch === '' ? '' : ' 1 file changed, 3 insertions(+)\n')
     if (argv === 'git diff HEAD') return ok(w.patch)
     if (argv === 'git ls-files -z --others --exclude-standard') return ok(Object.keys(w.untracked).map(name => `${name}\0`).join(''))
     if (argv === 'git hash-object --stdin-paths') {
-      const names = (e.init?.stdin ?? '').split('\n')
-      return ok(names.map(name => `${w.untracked[name] ?? 'missing'}\n`).join(''))
+      if (w.hashOutput !== undefined) return ok(w.hashOutput)
+      // Git accepts raw lines, or C-style quoted names. It rejects a broken quoted
+      // line and a name that does not exist, rather than inventing a blob for it.
+      const names = (e.init?.stdin ?? '').split('\n').filter(line => line !== '').map(line => {
+        if (!line.startsWith('"')) return line
+        if (!line.endsWith('"')) return undefined
+        return line.slice(1, -1).replace(/\\([0-3][0-7]{2}|[abtnvfr"\\])/g, (_, escaped: string) =>
+          /^[0-3]/.test(escaped) ? String.fromCharCode(parseInt(escaped, 8)) : ({ a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', '"': '"', '\\': '\\' }[escaped] ?? escaped),
+        )
+      })
+      if (names.some(name => name === undefined || !(name in w.untracked) || name in w.links)) return failed()
+      return ok(names.map(name => `${hash(w.untracked[name!]!).padStart(40, '0')}\n`).join(''))
+    }
+    if (e.argv.slice(0, 8).join(' ') === 'git diff --no-index --no-ext-diff --no-textconv --no-color -- /dev/null') {
+      const name = e.argv[8]!
+      return name in w.links
+        ? { value: { exitCode: 1, stdout: `new file mode 120000\n+${w.links[name]}\n`, stderr: '', isStdoutTruncated: argv === w.gitTruncated } } as never
+        : failed()
     }
     return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
+  })
+  on('fs.stat', ($, e) => {
+    // The test engine resolves filesystem paths against the plugin's directory.
+    const name = Object.keys(w.untracked).find(name => e.path === name || e.path.endsWith(`/${name}`))
+    if (name === undefined) throw new Error('ENOENT')
+    return { value: { kind: w.nonFiles.includes(name) ? 'other' : 'file', size: 4, mtimeMs: 0, isLink: name in w.links } }
   })
   on('process.spawn', async function* ($, e, next) {
     w.spawned.push([...e.argv])
@@ -113,11 +157,29 @@ describe('codex', () => {
     expect(argv).toEqual(expect.arrayContaining(['-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="medium"']))
   })
 
-  test('reads findings by severity, and keeps prose whole as the summary', () => {
+  test('reads findings by severity, including a valid empty list', () => {
     const parsed = parseReview(JSON.stringify(FINDINGS))
     expect(parsed.findings.map(f => f.severity)).toEqual(['high', 'low'])
     expect(parsed.summary).toBe(FINDINGS.summary)
-    expect(parseReview('不具合はありません。')).toEqual({ findings: [], summary: '不具合はありません。' })
+    expect(parseReview('{"findings":[],"summary":"不具合はありません。"}')).toEqual({ findings: [], summary: '不具合はありません。' })
+  })
+
+  for (const invalid of [
+    '', 'レビューできませんでした。', 'null', '{}',
+    '{"findings":null,"summary":""}', '{"findings":[]}',
+    JSON.stringify({ findings: [null, FINDINGS.findings[1]], summary: '' }),
+    JSON.stringify({ findings: [{ ...FINDINGS.findings[1], title: undefined }], summary: '' }),
+    JSON.stringify({ findings: [{ ...FINDINGS.findings[1], severity: 'critical' }], summary: '' }),
+    JSON.stringify({ findings: [{ ...FINDINGS.findings[1], line: 1.5 }], summary: '' }),
+    JSON.stringify({ findings: [], summary: '', extra: true }),
+  ]) {
+    test(`rejects an invalid review instead of reporting no findings: ${invalid.slice(0, 70)}`, () => {
+      expect(() => parseReview(invalid)).toThrow(/形式/)
+    })
+  }
+
+  test('does not drop a schema-valid finding just because its title is empty', () => {
+    expect(parseReview(JSON.stringify({ findings: [{ ...FINDINGS.findings[1], title: '' }], summary: '' })).findings).toHaveLength(1)
   })
 
   test('reads progress, the message and failure from events', () => {
@@ -170,6 +232,45 @@ describe('band', () => {
     await ui.unmount()
   })
 
+  for (const headMode of ['no-repository', 'unborn'] as const) {
+    test(`an initial ${headMode} has no review target and stays quiet`, async ($, on) => {
+      const w = world(on)
+      w.headMode = headMode
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      expect(await ui.find({ type: 'Text', text: 'engine' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /確認できません|未レビュー/ })).toBeUndefined()
+      expect(w.status.at(-1)).toBeUndefined()
+      expect(w.spawned).toHaveLength(0)
+      await ui.unmount()
+    })
+  }
+
+  test('an unexplained initial HEAD failure is a measurement error', async ($, on) => {
+    const w = world(on)
+    w.gitFailure = 'git rev-parse HEAD'
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
+    expect(await ui.find({ key: 'remeasure' })).toBeDefined()
+    expect(w.spawned).toHaveLength(0)
+    await ui.unmount()
+  })
+
+  test('a previously reviewed repository becoming unavailable is not an initial non-repository', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    w.headMode = 'no-repository'
+    await endTurn($)
+    expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
+    expect(w.status.at(-1)).toBe('🔍 codex 失敗')
+    expect(await ui.find({ key: 'fix' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('a diff changed after the review asks for one again, marking the old findings', async ($, on) => {
     const w = world(on)
     await $.session.start(START)
@@ -195,6 +296,33 @@ describe('band', () => {
     await ui.unmount()
   })
 
+  for (const answer of ['レビューできませんでした。', JSON.stringify({ summary: '', findings: [null, FINDINGS.findings[1]] })]) {
+    test(`a successful process with an invalid review fails and offers a retry: ${answer.slice(0, 45)}`, async ($, on) => {
+      const w = world(on)
+      w.child = { stdout: events(answer), stderr: '', code: 0 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      expect((await ui.find({ type: 'Text', text: /失敗/ }))?.text).toContain('形式')
+      expect(await ui.find({ key: 'retry' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+      await ui.unmount()
+    })
+  }
+
+  test('a valid empty review is still a successful no-findings result', async ($, on) => {
+    const w = world(on)
+    w.child = { stdout: events('{"findings":[],"summary":"確認済み"}'), stderr: '', code: 0 }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeDefined()
+    expect(await ui.find({ key: 'retry' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('中止 ends a running review and leaves no result', async ($, on) => {
     const w = world(on)
     w.child = { ...w.child, hangMs: 60_000 }
@@ -211,11 +339,12 @@ describe('band', () => {
     await ui.unmount()
   })
 
-  for (const name of ['メモ.txt', 'f250.txt']) {
+  for (const name of ['メモ.txt', 'f250.txt', 'line\nbreak.txt', '"quoted.txt', 'back\\slash.txt', 'tab\tname.txt', 'control\x01name.txt']) {
     test(`an untracked file edited after the review (${name}, among 251) makes the findings old`, async ($, on) => {
       const w = world(on)
       w.untracked = Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`f${i + 1}.txt`, `h${i}`]))
       w.untracked['メモ.txt'] = 'm0'
+      w.untracked[name] = 'before'
       await $.session.start(START)
       const ui = await $.ui.mount(band('terminal'))
       await ui.press({ key: 'review' })
@@ -227,6 +356,96 @@ describe('band', () => {
       await ui.unmount()
     })
   }
+
+  for (const command of ['git rev-parse HEAD', 'git hash-object --stdin-paths', 'git diff HEAD', 'git ls-files -z --others --exclude-standard']) {
+    test(`a failed measurement clears freshness and recovers on the next turn: ${command}`, async ($, on) => {
+      const w = world(on)
+      w.untracked['new.txt'] = 'before'
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      expect(await ui.find({ key: 'fix' })).toBeDefined()
+      w.gitFailure = command
+      w.untracked['new.txt'] = 'after'
+      await endTurn($)
+      expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
+      expect(await ui.find({ key: 'fix' })).toBeUndefined()
+      expect(w.status.at(-1)).toBe('🔍 codex 失敗')
+      w.gitFailure = undefined
+      if (command === 'git hash-object --stdin-paths') await ui.press({ key: 'remeasure' })
+      else await endTurn($)
+      expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('古い')
+      await ui.unmount()
+    })
+  }
+
+  for (const command of ['git rev-parse HEAD', 'git hash-object --stdin-paths', 'git diff HEAD', 'git diff --no-index --no-ext-diff --no-textconv --no-color -- /dev/null link']) {
+    test(`truncated measurement output cannot establish freshness: ${command}`, async ($, on) => {
+      const w = world(on)
+      w.untracked = { 'new.txt': 'before', link: 'target' }
+      w.links = { link: 'target' }
+      w.gitTruncated = command
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
+      expect(await ui.find({ key: 'review' })).toBeUndefined()
+      await ui.unmount()
+    })
+  }
+
+  test('an untracked special file is refused instead of opening a potentially blocking stream', async ($, on) => {
+    const w = world(on)
+    w.untracked = { fifo: 'not regular bytes' }
+    w.nonFiles = ['fifo']
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
+    expect(await ui.find({ key: 'review' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('an incomplete blob list cannot become a fresh result', async ($, on) => {
+    const w = world(on)
+    w.untracked = { 'one.txt': 'one', 'two.txt': 'two' }
+    w.hashOutput = `${'a'.repeat(40)}\n`
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
+    expect(await ui.find({ key: 'review' })).toBeUndefined()
+    await $.command.run({ command: 'codex-review', args: '' })
+    await w.clock.settle()
+    expect(w.spawned).toHaveLength(0)
+    await ui.unmount()
+  })
+
+  test('a dangling symlink does not hide changes to another untracked file', async ($, on) => {
+    const w = world(on)
+    w.untracked = { dangling: 'missing-target', 'new.txt': 'before' }
+    w.links = { dangling: 'missing-target' }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    w.untracked['new.txt'] = 'after'
+    await endTurn($)
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('古い')
+    await ui.unmount()
+  })
+
+  test('retargeting a symlink is a change even when both targets have the same content', async ($, on) => {
+    const w = world(on)
+    w.untracked = { link: 'same target contents' }
+    w.links = { link: 'target-a' }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    w.links.link = 'target-b'
+    await endTurn($)
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('古い')
+    await ui.unmount()
+  })
 })
 
 describe('pane', () => {

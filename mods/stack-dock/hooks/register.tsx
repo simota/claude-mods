@@ -18,8 +18,10 @@ import {
   isRecovered,
   isStackCommand,
   isStackFile,
+  isStopped,
   isUp,
   lineSplitter,
+  logLine,
   parseComposePs,
   parseDoctor,
   phaseOf,
@@ -64,9 +66,10 @@ let isDirty = false
 let isPrimed = false
 
 const basename = (path: string) => path.slice(path.lastIndexOf('/') + 1)
+const isMissing = (err: unknown) => /\bENOENT\b|no such file or directory|(?:command|executable) not found/i.test(String(err))
 
 async function currentPhase($: Api): Promise<Phase> {
-  return phaseOf({ doctor: await read($, doctor), stack: await read($, stack), isRunning: (await read($, run)) !== null, failure: await read($, failure) })
+  return phaseOf({ doctor: await read($, doctor), stack: await read($, stack), isRunning: (await read($, run)) !== null, failure: await read($, failure), note: await read($, registryNote) })
 }
 
 async function setStatus($: Api) {
@@ -92,13 +95,25 @@ async function hasAny($: Api, dir: string, names: readonly string[]) {
 async function refreshDoctor($: Api) {
   const dir = await read($, root)
   if (dir === null) return
-  const ran = await $.process.run(['devrouter', 'doctor', dir], { cwd: dir, timeoutMs: 30_000 }).catch(() => undefined)
+  let missing = false
+  let executionError: string | undefined
+  const ran = await $.process.run(['devrouter', 'doctor', dir], { cwd: dir, timeoutMs: 30_000 }).catch(err => {
+    missing = isMissing(err)
+    executionError = errorLine(String(err), '')
+    return undefined
+  })
+  const checks = ran === undefined ? [] : parseDoctor(ran.stdout)
+  if (ran === undefined && !missing) {
+    checks.push({ level: 'error', name: 'doctor', message: executionError ?? '診断を実行できませんでした' })
+  } else if (ran !== undefined && ((ran.exitCode !== 0 && !checks.some(c => c.level === 'error')) || checks.length === 0)) {
+    checks.push({ level: 'error', name: 'doctor', message: ran.exitCode !== 0 ? errorLine(ran.stderr, ran.stdout) : '診断結果の形式が想定外です（チェックが見つかりません）' })
+  }
   const found: Doctor =
-    ran === undefined
+    missing
       ? { isInstalled: false, checks: [], hasConfig: false, hasCompose: false, hasWorkspace: false }
       : {
           isInstalled: true,
-          checks: parseDoctor(ran.stdout),
+          checks,
           hasConfig: await hasAny($, dir, ['devrouter.yaml', 'devrouter.yml']),
           hasCompose: await hasAny($, dir, ['docker-compose.yaml', 'docker-compose.yml']),
           hasWorkspace: await hasAny($, dir, ['pnpm-workspace.yaml', 'package.json']),
@@ -126,9 +141,13 @@ async function compose($: Api, file: string, args: string[]) {
 /** The root's stack as the registry, Docker and its URLs say it now. */
 async function measure($: Api, dir: string): Promise<Stack | null> {
   const home = await $.env.get('HOME')
-  const text = home === undefined ? undefined : await $.fs.read(`${home}/.devrouter/registry.json`).catch(() => undefined)
+  let readError: string | null = null
+  const text = home === undefined ? undefined : await $.fs.read(`${home}/.devrouter/registry.json`).catch(err => {
+    if (!isMissing(err)) readError = `registry.json を読めません: ${errorLine(String(err), '')}`
+    return undefined
+  })
   if (text === undefined) {
-    await update($, registryNote, () => null)
+    await update($, registryNote, () => readError)
     return null
   }
   const seen = stackOf(text, dir)
@@ -136,6 +155,9 @@ async function measure($: Api, dir: string): Promise<Stack | null> {
   if (seen.stack === undefined) return null
   const ps = await compose($, seen.stack.composeFilePath, ['ps', '--all', '--format', 'json'])
   const containers = ps?.exitCode === 0 ? parseComposePs(ps.stdout) : undefined
+  if (containers === undefined) {
+    await update($, registryNote, () => `docker compose ps を確認できません: ${ps === undefined ? '実行できませんでした' : ps.exitCode !== 0 ? errorLine(ps.stderr, ps.stdout) : '出力の形式が想定外です'}`)
+  }
   const services: Service[] = []
   for (const one of seen.stack.services) {
     const container = containers === undefined ? { state: 'unknown' } : (containers.get(one.composeService) ?? { state: 'missing' })
@@ -153,15 +175,25 @@ async function poll($: Api) {
   isPolling = true
   try {
     const before = await read($, stack)
+    const wasUnavailable = (await read($, registryNote)) !== null
     const now = await measure($, dir)
     await update($, stack, () => now)
     const failed = await read($, failure)
+    const upFailureFeed = failed === null ? null : upFeed(dir, failed)
     if (failed !== null && now !== null && isRecovered(failed, now)) {
       // Brought up since, by Claude or in a terminal: the failure and its feed are over.
       await update($, failure, () => null)
-      await update($, feed, waiting => (waiting?.includes('- devrouter up ') === true ? null : waiting))
+      await update($, feed, waiting => (waiting === upFailureFeed ? null : waiting))
     }
-    if (isPrimed) await tell($, before, now)
+    // An unavailable measurement proves neither a stop nor a previously known failure.
+    if ((await read($, registryNote)) === null) {
+      // A trustworthy recovery ends a service-down feed even if the prior poll was unavailable.
+      // A failed up still needs its own recovery evidence, not merely an older healthy stack.
+      if (isStopped(now) || now?.services.every(one => !isDown(one))) {
+        await update($, feed, waiting => (waiting === upFailureFeed ? waiting : null))
+      }
+      if (isPrimed) await tell($, wasUnavailable ? null : before, now)
+    }
     isPrimed = true
     await setStatus($)
   } finally {
@@ -175,13 +207,12 @@ async function tell($: Api, before: Stack | null, now: Stack | null) {
     const first = now.services[0]
     $.ui.toast(`⛵ ${now.name} 起動${first === undefined ? '' : ` · ${first.url}`}${now.services.length > 1 ? ` ほか${now.services.length - 1}` : ''}`)
   }
-  // Every container stopped (docker compose stop) is a stop, not services going down.
-  if (before !== null && isUp(before) && !isUp(now)) {
+  // A clean stop is different from the last running service crashing.
+  if (before !== null && isUp(before) && isStopped(now)) {
     $.ui.toast(`⛵ ${before.name} 停止`)
-    await update($, feed, () => null)
     return
   }
-  if (now === null || !isUp(now)) return
+  if (now === null || isStopped(now)) return
   const wasDown = new Set((before?.services ?? []).filter(isDown).map(s => s.name))
   const down = now.services.filter(isDown)
   const fresh = down.filter(s => !wasDown.has(s.name))
@@ -191,7 +222,6 @@ async function tell($: Api, before: Stack | null, now: Stack | null) {
   }
   if (down.length === 0 && wasDown.size > 0) {
     $.ui.toast(`⛵ ${now.name} 全サービス応答`)
-    await update($, feed, () => null)
   }
 }
 
@@ -224,7 +254,7 @@ async function bringUp($: Api, isBuild: boolean) {
   const tick = $.clock.every(1000, () => void tickRun($))
   const stream = $.process.spawn({ argv: ['devrouter', 'up', ...(isBuild ? ['--build'] : []), dir], cwd: dir })
   stop = () => void stream.return(undefined as never)
-  const split = lineSplitter()
+  const split = { stdout: lineSplitter(), stderr: lineSplitter() }
   let stdout = ''
   let stderr = ''
   let code: number | null | undefined
@@ -233,8 +263,8 @@ async function bringUp($: Api, isBuild: boolean) {
     for await (const chunk of stream) {
       if (chunk.stream === 'stderr') stderr = (stderr + chunk.text).slice(-16_000)
       else stdout = (stdout + chunk.text).slice(-16_000)
-      const line = split(chunk.text).at(-1)
-      if (line !== undefined) await update($, run, r => (r === null ? r : { ...r, line: line.trim().slice(0, 200) }))
+      const line = split[chunk.stream](chunk.text).at(-1)
+      if (line !== undefined) await update($, run, r => (r === null ? r : { ...r, line: logLine(line.trim()).slice(0, 200) }))
     }
     code = (await stream.result).code
   } catch (err) {
@@ -332,7 +362,7 @@ async function statusOf($: Api) {
       container: one.state,
       http: one.http.kind === 'ok' ? one.http.status : one.http.kind === 'bad' ? one.http.text : one.http.kind,
     })),
-    problem: p.kind === 'failed' ? p.failure.error : p.kind === 'broken' ? `${p.check.name}: ${p.check.message}` : p.kind === 'no-docker' ? p.text : null,
+    problem: p.kind === 'failed' ? p.failure.error : p.kind === 'broken' ? `${p.check.name}: ${p.check.message}` : p.kind === 'no-docker' || p.kind === 'unavailable' ? p.text : null,
   }
 }
 
@@ -469,6 +499,17 @@ export const register: Register = (on, options) => {
             {close}
           </Box>,
         )
+      case 'unavailable':
+        return stack(
+          <Box>
+            <Text color="yellow" wrap="truncate-end">
+              devrouter · 状態を確認できません: {p.text}{' '}
+            </Text>
+            {recheck}
+            {detail}
+            {close}
+          </Box>,
+        )
       case 'unset':
         return stack(
           <Box>
@@ -548,15 +589,17 @@ export const register: Register = (on, options) => {
           ? `起動中 ${clockText(running?.elapsedS ?? 0)} · ${running?.line ?? ''}`
           : p.kind === 'failed'
             ? `❌ up 失敗: ${p.failure.error}`
-            : p.kind === 'no-docker'
-              ? 'Docker が動いていません'
-              : p.kind === 'unset'
-                ? '未設定: devrouter.yaml がありません'
-                : p.kind === 'broken'
-                  ? `❌ doctor: ${p.check.name}: ${p.check.message}`
-                  : p.kind === 'ready'
-                    ? `停止中 · ${name}`
-                    : `${p.kind === 'healthy' ? '✅' : '❌'} ${p.stack.name} ${p.stack.services.length - (p.kind === 'degraded' ? p.down.length : 0)}/${p.stack.services.length}`
+            : p.kind === 'unavailable'
+              ? '状態を確認できません'
+              : p.kind === 'no-docker'
+                ? 'Docker が動いていません'
+                : p.kind === 'unset'
+                  ? '未設定: devrouter.yaml がありません'
+                  : p.kind === 'broken'
+                    ? `❌ doctor: ${p.check.name}: ${p.check.message}`
+                    : p.kind === 'ready'
+                      ? `停止中 · ${name}`
+                      : `${p.kind === 'healthy' ? '✅' : '❌'} ${p.stack.name} ${p.stack.services.length - (p.kind === 'degraded' ? p.down.length : 0)}/${p.stack.services.length}`
     const color = (one: Service) => (isDown(one) ? 'red' : one.http.kind === 'unrouted' || one.http.kind === 'tls' ? 'yellow' : 'green')
     const httpText = (h: Http) =>
       h.kind === 'ok' ? `HTTP ${h.status}` : h.kind === 'bad' ? h.text : h.kind === 'unrouted' ? 'ルート不明 (Traefik 404)' : h.kind === 'tls' ? 'HTTP 確認不可（証明書）' : ''

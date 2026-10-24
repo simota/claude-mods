@@ -18,6 +18,7 @@ declare module 'claude-code' {
       run: Run | null
       result: Result | null
       error: string | null
+      measurementError: string | null
       dismissed: string[]
       /** The diff key the band was closed for: it stays down until the diff changes. */
       hiddenFor: string | null

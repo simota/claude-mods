@@ -1,4 +1,4 @@
-import type { Failure, JobResult } from '../types'
+import type { Failure, JobResult, Result } from '../types'
 
 export type Mode = 'container' | 'host' | 'apple-container'
 
@@ -116,6 +116,22 @@ export const logReader = () => {
 export const jobLabel = (f: Failure) => `${f.workflow} / ${f.jobId}`
 
 export const failureLabel = (f: Failure) => (f.step === '' ? jobLabel(f) : `${jobLabel(f)} › ${f.step}`)
+
+/** Matrix logs name a leg as `job (values)`; -j and the summary use the workflow's parent job ID. */
+export const rerunJobId = (label: string) => /^([A-Za-z0-9_-]+) \([\s\S]*\)$/.exec(label)?.[1] ?? label
+
+/** A partial run replaces only the jobs it actually reports, and only on the same tree. */
+export const withJobResults = (previous: Result | null, fresh: Result): Result => {
+  if (previous === null || previous.key !== fresh.key) return fresh
+  const rerun = new Map(fresh.jobs.map(job => [job.job, job]))
+  const jobs = previous.jobs.map(job => rerun.get(job.job) ?? job)
+  const known = new Set(previous.jobs.map(job => job.job))
+  jobs.push(...fresh.jobs.filter(job => !known.has(job.job)))
+  const failures = [...previous.failures.filter(f => !rerun.has(`${f.workflow} / ${rerunJobId(f.jobId)}`)), ...fresh.failures]
+  // A prior failure outside any reported job cannot be cleared by rerunning a job.
+  const unexplained = !previous.ok && previous.failures.length === 0 && previous.jobs.every(job => job.result === 'success' || job.result === 'skipped')
+  return { ...fresh, jobs, failures, ok: fresh.ok && !unexplained && failures.length === 0 && jobs.every(job => job.result === 'success' || job.result === 'skipped') }
+}
 
 /** Why the run ended without a summary, in the words the band shows. */
 export const problemText = (stderr: string, code: number | null) => {

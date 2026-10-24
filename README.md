@@ -358,6 +358,8 @@ When it ends, the band shows the most severe finding and how many more (`🔍 hi
 
 The diff is measured again after each turn; once it changes, the findings are marked 古い and the band offers a review again. 閉じる hides the band until the diff changes. A failure says why (`codex login が必要`, `codex が見つかりません`, Codex's own error) with 再試行. Codex reads the repository and may run commands in its read-only sandbox; Codex always runs `gpt-6.1-sol` at medium reasoning effort; what it reads is sent to the model provider your Codex is set up with. Nothing is kept past the session.
 
+An unreadable diff or untracked file is a measurement failure: the previous review is not considered current. Untracked names containing quotes or newlines, and symbolic links (including broken ones), are included in change detection. A response that does not match the review schema is a failed review with a retry, never “no findings”; a valid empty findings list still means the review found no defects.
+
 | Option | Default | |
 | --- | --- | --- |
 | `timeoutMin` | `15` | a review still running after this many minutes is stopped |
@@ -369,6 +371,8 @@ Needs [runthrough](https://github.com/simota/runthrough) on `PATH`, and Docker r
 When it ends, a pass shows `CI ✅ 3/3 1:12`; a failure shows the first failing step and how many more (`CI ❌ CI / test › Run npm test · ほか1件`), and a toast says how many. **Claude に頼む** puts each failure with its last 40 log lines into the prompt, quoted as data, for you to send; nothing is sent by itself. **詳細** and `/ci` open the pane: every job's result, each failure's log tail, 直させる (that one alone) and このジョブだけ (reruns it with `-j`). `/ci-run` starts a run as the button does. The status line keeps `CI ✅`, `CI ❌ 2` or `CI 古い`.
 
 The tree is measured again after each turn; once it changes, the result is marked 古い and the band offers a run again. 閉じる hides the band until the tree changes. A run that ends without runthrough's summary says why (its last error line) with 再試行. runthrough reads `.secrets`, `.vars` and `.env` as it does by default and masks secrets in its logs; the mod never passes `--insecure-secrets`. In `host` mode the workflows' commands run on this machine, outside any container. Nothing is kept past the session.
+
+A single-job rerun is labelled as a partial result on the band, status line and pane. It keeps the other known failures and offers a full run; its success does not establish that the whole workflow passes. Results from a different tree remain marked old. With `scope: committed`, planning and event selection also read HEAD, just as execution does. A failed tree measurement is shown as an error, rather than leaving an old success current; untracked names containing quotes or newlines and symbolic links are included.
 
 | Option | Default | |
 | --- | --- | --- |
@@ -383,6 +387,8 @@ The tree is measured again after each turn; once it changes, the result is marke
 Needs [devrouter](https://github.com/simota/devrouter) on `PATH` and Docker. At session start, after a turn that edited `devrouter.yaml`, a compose file, `package.json` or `pnpm-workspace.yaml`, and after any `devrouter` or `docker compose` command Claude runs, the mod runs `devrouter doctor` on the repository root (read-only) and reads `~/.devrouter/registry.json`. The band above the prompt then shows one state: `devrouter · app 2 services [ 起動 ]` when the stack is ready but stopped; `devrouter · 未設定（compose あり）` with init で生成 (`devrouter init`, never `--force`; only when a compose file exists) and Claude に作らせる (a prompt, after devrouter's `prompts/generate-config.md`, to write `devrouter.yaml` and `docker-compose.devrouter.yml`); `devrouter ❌ doctor: …` for another doctor error; or `Docker が動いていません` with 再確認. Nothing is drawn without devrouter, or when the root has no devrouter config, compose file or workspace.
 
 起動 runs `devrouter up <root>` (再ビルドして起動 in the pane adds `--build`) and streams it: the band shows the elapsed time and compose's last line, with 止める. A failure shows its `error:` line; **Claude に頼む** puts it, doctor's findings and the output's last lines into the prompt, quoted as data, for you to send.
+
+Live progress is assembled separately for stdout and stderr, then masked before it is stored or shortened, using the same credential patterns as the retained logs. A stack is ready to start automatically only when every container is absent, newly created, or exited with status 0. Other non-running states, including `dead`, `restarting` and `paused`, are shown as degraded even when no service is running. If the registry, container list or doctor result cannot be read reliably, the mod shows a diagnostic and offers a recheck; an unknown state does not trigger automatic startup. Once a reliable check confirms recovery or a clean stop, a pending service-down notification is cleared; a failed `up` still needs its own recovery evidence.
 
 While the stack is up, every `pollSec` seconds the mod checks each service's container (`docker compose ps`) and URL through Traefik. A running stack draws no band, only `⛵ app 2/2` in the status line, with toasts when it starts, stops or a service goes down. A service that exited, or answers 5xx or not at all, shows as `devrouter ❌ api exited (1) · ほか1件` with Claude に頼む (its last 40 log lines, credentials masked as zukan does). A certificate the host does not trust and Traefik's own 404 (no router) are shown in yellow in the pane, not taken for down. `/stack` opens the pane: each service with its URL (press to copy), container state, HTTP status and recent log lines, 開く (`devrouter open`) and 直させる; 再起動, 再ビルドして起動, 停止 (`devrouter down`) and doctor. `/stack-up` and `/stack-down` act as the buttons do. 閉じる hides the band until the state changes.
 
@@ -404,7 +410,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts`, `mods/hit-rate/hooks/shell.ts` and `mods/kachi/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger and artifact-shelf is zukan's). `scripts/check-copies.sh` fails when a copy drifts.
+Mods share no code, so a few files are copies of another mod's (`mods/zukan/hooks/shell.ts`, `mods/hit-rate/hooks/shell.ts` and `mods/kachi/hooks/shell.ts` are done-gate's; `mask.ts` in side-effect-ledger, artifact-shelf, browser-cam and stack-dock is zukan's; ci-rehearsal's `fingerprint.ts` is cross-check's). `scripts/check-copies.sh` fails when a copy drifts.
 
 ## License
 
