@@ -26,6 +26,11 @@ const events = (message: string) =>
 
 type World = {
   patch: string
+  cwd: string
+  repoRoot: string
+  rootFiles: Record<string, string>
+  statPaths: string[]
+  normalizeLineEndings: boolean
   // Untracked files by name, each with the blob hash git would give its content.
   untracked: Record<string, string>
   links: Record<string, string>
@@ -46,6 +51,11 @@ type World = {
 function world(on: On): World {
   const w: World = {
     patch: 'diff --git a/m.py b/m.py\n+def avg(xs):\n',
+    cwd: '/w/app',
+    repoRoot: '/w/app',
+    rootFiles: {},
+    statPaths: [],
+    normalizeLineEndings: false,
     untracked: {},
     links: {},
     nonFiles: [],
@@ -56,6 +66,7 @@ function world(on: On): World {
     clock: mock.clock(on, { now: 1_000 }),
   }
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: w.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', () => ({ value: undefined }))
@@ -69,7 +80,8 @@ function world(on: On): World {
     return { isFilled: true } as never
   })
   on('process.run', ($, e) => {
-    const argv = e.argv.join(' ')
+    // Fault injection names the Git operation independently of clean-filter mode.
+    const argv = e.argv.filter(arg => arg !== '--no-filters').join(' ')
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: argv === w.gitTruncated } }) as never
     const failed = () => ({ value: { exitCode: 128, stdout: '', stderr: 'cannot read the working tree' } }) as never
     if (argv === w.gitFailure) return failed()
@@ -95,8 +107,22 @@ function world(on: On): World {
           /^[0-3]/.test(escaped) ? String.fromCharCode(parseInt(escaped, 8)) : ({ a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', '"': '"', '\\': '\\' }[escaped] ?? escaped),
         )
       })
-      if (names.some(name => name === undefined || !(name in w.untracked) || name in w.links)) return failed()
-      return ok(names.map(name => `${hash(w.untracked[name!]!).padStart(40, '0')}\n`).join(''))
+      // Unlike positional hash-object paths, --stdin-paths interprets a relative
+      // name from the repository root, even when the process cwd is a subdirectory.
+      const contents = names.map(name => {
+        if (name === undefined) return undefined
+        const absolute = name.startsWith('/') ? name : `${w.repoRoot}/${name}`
+        if (absolute.startsWith(`${w.cwd}/`)) {
+          const relative = absolute.slice(w.cwd.length + 1)
+          return relative in w.links ? undefined : w.untracked[relative]
+        }
+        return absolute.startsWith(`${w.repoRoot}/`) ? w.rootFiles[absolute.slice(w.repoRoot.length + 1)] : undefined
+      })
+      if (contents.some(bytes => bytes === undefined)) return failed()
+      return ok(contents.map(bytes => {
+        const content = w.normalizeLineEndings && !e.argv.includes('--no-filters') ? bytes!.replace(/\r\n/g, '\n') : bytes!
+        return `${hash(content).padStart(40, '0')}\n`
+      }).join(''))
     }
     if (e.argv.slice(0, 8).join(' ') === 'git diff --no-index --no-ext-diff --no-textconv --no-color -- /dev/null') {
       const name = e.argv[8]!
@@ -108,6 +134,7 @@ function world(on: On): World {
   })
   on('fs.stat', ($, e) => {
     // The test engine resolves filesystem paths against the plugin's directory.
+    w.statPaths.push(e.path)
     const name = Object.keys(w.untracked).find(name => e.path === name || e.path.endsWith(`/${name}`))
     if (name === undefined) throw new Error('ENOENT')
     return { value: { kind: w.nonFiles.includes(name) ? 'other' : 'file', size: 4, mtimeMs: 0, isLink: name in w.links } }
@@ -311,6 +338,55 @@ describe('band', () => {
     })
   }
 
+  for (const action of ['dismiss', 'cancel retry']) {
+    test(`an incomplete review followed by ${action} cannot restore an older no-findings result`, async ($, on) => {
+      const w = world(on)
+      w.child = { stdout: events(JSON.stringify({ findings: [], summary: 'previous review passed' })), stderr: '', code: 0 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeDefined()
+      w.child = { stdout: '', stderr: 'incomplete latest review', code: 1 }
+      await $.command.run({ command: 'codex-review', args: '' })
+      await w.clock.settle()
+      expect(await ui.find({ type: 'Text', text: /失敗/ })).toBeDefined()
+      if (action === 'dismiss') {
+        await ui.press({ key: 'close' })
+      } else {
+        w.child = { stdout: events(JSON.stringify({ findings: [], summary: 'new result' })), stderr: '', code: 0, hangMs: 60_000 }
+        await ui.press({ key: 'retry' })
+        await w.clock.advance(3_000)
+        await ui.press({ key: 'cancel' })
+        await w.clock.settle()
+      }
+      expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+      expect(w.status.at(-1)).toBe('🔍 codex 失敗')
+      await ui.unmount()
+      const desktop = await $.ui.mount(band('desktop'))
+      expect(await desktop.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+      await desktop.unmount()
+      const pane = await $.ui.mount({
+        plugin: 'cross-check',
+        surface: 'terminal',
+        component: 'Pane',
+        requestId: 'cross-check',
+        viewport: { columns: 80, rows: 24 },
+        props: { title: 'Codex レビュー', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+      })
+      expect(await pane.find({ type: 'Text', text: /失敗: incomplete latest review/ })).toBeDefined()
+      w.child = { stdout: events(JSON.stringify({ findings: [], summary: 'fresh review passed' })), stderr: '', code: 0 }
+      await pane.press({ key: 'review' })
+      await w.clock.settle()
+      expect(await pane.find({ type: 'Text', text: /失敗:/ })).toBeUndefined()
+      expect(w.status.at(-1)).toBe('🔍 codex 0件')
+      await pane.unmount()
+      const recovered = await $.ui.mount(band('terminal'))
+      expect((await recovered.find({ type: 'Text', text: /指摘なし/ }))?.text).toContain('fresh review passed')
+      await recovered.unmount()
+    })
+  }
+
   test('a valid empty review is still a successful no-findings result', async ($, on) => {
     const w = world(on)
     w.child = { stdout: events('{"findings":[],"summary":"確認済み"}'), stderr: '', code: 0 }
@@ -356,6 +432,39 @@ describe('band', () => {
       await ui.unmount()
     })
   }
+
+  test('untracked paths belong to the session directory, even in a nested checkout directory', async ($, on) => {
+    const w = world(on)
+    w.cwd = '/w/app/packages/client'
+    w.rootFiles = { 'new.txt': 'different file at the repository root' }
+    w.untracked = { 'new.txt': 'body', dangling: 'missing-target' }
+    w.links = { dangling: 'missing-target' }
+    await $.session.start({ ...START, cwd: w.cwd })
+    expect(w.statPaths).toEqual([`${w.cwd}/new.txt`, `${w.cwd}/dangling`])
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ key: 'fix' })).toBeDefined()
+    w.untracked['new.txt'] = 'changed in the nested session directory'
+    await endTurn($)
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('古い')
+    await ui.unmount()
+  })
+
+  test('a raw untracked edit invalidates review even when Git clean filters normalize it away', async ($, on) => {
+    const w = world(on)
+    w.normalizeLineEndings = true
+    w.untracked = { 'run.sh': '#!/bin/sh\necho ok\n' }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ key: 'fix' })).toBeDefined()
+    w.untracked['run.sh'] = '#!/bin/sh\r\necho ok\r\n'
+    await endTurn($)
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('古い')
+    await ui.unmount()
+  })
 
   for (const command of ['git rev-parse HEAD', 'git hash-object --stdin-paths', 'git diff HEAD', 'git ls-files -z --others --exclude-standard']) {
     test(`a failed measurement clears freshness and recovers on the next turn: ${command}`, async ($, on) => {

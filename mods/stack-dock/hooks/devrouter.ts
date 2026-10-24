@@ -114,8 +114,8 @@ export const isUp = (s: Stack | null) => s !== null && s.services.some(one => on
 /** Only absent, not-yet-started or cleanly exited containers establish a stopped stack. */
 export const isStopped = (s: Stack | null) => s === null || s.services.every(isStoppedContainer)
 
-/** An up that succeeded after the failure, wherever it ran: lastUpAt is RFC 3339 to the second. */
-export const isRecovered = (f: Failure, s: Stack) => Date.parse(s.lastUpAt) >= Math.floor(f.at / 1000) * 1000
+/** A success must be provably later: a second-precision timestamp in the failure's second is ambiguous. */
+export const isRecovered = (f: Failure, s: Stack) => Date.parse(s.lastUpAt) > f.at
 
 export const downLabel = (s: Service) =>
   s.state === 'running' ? `${s.name} ${s.http.kind === 'bad' ? s.http.text : ''}`.trim() : `${s.name} ${s.state}${s.exitCode === undefined ? '' : ` (${s.exitCode})`}`

@@ -105,6 +105,8 @@ async function refreshDoctor($: Api) {
   const checks = ran === undefined ? [] : parseDoctor(ran.stdout)
   if (ran === undefined && !missing) {
     checks.push({ level: 'error', name: 'doctor', message: executionError ?? '診断を実行できませんでした' })
+  } else if (ran !== undefined && (ran.isStdoutTruncated || ran.isStderrTruncated)) {
+    checks.push({ level: 'error', name: 'doctor', message: '診断結果が切り詰められたため、状態を確認できません' })
   } else if (ran !== undefined && ((ran.exitCode !== 0 && !checks.some(c => c.level === 'error')) || checks.length === 0)) {
     checks.push({ level: 'error', name: 'doctor', message: ran.exitCode !== 0 ? errorLine(ran.stderr, ran.stdout) : '診断結果の形式が想定外です（チェックが見つかりません）' })
   }
@@ -154,9 +156,12 @@ async function measure($: Api, dir: string): Promise<Stack | null> {
   await update($, registryNote, () => seen.note ?? null)
   if (seen.stack === undefined) return null
   const ps = await compose($, seen.stack.composeFilePath, ['ps', '--all', '--format', 'json'])
-  const containers = ps?.exitCode === 0 ? parseComposePs(ps.stdout) : undefined
+  const containers = ps?.exitCode === 0 && !ps.isStdoutTruncated && !ps.isStderrTruncated ? parseComposePs(ps.stdout) : undefined
   if (containers === undefined) {
-    await update($, registryNote, () => `docker compose ps を確認できません: ${ps === undefined ? '実行できませんでした' : ps.exitCode !== 0 ? errorLine(ps.stderr, ps.stdout) : '出力の形式が想定外です'}`)
+    const reason = ps === undefined ? '実行できませんでした'
+      : ps.isStdoutTruncated || ps.isStderrTruncated ? '出力が切り詰められました'
+      : ps.exitCode !== 0 ? errorLine(ps.stderr, ps.stdout) : '出力の形式が想定外です'
+    await update($, registryNote, () => `docker compose ps を確認できません: ${reason}`)
   }
   const services: Service[] = []
   for (const one of seen.stack.services) {
@@ -180,13 +185,14 @@ async function poll($: Api) {
     await update($, stack, () => now)
     const failed = await read($, failure)
     const upFailureFeed = failed === null ? null : upFeed(dir, failed)
-    if (failed !== null && now !== null && isRecovered(failed, now)) {
+    const isAvailable = (await read($, registryNote)) === null
+    if (isAvailable && failed !== null && now !== null && isRecovered(failed, now)) {
       // Brought up since, by Claude or in a terminal: the failure and its feed are over.
       await update($, failure, () => null)
       await update($, feed, waiting => (waiting === upFailureFeed ? null : waiting))
     }
     // An unavailable measurement proves neither a stop nor a previously known failure.
-    if ((await read($, registryNote)) === null) {
+    if (isAvailable) {
       // A trustworthy recovery ends a service-down feed even if the prior poll was unavailable.
       // A failed up still needs its own recovery evidence, not merely an older healthy stack.
       if (isStopped(now) || now?.services.every(one => !isDown(one))) {

@@ -1,6 +1,6 @@
 {
   "name": "cross-check",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A second opinion from Codex in one press: the band above the prompt reviews the current diff with codex exec (read-only), shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; a /codex pane lists them",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

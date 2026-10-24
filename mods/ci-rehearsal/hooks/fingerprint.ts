@@ -18,10 +18,14 @@ export async function untrackedHashes($: EngineInterface, names: readonly string
   const files: string[] = []
   const links: string[] = []
   try {
+    // Git lists paths relative to the session cwd; fs paths otherwise resolve
+    // against the plugin directory. Keep both reads on the same working tree.
+    const cwd = await $.session.cwd()
+    const directory = cwd.replace(/\/$/, '')
     // Bound outstanding host calls while retaining one hash process for regular files.
     for (let start = 0; start < names.length; start += 32) {
       const batch = names.slice(start, start + 32)
-      const stats = await Promise.all(batch.map(name => $.fs.stat(name)))
+      const stats = await Promise.all(batch.map(name => $.fs.stat(`${directory}/${name}`)))
       for (const [i, stat] of stats.entries()) {
         if (stat.isLink) links.push(batch[i]!)
         else if (stat.kind === 'file') files.push(batch[i]!)
@@ -31,7 +35,10 @@ export async function untrackedHashes($: EngineInterface, names: readonly string
 
     let blobs: string[] = []
     if (files.length > 0) {
-      const ran = await $.process.run(['git', 'hash-object', '--stdin-paths'], { stdin: `${files.map(quotedPath).join('\n')}\n` })
+      // A worktree run reads the raw bytes, before clean filters or EOL normalization.
+      // --stdin-paths resolves relative names from the repository root, not cwd.
+      const paths = files.map(name => quotedPath(`${directory}/${name}`))
+      const ran = await $.process.run(['git', 'hash-object', '--no-filters', '--stdin-paths'], { cwd, stdin: `${paths.join('\n')}\n` })
       blobs = ran.stdout.trimEnd().split('\n')
       if (ran.exitCode !== 0 || ran.isStdoutTruncated || blobs.length !== files.length || blobs.some(blob => !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(blob))) {
         throw failed()
@@ -39,7 +46,7 @@ export async function untrackedHashes($: EngineInterface, names: readonly string
     }
     const entries = files.map((name, i) => [name, 'file', blobs[i]])
     for (const name of links) {
-      const ran = await $.process.run(['git', 'diff', '--no-index', '--no-ext-diff', '--no-textconv', '--no-color', '--', '/dev/null', name])
+      const ran = await $.process.run(['git', 'diff', '--no-index', '--no-ext-diff', '--no-textconv', '--no-color', '--', '/dev/null', name], { cwd })
       // A non-empty symlink against /dev/null is a difference (exit 1), not an error.
       if (ran.exitCode !== 1 || ran.isStdoutTruncated || !ran.stdout.includes('new file mode 120000\n')) throw failed()
       entries.push([name, 'link', ran.stdout])

@@ -54,11 +54,38 @@ export const lineSplitter = () => {
   }
 }
 
-type Line = { workflow?: string; job?: string; msg?: string; result?: string; ok?: boolean; jobs?: JobResult[]; secs?: number }
-
 export type Summary = { ok: boolean; jobs: JobResult[]; secs: number }
 
 export type Seen = { job?: string; isJobDone?: boolean }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const isPassing = (job: JobResult) => job.result === 'success' || job.result === 'skipped'
+
+/** The JSON summary is evidence only when its required fields and verdict agree. */
+function readSummary(line: Record<string, unknown>): Summary {
+  if (typeof line.ok !== 'boolean' || !Array.isArray(line.jobs) || typeof line.secs !== 'number' || !Number.isFinite(line.secs) || line.secs < 0 ||
+    !line.jobs.every(job => isRecord(job) && typeof job.job === 'string' && job.job.trim() !== '' &&
+      ['success', 'failure', 'cancelled', 'skipped'].includes(job.result as string))) {
+    throw new Error('runthrough のまとめ行の形式が想定外です')
+  }
+  const jobs = line.jobs as JobResult[]
+  // A cancelled workflow may legitimately report ok:false with no jobs. Nothing
+  // run is never evidence of success; skipped jobs are still reported as jobs.
+  if (line.ok && (jobs.length === 0 || !jobs.every(isPassing))) {
+    throw new Error('runthrough のまとめ行の判定とジョブ結果が矛盾しています')
+  }
+  return { ok: line.ok, jobs, secs: line.secs }
+}
+
+/** Job-level continue-on-error can forgive a failure after its step logs were printed. */
+function unresolvedFailures(failures: readonly Failure[], jobs: readonly JobResult[]): Failure[] {
+  const passed = new Set(jobs.filter(isPassing).map(job => job.job))
+  // Workflow names need not be unique: conflicting outcomes never prove success.
+  for (const job of jobs) if (!isPassing(job)) passed.delete(job.job)
+  return failures.filter(f => !passed.has(`${f.workflow} / ${rerunJobId(f.jobId)}`))
+}
 
 /**
  * Reads `runthrough --json` line by line: each job's current step and its last lines, a failure
@@ -70,24 +97,27 @@ export const logReader = () => {
   let summary: Summary | undefined
 
   const read = (text: string): Seen => {
-    let line: Line
+    let value: unknown
     try {
-      line = JSON.parse(text) as Line
+      value = JSON.parse(text) as unknown
     } catch {
       return {}
     }
-    if (typeof line.ok === 'boolean') {
-      summary = { ok: line.ok, jobs: line.jobs ?? [], secs: line.secs ?? 0 }
+    if (!isRecord(value)) return {}
+    const line = value
+    if ('ok' in line) {
+      summary = readSummary(line)
       return {}
     }
-    const { workflow = '', job } = line
-    if (job === undefined) {
+    const workflow = typeof line.workflow === 'string' ? line.workflow : ''
+    const job = line.job
+    if (typeof job !== 'string') {
       return {}
     }
     if (line.result !== undefined) {
       return { isJobDone: true }
     }
-    const msg = line.msg ?? ''
+    const msg = typeof line.msg === 'string' ? line.msg : ''
     const key = `${workflow}\0${job}`
     const state = jobs.get(key) ?? { step: '', tail: [], hasFailed: false }
     jobs.set(key, state)
@@ -110,7 +140,7 @@ export const logReader = () => {
     return { job }
   }
 
-  return { read, failures: () => failures, summary: () => summary }
+  return { read, failures: () => summary === undefined ? failures : unresolvedFailures(failures, summary.jobs), summary: () => summary }
 }
 
 export const jobLabel = (f: Failure) => `${f.workflow} / ${f.jobId}`
@@ -123,14 +153,14 @@ export const rerunJobId = (label: string) => /^([A-Za-z0-9_-]+) \([\s\S]*\)$/.ex
 /** A partial run replaces only the jobs it actually reports, and only on the same tree. */
 export const withJobResults = (previous: Result | null, fresh: Result): Result => {
   if (previous === null || previous.key !== fresh.key) return fresh
-  const rerun = new Map(fresh.jobs.map(job => [job.job, job]))
-  const jobs = previous.jobs.map(job => rerun.get(job.job) ?? job)
-  const known = new Set(previous.jobs.map(job => job.job))
-  jobs.push(...fresh.jobs.filter(job => !known.has(job.job)))
-  const failures = [...previous.failures.filter(f => !rerun.has(`${f.workflow} / ${rerunJobId(f.jobId)}`)), ...fresh.failures]
+  const rerun = new Set(fresh.jobs.map(job => job.job))
+  // Display labels are not unique identities: two workflows can share a name
+  // and job ID. Replace each reported group with all its fresh outcomes.
+  const jobs = [...previous.jobs.filter(job => !rerun.has(job.job)), ...fresh.jobs]
+  const failures = unresolvedFailures([...previous.failures.filter(f => !rerun.has(`${f.workflow} / ${rerunJobId(f.jobId)}`)), ...fresh.failures], jobs)
   // A prior failure outside any reported job cannot be cleared by rerunning a job.
-  const unexplained = !previous.ok && previous.failures.length === 0 && previous.jobs.every(job => job.result === 'success' || job.result === 'skipped')
-  return { ...fresh, jobs, failures, ok: fresh.ok && !unexplained && failures.length === 0 && jobs.every(job => job.result === 'success' || job.result === 'skipped') }
+  const unexplained = !previous.ok && previous.failures.length === 0 && previous.jobs.every(isPassing)
+  return { ...fresh, jobs, failures, ok: fresh.ok && !unexplained && failures.length === 0 && jobs.every(isPassing) }
 }
 
 /** Why the run ended without a summary, in the words the band shows. */
