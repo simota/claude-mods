@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click, Codex cross-check, local CI rehearsal",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click, Codex cross-check, local CI rehearsal, devrouter stack dock",
   "owner": {
     "name": "simota"
   },
@@ -139,6 +139,11 @@
       "name": "ci-rehearsal",
       "source": "./mods/ci-rehearsal",
       "description": "CI before the push, in one press: the band above the prompt runs the push workflows with runthrough, shows the failing job and step with the count, and puts the failures and their log tails into the prompt for Claude to fix when asked; /ci lists every job"
+    },
+    {
+      "name": "stack-dock",
+      "source": "./mods/stack-dock",
+      "description": "The repository's devrouter stack in one press: the band above the prompt says whether it is unset, stopped or up, starts it with devrouter up, shows each service's URL and health in the status line and a /stack pane, and puts doctor's findings and the failing logs into the prompt for Claude to fix when asked"
     }
   ]
 }

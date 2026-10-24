@@ -1,0 +1,34 @@
+{
+  "name": "stack-dock",
+  "version": "0.1.0",
+  "description": "The repository's devrouter stack in one press: the band above the prompt says whether it is unset, stopped or up, starts it with devrouter up, shows each service's URL and health in the status line and a /stack pane, and puts doctor's findings and the failing logs into the prompt for Claude to fix when asked",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "auto": {
+      "type": "string",
+      "title": "Start on its own",
+      "description": "session-start runs devrouter up when a session starts and the stack is ready but stopped; off waits for a press",
+      "options": ["off", "session-start"],
+      "default": "off"
+    },
+    "stopOnExit": {
+      "type": "boolean",
+      "title": "Stop on exit",
+      "description": "Run devrouter down when the session ends; off by default, as devrouter stacks outlive sessions",
+      "default": false
+    },
+    "feed": {
+      "type": "boolean",
+      "title": "Feed Claude",
+      "description": "Attach a service going down, or devrouter up failing, to the next prompt typed at an idle prompt; on by default",
+      "default": true
+    },
+    "pollSec": {
+      "type": "number",
+      "title": "Poll (seconds)",
+      "description": "How often a running stack's containers and URLs are checked, 5 to 60; 10 by default",
+      "default": 10
+    }
+  }
+}

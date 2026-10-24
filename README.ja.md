@@ -33,6 +33,7 @@
 | `kachi` | 直した結果として落ちていたテスト・ビルド・型チェックが通った瞬間だけ、入力欄の上を緑の光が一度走って短い音が鳴り、その結果行に何回目で・何分赤だったかが残る。それ以外は、チェックが初めて赤になったときの薄い 1 行のほかは何も出さない |
 | `cross-check` | ボタンひとつで Codex にセカンドオピニオンを頼む: 入力欄の上の帯から今の差分を `codex exec`（読み取り専用 sandbox）でレビューし、最上位の指摘と件数を出し、頼めば指摘を入力欄に入れて Claude に直させる。`/codex` で一覧 |
 | `ci-rehearsal` | プッシュ前の CI をボタンひとつで: 入力欄の上の帯から push のワークフローを `runthrough` でローカル実行し、落ちたジョブとステップと件数を出し、頼めば失敗とログ末尾を入力欄に入れて Claude に直させる。`/ci` でジョブ一覧 |
+| `stack-dock` | devrouter の開発環境をボタンひとつで: 入力欄の上の帯がこのリポジトリのスタックの状態（未設定・停止中・起動中・失敗）を示し、押すと `devrouter up` で起動し、サービスごとの URL と生死をステータスラインと `/stack` に出し、頼めば doctor の結果と落ちたログを入力欄に入れて Claude に直させる |
 
 ## インストール
 
@@ -376,6 +377,23 @@ Codex CLI（`codex`）が `PATH` にあり、ログイン済みであること�
 | `event` | `push` | ワークフローを起動するイベント。このブランチで何も走らなければ、一覧にある別のイベントを使う |
 | `auto` | `off` | `turn-end`: Claude のターンが終わり、前回の結果からツリーが変わっていれば実行 |
 | `timeoutMin` | `20` | この分数を過ぎても終わらない実行は止める |
+
+### stack-dock
+
+[devrouter](https://github.com/simota/devrouter) が `PATH` にあり、Docker が使えることが前提です。セッション開始時、`devrouter.yaml`・compose ファイル・`package.json`・`pnpm-workspace.yaml` を編集したターンの終わり、Claude が `devrouter` や `docker compose` のコマンドを実行した直後に、リポジトリのルートで `devrouter doctor`（読み取りのみ）を実行し、`~/.devrouter/registry.json` を読みます。入力欄の上の帯には状態が 1 つ出ます: 準備ができていて止まっていれば `devrouter · app 2 services [ 起動 ]`。設定がなければ `devrouter · 未設定（compose あり）` と、init で生成（`devrouter init`。`--force` は付けず、compose ファイルがあるときだけ）と Claude に作らせる（devrouter の `prompts/generate-config.md` に沿って `devrouter.yaml` と `docker-compose.devrouter.yml` を作らせる依頼文）。そのほかの doctor のエラーは `devrouter ❌ doctor: …`、Docker が動いていなければ `Docker が動いていません` と 再確認。devrouter がないとき、ルートに devrouter の設定・compose ファイル・workspace がないときは何も出しません。
+
+起動 で `devrouter up <root>` を実行し（ペインの 再ビルドして起動 は `--build` 付き）、出力を流して帯に経過時間と compose の最後の行を出します。止める で中断できます。失敗すると `error:` の行が出て、**Claude に頼む** はそれと doctor の結果、出力の末尾をデータとして引用した依頼文を入力欄に入れます。送るのはあなたです。
+
+起動中は `pollSec` 秒ごとに、各サービスのコンテナ（`docker compose ps`）と Traefik 経由の URL を確かめます。正常に動いている間は帯を出さず、ステータスラインに `⛵ app 2/2` を出すだけで、起動・停止・サービスが落ちたときにトーストで知らせます。終了した、または 5xx を返す・応答しないサービスは `devrouter ❌ api exited (1) · ほか1件` と出て、Claude に頼む でログ末尾 40 行（認証情報は zukan と同じく伏せる）を入れます。host が信頼しない証明書と Traefik 自身の 404（ルーターなし）は、落ちた扱いにせずペインで黄色に出します。`/stack` でペインを開きます: サービスごとに URL（押すとコピー）、コンテナの状態、HTTP ステータス、直近のログ、開く（`devrouter open`）と 直させる。全体には 再起動・再ビルドして起動・停止（`devrouter down`）・doctor。`/stack-up`・`/stack-down` はボタンと同じです。閉じる で、状態が変わるまで帯を隠します。
+
+Claude はツール `mcp__stack-dock__status` で、各サービスの URL・コンテナの状態・HTTP ステータスを取れます（localhost のポートを当て推量しなくて済みます）。`feed` がオンなら、サービスが落ちたことや `devrouter up` の失敗を、待機中に打った次のプロンプトに 1 回だけデータとして添えます（slash コマンド・隠しプロンプト・plugin が送ったものには添えません）。セッションを越えて何も残しません。正しい状態は devrouter の registry と Docker が持っています。
+
+| オプション | 既定 | |
+| --- | --- | --- |
+| `auto` | `off` | `session-start`: セッション開始時、準備ができていて止まっていれば `devrouter up` |
+| `stopOnExit` | `false` | セッション終了時に `devrouter down` |
+| `feed` | `true` | サービスが落ちたことや up の失敗を次のプロンプトに添える |
+| `pollSec` | `10` | 起動中のスタックを確かめる間隔（5〜60 秒） |
 
 ## 開発
 
