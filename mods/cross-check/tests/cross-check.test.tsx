@@ -32,9 +32,11 @@ type World = {
   nonFiles: string[]
   gitFailure?: string
   gitTruncated?: string
+  headMode?: 'no-repository' | 'unborn'
   hashOutput?: string
   spawned: string[][]
   filled: string[]
+  status: (string | undefined)[]
   // What the next spawn does: answer, fail, or hang until the clock passes `hangMs`.
   child: { stdout: string; stderr: string; code: number; hangMs?: number }
   clock: MockClock
@@ -49,6 +51,7 @@ function world(on: On): World {
     nonFiles: [],
     spawned: [],
     filled: [],
+    status: [],
     child: { stdout: events(JSON.stringify(FINDINGS)), stderr: '', code: 0 },
     clock: mock.clock(on, { now: 1_000 }),
   }
@@ -56,7 +59,10 @@ function world(on: On): World {
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', () => ({ value: undefined }))
-  on('ui.status', () => ({ value: undefined }))
+  on('ui.status', ($, e) => {
+    w.status.push(e.text)
+    return { value: undefined }
+  })
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('prompt.fill', ($, e) => {
     w.filled.push(e.text)
@@ -67,7 +73,14 @@ function world(on: On): World {
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: argv === w.gitTruncated } }) as never
     const failed = () => ({ value: { exitCode: 128, stdout: '', stderr: 'cannot read the working tree' } }) as never
     if (argv === w.gitFailure) return failed()
-    if (argv === 'git rev-parse HEAD') return ok('abc\n')
+    if (argv === 'git rev-parse HEAD') {
+      if (w.headMode === 'no-repository') return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n' } } as never
+      if (w.headMode === 'unborn') return { value: { exitCode: 128, stdout: 'HEAD\n', stderr: 'fatal: ambiguous argument HEAD: unknown revision\n' } } as never
+      return ok('abc\n')
+    }
+    if (argv === 'git rev-parse --is-inside-work-tree') return w.headMode === 'no-repository' ? failed() : ok('true\n')
+    if (argv === 'git symbolic-ref --quiet HEAD') return ok('refs/heads/main\n')
+    if (argv === 'git show-ref --verify --quiet refs/heads/main') return { value: { exitCode: w.headMode === 'unborn' ? 1 : 0, stdout: '', stderr: '' } } as never
     if (argv === 'git diff HEAD --shortstat') return ok(w.patch === '' ? '' : ' 1 file changed, 3 insertions(+)\n')
     if (argv === 'git diff HEAD') return ok(w.patch)
     if (argv === 'git ls-files -z --others --exclude-standard') return ok(Object.keys(w.untracked).map(name => `${name}\0`).join(''))
@@ -219,6 +232,45 @@ describe('band', () => {
     await ui.unmount()
   })
 
+  for (const headMode of ['no-repository', 'unborn'] as const) {
+    test(`an initial ${headMode} has no review target and stays quiet`, async ($, on) => {
+      const w = world(on)
+      w.headMode = headMode
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      expect(await ui.find({ type: 'Text', text: 'engine' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /確認できません|未レビュー/ })).toBeUndefined()
+      expect(w.status.at(-1)).toBeUndefined()
+      expect(w.spawned).toHaveLength(0)
+      await ui.unmount()
+    })
+  }
+
+  test('an unexplained initial HEAD failure is a measurement error', async ($, on) => {
+    const w = world(on)
+    w.gitFailure = 'git rev-parse HEAD'
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
+    expect(await ui.find({ key: 'remeasure' })).toBeDefined()
+    expect(w.spawned).toHaveLength(0)
+    await ui.unmount()
+  })
+
+  test('a previously reviewed repository becoming unavailable is not an initial non-repository', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    w.headMode = 'no-repository'
+    await endTurn($)
+    expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
+    expect(w.status.at(-1)).toBe('🔍 codex 失敗')
+    expect(await ui.find({ key: 'fix' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('a diff changed after the review asks for one again, marking the old findings', async ($, on) => {
     const w = world(on)
     await $.session.start(START)
@@ -305,7 +357,7 @@ describe('band', () => {
     })
   }
 
-  for (const command of ['git hash-object --stdin-paths', 'git diff HEAD', 'git ls-files -z --others --exclude-standard']) {
+  for (const command of ['git rev-parse HEAD', 'git hash-object --stdin-paths', 'git diff HEAD', 'git ls-files -z --others --exclude-standard']) {
     test(`a failed measurement clears freshness and recovers on the next turn: ${command}`, async ($, on) => {
       const w = world(on)
       w.untracked['new.txt'] = 'before'
@@ -319,6 +371,7 @@ describe('band', () => {
       await endTurn($)
       expect(await ui.find({ type: 'Text', text: /確認できません/ })).toBeDefined()
       expect(await ui.find({ key: 'fix' })).toBeUndefined()
+      expect(w.status.at(-1)).toBe('🔍 codex 失敗')
       w.gitFailure = undefined
       if (command === 'git hash-object --stdin-paths') await ui.press({ key: 'remeasure' })
       else await endTurn($)
@@ -327,7 +380,7 @@ describe('band', () => {
     })
   }
 
-  for (const command of ['git hash-object --stdin-paths', 'git diff HEAD', 'git diff --no-index --no-ext-diff --no-textconv --no-color -- /dev/null link']) {
+  for (const command of ['git rev-parse HEAD', 'git hash-object --stdin-paths', 'git diff HEAD', 'git diff --no-index --no-ext-diff --no-textconv --no-color -- /dev/null link']) {
     test(`truncated measurement output cannot establish freshness: ${command}`, async ($, on) => {
       const w = world(on)
       w.untracked = { 'new.txt': 'before', link: 'target' }

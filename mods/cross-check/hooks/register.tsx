@@ -50,6 +50,28 @@ async function checkedGit($: Api, args: string[]) {
   return text
 }
 
+/** A missing initial repository or unborn branch has no target; a lost HEAD is an error. */
+async function headOf($: Api): Promise<string | undefined> {
+  const ran = await $.process.run(['git', 'rev-parse', 'HEAD'])
+  const head = ran.stdout.trim()
+  if (ran.exitCode === 0 && !ran.isStdoutTruncated && head !== '') return head
+
+  const hadTarget = (await read($, diff)) !== null || (await read($, result)) !== null || (await read($, measurementError)) !== null
+  if (!hadTarget && ran.exitCode !== 0 && !ran.isStdoutTruncated && !ran.isStderrTruncated) {
+    if (/^fatal: not a git repository\b/m.test(ran.stderr)) return undefined
+    // Verify an unborn/orphan branch through Git, rather than treating every
+    // failed rev-parse (permissions, damaged objects, etc.) as an empty tree.
+    if ((await git($, ['rev-parse', '--is-inside-work-tree']))?.trim() === 'true') {
+      const branch = (await git($, ['symbolic-ref', '--quiet', 'HEAD']))?.trim()
+      if (branch?.startsWith('refs/heads/')) {
+        const exists = await $.process.run(['git', 'show-ref', '--verify', '--quiet', branch])
+        if (exists.exitCode === 1 && !exists.isStdoutTruncated && !exists.isStderrTruncated && exists.stdout === '' && exists.stderr === '') return undefined
+      }
+    }
+  }
+  throw new Error('Git の HEAD を取得できず、差分を確認できません')
+}
+
 /** The base a branch is reviewed against: origin's default branch, else a local main. */
 async function baseRef($: Api) {
   const remote = (await git($, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.trim()
@@ -61,7 +83,7 @@ async function baseRef($: Api) {
 
 /** What a press would review now, and its key: the uncommitted changes first, else the branch. */
 async function measure($: Api): Promise<Diff | null> {
-  const head = (await git($, ['rev-parse', 'HEAD']))?.trim()
+  const head = await headOf($)
   if (head === undefined) {
     return null
   }
