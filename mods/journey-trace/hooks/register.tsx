@@ -62,9 +62,9 @@ export const register: Register = on => {
 
   on('tool.call', { tool: EXPECT_TOOL }, async ($, e) => {
     const text = String((e as unknown as { text?: unknown }).text ?? '').trim()
-    if (text === '') return { result: { isRecorded: false }, text: 'text が空です。' }
+    if (text === '') return { result: 'text が空です。' }
     await expectStep($, text, 'claude')
-    return { result: { isRecorded: true }, text: `期待状態を記録しました: ${text}` }
+    return { result: `期待状態を記録しました: ${text}` }
   })
 
   on('tool.call', async ($, e, next) => {

@@ -150,7 +150,7 @@ describe('journey-trace in a session', () => {
     await $.tool.call({ tool: 'mcp__claude-in-chrome__find', query: 'add button', tabId: 1 } as never)
     await $.tool.call({ tool: 'mcp__claude-in-chrome__computer', action: 'left_click', ref: 'ref_12', tabId: 1 } as never)
     const told = await $.tool.call({ tool: 'mcp__journey-trace__expect', text: 'カートに 1 件と表示される' } as never)
-    expect(told.text).toContain('記録しました')
+    expect(told.result).toContain('記録しました')
 
     const md = (await $.command.run(run('md'))).text
     expect(md).toContain('## カートのバグ')
