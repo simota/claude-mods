@@ -14,7 +14,7 @@ export type Run = { key: string; startedAt: number; elapsedS: number; job: strin
 export type Result = { key: string; event: string; ok: boolean; jobs: JobResult[]; failures: Failure[]; secs: number; only?: string }
 
 /** Why the last press gave no result: Docker not running, or anything else in words. */
-export type Problem = { kind: 'no-docker' } | { kind: 'other' | 'measurement'; text: string }
+export type Problem = ({ kind: 'no-docker' } | { kind: 'other' | 'measurement'; text: string }) & { isDismissed?: boolean }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -24,6 +24,8 @@ declare module 'claude-code' {
       result: Result | null
       /** Latest partial results, kept separately so they never stand for a full CI run. */
       partial: Result | null
+      /** A failed measurement does not erase the last run's incomplete outcome. */
+      measurementProblem: Problem | null
       problem: Problem | null
       /** The tree key the band was closed for: it stays down until the tree changes. */
       hiddenFor: string | null

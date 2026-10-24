@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
-import { downFixPrompt, httpError, httpOf, isStackCommand, isStackFile, parseComposePs, parseDoctor, phaseOf, stackOf, upFixPrompt } from '../hooks/devrouter'
+import { downFixPrompt, httpError, httpOf, isRecovered, isStackCommand, isStackFile, parseComposePs, parseDoctor, phaseOf, stackOf, upFixPrompt } from '../hooks/devrouter'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const ROOT = '/w/app'
@@ -56,12 +56,14 @@ type World = {
   doctorExitCode?: number
   doctorStderr?: string
   doctorError?: string
+  doctorTruncated?: 'stdout' | 'stderr'
   /** registry.json as written; undefined when there is none yet. */
   registry: string | undefined
   registryError?: string
   ps: string
   psExitCode?: number
   psStderr?: string
+  psTruncated?: 'stdout' | 'stderr'
   http: Record<string, { status: number; text: string } | 'tls'>
   files: string[]
   /** What `devrouter up` does: write the registry and exit with `code`. */
@@ -139,8 +141,8 @@ function world(on: On): World {
     if (argv === 'git rev-parse --show-toplevel') return ok(`${ROOT}\n`)
     if (e.argv[0] === 'devrouter' && !w.isInstalled) return { deny: 'spawn devrouter ENOENT' }
     if (argv === `devrouter doctor ${ROOT}` && w.doctorError !== undefined) return { deny: w.doctorError }
-    if (argv === `devrouter doctor ${ROOT}`) return { value: { exitCode: w.doctorExitCode ?? (w.doctor.includes('[ERROR]') ? 1 : 0), stdout: w.doctor, stderr: w.doctorStderr ?? '' } } as never
-    if (argv === `docker compose -f ${COMPOSE} ps --all --format json`) return { value: { exitCode: w.psExitCode ?? 0, stdout: w.ps, stderr: w.psStderr ?? '' } } as never
+    if (argv === `devrouter doctor ${ROOT}`) return { value: { exitCode: w.doctorExitCode ?? (w.doctor.includes('[ERROR]') ? 1 : 0), stdout: w.doctor, stderr: w.doctorStderr ?? '', isStdoutTruncated: w.doctorTruncated === 'stdout', isStderrTruncated: w.doctorTruncated === 'stderr' } } as never
+    if (argv === `docker compose -f ${COMPOSE} ps --all --format json`) return { value: { exitCode: w.psExitCode ?? 0, stdout: w.ps, stderr: w.psStderr ?? '', isStdoutTruncated: w.psTruncated === 'stdout', isStderrTruncated: w.psTruncated === 'stderr' } } as never
     if (argv.startsWith(`docker compose -f ${COMPOSE} logs`)) return ok('app-api-1  | listening\napp-api-1  | Error: connect ECONNREFUSED db:5432 password=hunter2\n')
     if (argv === `devrouter down ${ROOT}`) {
       w.registry = JSON.stringify({ version: 1, stacks: [] })
@@ -730,6 +732,122 @@ describe('feed and tool', () => {
 })
 
 describe('independent review counterexamples', () => {
+  for (const stream of ['stdout', 'stderr'] as const) {
+    test(`truncated doctor ${stream} cannot authorize automatic startup and recovers on recheck`, { options: { auto: 'session-start' } }, async ($, on) => {
+      const w = world(on)
+      w.doctorTruncated = stream
+      await $.session.start(START)
+      await w.clock.settle()
+      expect(w.spawned).toHaveLength(0)
+      const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+      expect(JSON.parse(ran.result as string).phase).toBe('broken')
+      for (const surface of SURFACES) {
+        const ui = await $.ui.mount(band(surface))
+        expect(await ui.find({ type: 'Text', text: /切り詰め/ })).toBeDefined()
+        expect(await ui.find({ key: 'up' })).toBeUndefined()
+        await ui.unmount()
+      }
+      w.doctorTruncated = undefined
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'recheck' })
+      await w.clock.settle()
+      expect(await ui.find({ key: 'up' })).toBeDefined()
+      await ui.unmount()
+    })
+
+    for (const output of ['', JSON.stringify({ Service: 'app-web', State: 'exited', ExitCode: 0 })]) {
+      test(`truncated compose ${stream} with ${output === '' ? 'empty output' : 'a complete JSON line'} is unknown, not stopped`, { options: { auto: 'session-start' } }, async ($, on) => {
+        const w = world(on)
+        w.registry = REGISTRY
+        w.ps = output
+        w.psTruncated = stream
+        await $.session.start(START)
+        await w.clock.settle()
+        expect(w.spawned).toHaveLength(0)
+        expect(w.status.at(-1)).toBe('⛵ 状態不明')
+        const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+        const status = JSON.parse(ran.result as string)
+        expect(status.phase).toBe('unavailable')
+        expect(status.services.every((one: { container: string }) => one.container === 'unknown')).toBe(true)
+        for (const surface of SURFACES) {
+          const ui = await $.ui.mount(band(surface))
+          expect(await ui.find({ type: 'Text', text: /切り詰め/ })).toBeDefined()
+          expect(await ui.find({ key: 'up' })).toBeUndefined()
+          await ui.unmount()
+        }
+      })
+    }
+  }
+
+  test('truncated container evidence neither clears a service-down feed nor emits a false stopped toast', async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY
+    await $.session.start(START)
+    w.ps = ps('exited', 1)
+    await w.clock.advance(10_000)
+    const toasts = w.toasts.length
+    w.ps = ''
+    w.psTruncated = 'stdout'
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ 状態不明')
+    expect(w.toasts).toHaveLength(toasts)
+    await type($)
+    expect(w.contexts[0]?.at(-1)).toContain('api exited (1)')
+    w.psTruncated = undefined
+    w.ps = ps('running')
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
+  })
+
+  test('a newer registry cannot clear an up failure until container evidence is complete', async ($, on) => {
+    const w = world(on)
+    w.up = { code: 1, stderr: 'error: build failed\n' }
+    await $.session.start(START)
+    await $.command.run({ command: 'stack-up', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
+    await w.clock.settle()
+    w.registry = REGISTRY
+    w.psTruncated = 'stdout'
+    await $.tool.call({ tool: 'Bash', command: 'devrouter up' })
+    await w.clock.settle()
+    expect(w.status.at(-1)).toBe('⛵ app 起動失敗')
+    w.psTruncated = undefined
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
+    await type($)
+    expect(w.contexts[0]).toBeUndefined()
+  })
+
+  test('a success in the same second does not prove recovery from a later up failure', () => {
+    const stack = { ...stackOf(REGISTRY, ROOT).stack!, services: [], lastUpAt: '1970-01-01T00:00:01Z' }
+    const failure = { at: 1_900, error: 'build failed', checks: [], tail: [] }
+    expect(isRecovered(failure, stack)).toBe(false)
+    expect(isRecovered({ ...failure, at: 1_000 }, stack)).toBe(false)
+    expect(isRecovered(failure, { ...stack, lastUpAt: '1970-01-01T00:00:02Z' })).toBe(true)
+  })
+
+  test('a same-second registry keeps the up failure and feed until a provably later success', async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY.replace('2026-10-24T00:00:00Z', '1970-01-01T00:00:01Z')
+    w.up = { code: 1, stderr: 'error: build failed\n' }
+    await $.session.start(START)
+    await w.clock.advance(900)
+    await $.command.run({ command: 'stack-up', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
+    await w.clock.settle()
+    expect(w.status.at(-1)).toBe('⛵ app 起動失敗')
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount(band(surface))
+      expect(await ui.find({ type: 'Text', text: /up 失敗/ })).toBeDefined()
+      await ui.unmount()
+    }
+    await type($)
+    expect(w.contexts[0]?.at(-1)).toContain('devrouter up /w/app failed: build failed')
+    await w.clock.advance(1_000)
+    w.registry = w.registry.replace('1970-01-01T00:00:01Z', '1970-01-01T00:00:02Z')
+    await $.tool.call({ tool: 'Bash', command: 'devrouter up' })
+    await w.clock.settle()
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
+  })
+
   test('interleaved stdout and stderr keep independent secret-bearing lines', async ($, on) => {
     const w = world(on)
     const kept: unknown[] = []

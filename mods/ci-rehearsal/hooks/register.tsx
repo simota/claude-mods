@@ -15,6 +15,7 @@ const run = atom({ plugin: 'ci-rehearsal', key: 'run' } as const, null as Run | 
 const result = atom({ plugin: 'ci-rehearsal', key: 'result' } as const, null as Result | null)
 const partial = atom({ plugin: 'ci-rehearsal', key: 'partial' } as const, null as Result | null)
 const problem = atom({ plugin: 'ci-rehearsal', key: 'problem' } as const, null as Problem | null)
+const measurementProblem = atom({ plugin: 'ci-rehearsal', key: 'measurementProblem' } as const, null as Problem | null)
 const hiddenFor = atom({ plugin: 'ci-rehearsal', key: 'hiddenFor' } as const, null as string | null)
 
 type Api = EngineInterface
@@ -37,22 +38,37 @@ async function git($: Api, args: string[], stdin?: string) {
   return ran.stdout
 }
 
+/** A failed or cut-short plan/listing says nothing about whether this event has jobs. */
+async function runthroughInfo($: Api, args: string[]) {
+  const ran = await $.process.run(['runthrough', ...args, ...(isCommitted ? ['--committed'] : [])])
+  // runthrough reports a repository without workflow files as exit 2, unlike
+  // a valid workflow whose event has no jobs. Only its complete, known absence
+  // response is quiet; malformed/unreadable workflows remain measurement errors.
+  if (ran.exitCode === 2 && !ran.isStdoutTruncated && !ran.isStderrTruncated && ran.stdout.trim() === '' &&
+    /^error: no workflow files found in [^\r\n]+$/.test(ran.stderr.trim())) return null
+  if (ran.exitCode !== 0 || ran.isStdoutTruncated) {
+    throw new Error(ran.isStdoutTruncated ? `runthrough ${args[0]} の出力が途中で切れました` : problemText(ran.stderr, ran.exitCode))
+  }
+  return ran.stdout
+}
+
 /** The jobs the event triggers on this branch: the plan applies the branch and tag filters `-l` ignores. */
 async function jobsFor($: Api, ev: string) {
-  const plan = await $.process.run(['runthrough', '-n', ev, ...(isCommitted ? ['--committed'] : [])])
-  return plan.exitCode === 0 ? planJobs(plan.stdout) : 0
+  const plan = await runthroughInfo($, ['-n', ev])
+  return plan === null ? null : planJobs(plan)
 }
 
 /** The configured event, else the first listed event that triggers a job here, as a pull_request-only repository needs. */
 async function pickEvent($: Api) {
   const jobs = await jobsFor($, event)
+  if (jobs === null) return undefined
   if (jobs > 0) {
     return { event, jobs }
   }
-  const listed = await $.process.run(['runthrough', '-l', ...(isCommitted ? ['--committed'] : [])])
-  for (const other of listed.exitCode === 0 ? listedEvents(listed.stdout) : []) {
+  const listed = await runthroughInfo($, ['-l'])
+  for (const other of listed === null ? [] : listedEvents(listed)) {
     const found = other === event ? 0 : await jobsFor($, other)
-    if (found > 0) {
+    if (found !== null && found > 0) {
       return { event: other, jobs: found }
     }
   }
@@ -81,10 +97,10 @@ async function refresh($: Api) {
   let now: Tree | null
   try {
     now = await measure($)
-    await update($, problem, old => old?.kind === 'measurement' ? null : old)
+    await update($, measurementProblem, () => null)
   } catch (err) {
     now = null
-    await update($, problem, () => ({ kind: 'measurement', text: `変更の計測に失敗しました: ${String(err).slice(0, 160)}` }))
+    await update($, measurementProblem, () => ({ kind: 'measurement', text: `変更の計測に失敗しました: ${String(err).slice(0, 160)}` }))
   }
   await update($, tree, () => now)
   await setStatus($)
@@ -97,7 +113,7 @@ async function setStatus($: Api) {
     $.ui.status(`▶ CI ${clockText(r.elapsedS)}`)
     return
   }
-  if ((await read($, problem)) !== null) {
+  if ((await read($, measurementProblem)) !== null || (await read($, problem)) !== null) {
     $.ui.status('CI 止まった')
     return
   }
@@ -122,7 +138,9 @@ async function tickRun($: Api) {
 async function rehearse($: Api, how: { mode: Mode; only?: string }) {
   const target = await refresh($)
   if (target === null) {
-    await update($, problem, old => old?.kind === 'measurement' ? old : said(`${event} でもほかのイベントでも、このブランチで走るジョブがありません`))
+    if ((await read($, measurementProblem)) === null) {
+      await update($, problem, old => old ?? said(`${event} でもほかのイベントでも、このブランチで走るジョブがありません`))
+    }
     await setStatus($)
     return
   }
@@ -142,7 +160,8 @@ async function rehearse($: Api, how: { mode: Mode; only?: string }) {
   if (!isFirst) {
     return
   }
-  await update($, problem, () => null)
+  // Keep the last incomplete run until a new run actually produces a result.
+  // A retry may be cancelled, and merely measuring the tree proves no recovery.
   await update($, hiddenFor, () => null)
   isCancelled = false
   let isTimedOut = false
@@ -188,8 +207,8 @@ async function rehearse($: Api, how: { mode: Mode; only?: string }) {
     // 止める: nothing to report.
   } else if (isTimedOut) {
     await update($, problem, () => said(`${timeoutMin}分で打ち切りました`))
-  } else if (startError !== undefined || summary === undefined) {
-    await update($, problem, () => said(startError ?? problemText(stderr, code ?? null)))
+  } else if (startError !== undefined || summary === undefined || code !== (summary.ok ? 0 : 1)) {
+    await update($, problem, () => said(startError ?? (summary === undefined ? problemText(stderr, code ?? null) : `まとめ行と終了コード ${code ?? '?'} が一致しません: ${problemText(stderr, code ?? null)}`)))
   } else {
     const failures = log.failures()
     const fresh = { key: target.key, event: target.event, ...summary, failures, only: how.only }
@@ -200,6 +219,7 @@ async function rehearse($: Api, how: { mode: Mode; only?: string }) {
       await update($, partial, old => withJobResults(old, fresh))
       await update($, result, full => full?.key === fresh.key ? { ...withJobResults(full, fresh), only: undefined, secs: full.secs } : full)
     }
+    await update($, problem, () => null)
     const scope = how.only === undefined ? '' : `一部（${how.only}） `
     $.ui.toast(summary.ok ? `CI ${scope}✅ ${summary.jobs.length} jobs 通過` : `CI ${scope}❌ ${failures.length}件の失敗`)
   }
@@ -245,6 +265,12 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     // A reload killed any child this module had: what it was doing is over.
     await update($, run, () => null)
+    // Older versions kept measurement and run problems in the same atom.
+    const oldProblem = await read($, problem)
+    if (oldProblem?.kind === 'measurement') {
+      await update($, measurementProblem, () => oldProblem)
+      await update($, problem, () => null)
+    }
     // Before partial results had their own atom, a single-job run occupied result.
     const previous = await read($, result)
     if (previous?.only !== undefined) {
@@ -291,7 +317,8 @@ export const register: Register = (on, options) => {
     const running = await read($, run)
     const done = await read($, result)
     const part = await read($, partial)
-    const stopped = await read($, problem)
+    const unmeasured = await read($, measurementProblem)
+    const stopped = unmeasured ?? await read($, problem)
     const closedFor = await read($, hiddenFor)
     const { Box, Button, Text } = $.ui.resolve(e)
 
@@ -303,7 +330,10 @@ export const register: Register = (on, options) => {
         {below}
       </Box>
     )
-    const dismissProblem = <Button key="close" label="閉じる" role="dismiss" onPress={() => update($, problem, () => null)} />
+    // Hiding an error must not turn the preceding success back into the latest result.
+    const dismissProblem = <Button key="close" label="閉じる" role="dismiss" onPress={() => unmeasured === null
+      ? update($, problem, old => old === null ? null : { ...old, isDismissed: true })
+      : update($, measurementProblem, old => old === null ? null : { ...old, isDismissed: true })} />
 
     if (running !== null) {
       return stack(
@@ -315,6 +345,7 @@ export const register: Register = (on, options) => {
         </Box>,
       )
     }
+    if (stopped?.isDismissed) return below
     if (stopped?.kind === 'no-docker') {
       return stack(
         <Box>
@@ -404,7 +435,7 @@ export const register: Register = (on, options) => {
     const running = await read($, run)
     const done = await read($, result)
     const part = await read($, partial)
-    const stopped = await read($, problem)
+    const stopped = await read($, measurementProblem) ?? await read($, problem)
     const latest = part ?? done
     const isStale = latest !== null && now?.key !== latest.key
     const head =
@@ -428,8 +459,8 @@ export const register: Register = (on, options) => {
       const stale = now?.key !== entry.key
       return (
         <Box flexDirection="column" key={`${prefix}results`}>
-          {entry.jobs.map(j => (
-            <Text key={`${prefix}j-${j.job}`} color={j.result === 'success' ? 'green' : j.result === 'failure' ? 'red' : 'gray'} dimColor={stale} wrap="truncate-end">
+          {entry.jobs.map((j, i) => (
+            <Text key={`${prefix}j-${i}-${j.job}`} color={j.result === 'success' ? 'green' : j.result === 'failure' ? 'red' : 'gray'} dimColor={stale} wrap="truncate-end">
               {j.result === 'success' ? '✅' : j.result === 'failure' ? '❌' : '·'} {j.job} {j.result}
             </Text>
           ))}

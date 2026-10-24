@@ -20,7 +20,7 @@ declare module 'claude-code' {
       error: string | null
       measurementError: string | null
       dismissed: string[]
-      /** The diff key the band was closed for: it stays down until the diff changes. */
+      /** The closed diff key, or error:<message> when only a failure's band was dismissed. */
       hiddenFor: string | null
     }
   }

@@ -169,7 +169,7 @@ async function review($: Api) {
   if (!isFirst) {
     return
   }
-  await update($, error, () => null)
+  // Retrying is not recovery: cancellation must leave the last failure visible.
   await update($, hiddenFor, () => null)
   isCancelled = false
   let isTimedOut = false
@@ -223,6 +223,7 @@ async function review($: Api) {
     const parsed = parseReview(message)
     const finishedAt = await $.clock.now()
     await update($, result, () => ({ key: target.key, scope: target.scope, ...parsed, finishedAt }))
+    await update($, error, () => null)
     await update($, dismissed, () => [])
     $.ui.toast(parsed.findings.length === 0 ? '🔍 Codex: 指摘なし' : `🔍 Codex: ${parsed.findings.length}件の指摘`)
   }
@@ -323,6 +324,8 @@ export const register: Register = (on, options) => {
       )
     }
     if (failed !== null) {
+      // Dismissal hides the band, not the failure that invalidated the last result.
+      if (unmeasured === null && closedFor === `error:${failed}`) return below
       return stack(
         <Box>
           <Text color="red" wrap="truncate-end">
@@ -335,7 +338,7 @@ export const register: Register = (on, options) => {
               await setStatus($)
             }} />
           ) : (
-            <Button key="close" label="閉じる" role="dismiss" onPress={() => update($, error, () => null)} />
+            <Button key="close" label="閉じる" role="dismiss" onPress={() => update($, hiddenFor, () => `error:${failed}`)} />
           )}
         </Box>,
       )
