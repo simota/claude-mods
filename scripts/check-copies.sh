@@ -9,7 +9,9 @@ for pair in \
   'mods/done-gate/hooks/shell.ts mods/kachi/hooks/shell.ts' \
   'mods/zukan/hooks/mask.ts mods/side-effect-ledger/hooks/mask.ts' \
   'mods/zukan/hooks/mask.ts mods/artifact-shelf/hooks/mask.ts' \
-  'mods/zukan/hooks/mask.ts mods/browser-cam/hooks/mask.ts'; do
+  'mods/zukan/hooks/mask.ts mods/browser-cam/hooks/mask.ts' \
+  'mods/zukan/hooks/mask.ts mods/stack-dock/hooks/mask.ts' \
+  'mods/cross-check/hooks/fingerprint.ts mods/ci-rehearsal/hooks/fingerprint.ts'; do
   set -- $pair
   if ! cmp -s "$1" "$2"; then
     echo "check-copies: $2 differs from $1" >&2

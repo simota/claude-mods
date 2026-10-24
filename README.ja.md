@@ -358,6 +358,8 @@ Codex CLI（`codex`）が `PATH` にあり、ログイン済みであること�
 
 差分はターンごとに測り直し、変わると指摘に 古い が付き、帯がもう一度レビューを勧めます。閉じる で、差分が変わるまで帯を隠します。失敗したときは理由（`codex login が必要`・`codex が見つかりません`・Codex 自身のエラー）と 再試行 を出します。Codex はリポジトリを読み、読み取り専用 sandbox の中でコマンドを実行することがあります。Codex は常に `gpt-6.1-sol`（reasoning effort medium）で動きます。読んだ内容は、Codex に設定されたモデルの提供元に送られます。セッションを越えて何も残しません。
 
+差分や未追跡ファイルを読めない場合は計測失敗を表示し、前回のレビューを最新として扱いません。引用符や改行を含む未追跡ファイル名、シンボリックリンク（リンク切れも含む）の変更も検出します。レビュー用スキーマに合わない返答は、理由と再試行を出す失敗です。「指摘なし」にはしません。正しい形式の空の指摘一覧は、引き続き指摘なしとして扱います。
+
 | オプション | 既定 | |
 | --- | --- | --- |
 | `timeoutMin` | `15` | この分数を過ぎても終わらないレビューは止める |
@@ -369,6 +371,8 @@ Codex CLI（`codex`）が `PATH` にあり、ログイン済みであること�
 終わると、通れば `CI ✅ 3/3 1:12`、落ちれば最初に落ちたステップと残りの件数（`CI ❌ CI / test › Run npm test · ほか1件`）が出て、件数をトーストで知らせます。**Claude に頼む** は各失敗とログ末尾 40 行をデータとして引用した依頼文を入力欄に入れるだけで、送るのはあなたです。**詳細** と `/ci` でペインが開き、全ジョブの結果、失敗ごとのログ末尾、直させる（その 1 件だけ）と このジョブだけ（`-j` で再実行）があります。`/ci-run` はボタンと同じく実行を始めます。ステータスラインには `CI ✅`・`CI ❌ 2`・`CI 古い` が残ります。
 
 作業ツリーはターンごとに測り直し、変わると結果に 古い が付き、帯がもう一度実行を勧めます。閉じる で、ツリーが変わるまで帯を隠します。runthrough のまとめ行なしに終わったときは理由（最後のエラー行）と 再試行 を出します。runthrough は既定どおり `.secrets`・`.vars`・`.env` を読み、ログ中の secret はマスクします。mod が `--insecure-secrets` を渡すことはありません。`host` モードではワークフローのコマンドがコンテナの外、このマシン上で動きます。セッションを越えて何も残しません。
+
+単一ジョブの再実行は、帯・ステータスライン・ペインすべてで一部の結果と明示します。他の既知の失敗を残し、全体を走らせる操作を用意します。その成功だけでワークフロー全体の成功にはしません。別のツリーの結果は 古い と表示します。`scope: committed` では、ジョブ計画とイベント選択も実行と同じ HEAD を読みます。ツリーの計測に失敗したらエラーを表示し、古い成功を最新として残しません。引用符や改行を含む未追跡ファイル名とシンボリックリンクも変更検出に含めます。
 
 | オプション | 既定 | |
 | --- | --- | --- |
@@ -383,6 +387,8 @@ Codex CLI（`codex`）が `PATH` にあり、ログイン済みであること�
 [devrouter](https://github.com/simota/devrouter) が `PATH` にあり、Docker が使えることが前提です。セッション開始時、`devrouter.yaml`・compose ファイル・`package.json`・`pnpm-workspace.yaml` を編集したターンの終わり、Claude が `devrouter` や `docker compose` のコマンドを実行した直後に、リポジトリのルートで `devrouter doctor`（読み取りのみ）を実行し、`~/.devrouter/registry.json` を読みます。入力欄の上の帯には状態が 1 つ出ます: 準備ができていて止まっていれば `devrouter · app 2 services [ 起動 ]`。設定がなければ `devrouter · 未設定（compose あり）` と、init で生成（`devrouter init`。`--force` は付けず、compose ファイルがあるときだけ）と Claude に作らせる（devrouter の `prompts/generate-config.md` に沿って `devrouter.yaml` と `docker-compose.devrouter.yml` を作らせる依頼文）。そのほかの doctor のエラーは `devrouter ❌ doctor: …`、Docker が動いていなければ `Docker が動いていません` と 再確認。devrouter がないとき、ルートに devrouter の設定・compose ファイル・workspace がないときは何も出しません。
 
 起動 で `devrouter up <root>` を実行し（ペインの 再ビルドして起動 は `--build` 付き）、出力を流して帯に経過時間と compose の最後の行を出します。止める で中断できます。失敗すると `error:` の行が出て、**Claude に頼む** はそれと doctor の結果、出力の末尾をデータとして引用した依頼文を入力欄に入れます。送るのはあなたです。
+
+起動中の進捗も、保持するログと同じ認証情報のパターンで伏せてから状態に保存し、表示用に短くします。最後のサービスが非0の終了コードで終了した場合や `dead` になった場合も障害として扱い、全サービスが正常終了した停止と区別します。registry・コンテナ一覧・doctor の結果を確実に読めないときは診断と再確認を出し、状態不明のまま自動起動しません。
 
 起動中は `pollSec` 秒ごとに、各サービスのコンテナ（`docker compose ps`）と Traefik 経由の URL を確かめます。正常に動いている間は帯を出さず、ステータスラインに `⛵ app 2/2` を出すだけで、起動・停止・サービスが落ちたときにトーストで知らせます。終了した、または 5xx を返す・応答しないサービスは `devrouter ❌ api exited (1) · ほか1件` と出て、Claude に頼む でログ末尾 40 行（認証情報は zukan と同じく伏せる）を入れます。host が信頼しない証明書と Traefik 自身の 404（ルーターなし）は、落ちた扱いにせずペインで黄色に出します。`/stack` でペインを開きます: サービスごとに URL（押すとコピー）、コンテナの状態、HTTP ステータス、直近のログ、開く（`devrouter open`）と 直させる。全体には 再起動・再ビルドして起動・停止（`devrouter down`）・doctor。`/stack-up`・`/stack-down` はボタンと同じです。閉じる で、状態が変わるまで帯を隠します。
 
@@ -404,7 +410,7 @@ claude --plugin-dir mods/<mod>
 scripts/check-copies.sh
 ```
 
-mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts`・`mods/hit-rate/hooks/shell.ts`・`mods/kachi/hooks/shell.ts` は done-gate のもの、side-effect-ledger・artifact-shelf の `mask.ts` は zukan のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
+mod 同士はコードを共有できないため、一部のファイルは別の mod の写しです（`mods/zukan/hooks/shell.ts`・`mods/hit-rate/hooks/shell.ts`・`mods/kachi/hooks/shell.ts` は done-gate のもの、side-effect-ledger・artifact-shelf・browser-cam・stack-dock の `mask.ts` は zukan のもの、ci-rehearsal の `fingerprint.ts` は cross-check のもの）。写しがずれると `scripts/check-copies.sh` が失敗します。
 
 ## ライセンス
 
