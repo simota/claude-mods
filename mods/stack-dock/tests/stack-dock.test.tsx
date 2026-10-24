@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
-import { downFixPrompt, httpError, httpOf, isStackCommand, isStackFile, parseComposePs, parseDoctor, stackOf, upFixPrompt } from '../hooks/devrouter'
+import { downFixPrompt, httpError, httpOf, isStackCommand, isStackFile, parseComposePs, parseDoctor, phaseOf, stackOf, upFixPrompt } from '../hooks/devrouter'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const ROOT = '/w/app'
@@ -208,6 +208,31 @@ describe('devrouter', () => {
     }
   })
 
+  test('required registry fields must be usable strings, with at least one complete service', () => {
+    for (const field of ['id', 'name', 'repoPath', 'composeFilePath', 'lastUpAt']) {
+      for (const value of [undefined, null, '', '   ', 7, {}]) {
+        const reg = JSON.parse(REGISTRY)
+        reg.stacks[0][field] = value
+        expect(stackOf(JSON.stringify(reg), ROOT).note).toBeDefined()
+      }
+    }
+    for (const field of ['name', 'url', 'composeService']) {
+      for (const value of [undefined, null, '', '   ', 7, {}]) {
+        const reg = JSON.parse(REGISTRY)
+        reg.stacks[0].services[0][field] = value
+        expect(stackOf(JSON.stringify(reg), ROOT).note).toBeDefined()
+      }
+    }
+    for (const services of [undefined, null, []]) {
+      const reg = JSON.parse(REGISTRY)
+      reg.stacks[0].services = services
+      expect(stackOf(JSON.stringify(reg), ROOT).note).toBeDefined()
+    }
+    const reg = JSON.parse(REGISTRY)
+    reg.stacks[0].lastUpAt = 'not a date'
+    expect(stackOf(JSON.stringify(reg), ROOT).note).toBeDefined()
+  })
+
   test('reads compose ps as lines or as one array, a running container speaking for its service', () => {
     expect(parseComposePs(ps('exited', 1))?.get('app-api')).toEqual({ state: 'exited', exitCode: 1 })
     const array = JSON.stringify([
@@ -223,6 +248,25 @@ describe('devrouter', () => {
     }
     expect(parseComposePs('')?.size).toBe(0)
     expect(parseComposePs('[]')?.size).toBe(0)
+  })
+
+  test('a cleanly stopped replica does not hide another non-running unhealthy replica', () => {
+    for (const unhealthy of [{ State: 'restarting', ExitCode: 1 }, { State: 'exited', ExitCode: 2 }]) {
+      const bad = { Service: 'web', ...unhealthy }
+      const stopped = { Service: 'web', State: 'exited', ExitCode: 0 }
+      for (const rows of [[bad, stopped], [stopped, bad]]) {
+        expect(parseComposePs(JSON.stringify(rows))?.get('web')).toEqual({ state: unhealthy.State, exitCode: unhealthy.ExitCode })
+      }
+    }
+  })
+
+  test('paused, removing and unknown container states are not ready for automatic startup', () => {
+    for (const state of ['paused', 'removing', 'unknown']) {
+      const stored = JSON.parse(REGISTRY).stacks[0]
+      const stack = { ...stored, services: [{ ...stored.services[0], state, exitCode: 0, http: { kind: 'unchecked' }, tail: [] }] }
+      const doctor = { isInstalled: true, checks: parseDoctor(DOCTOR_OK), hasConfig: true, hasCompose: false, hasWorkspace: false }
+      expect(phaseOf({ doctor, stack, isRunning: false, failure: null }).kind).toBe('degraded')
+    }
   })
 
   test('takes Traefik 502 for down, its own 404 for unrouted, and a certificate error for unknown', () => {
@@ -682,5 +726,101 @@ describe('feed and tool', () => {
       ],
       problem: null,
     })
+  })
+})
+
+describe('independent review counterexamples', () => {
+  test('interleaved stdout and stderr keep independent secret-bearing lines', async ($, on) => {
+    const w = world(on)
+    const kept: unknown[] = []
+    on('state.set', ($, e, next) => {
+      if (e.plugin === 'stack-dock' && e.key === 'run') kept.push(e.value)
+      return next(e)
+    })
+    await $.session.start(START)
+    w.up.progress = [
+      { stream: 'stdout', text: 'PASSWORD=' },
+      { stream: 'stderr', text: 'building dependency\n' },
+      { stream: 'stdout', text: 'SYNTHETIC-PRIVATE-VALUE\n' },
+    ]
+    w.up.pauseAfterProgressMs = 30_000
+    await $.command.run({ command: 'stack-up', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
+    await w.clock.advance(1_000)
+    expect(JSON.stringify(kept)).not.toContain('SYNTHETIC-PRIVATE-VALUE')
+  })
+
+  test('healthy recovery after an unavailable poll clears the pending failure feed', async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY
+    await $.session.start(START)
+    w.ps = ps('exited', 1)
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 1/2')
+    w.psExitCode = 1
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ 状態不明')
+    w.psExitCode = 0
+    w.ps = ps('running')
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 2/2')
+    await type($)
+    expect(w.contexts[0]).toBeUndefined()
+  })
+
+  test('clean-stop recovery after an unavailable poll clears a pending service-down feed', async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY
+    await $.session.start(START)
+    w.ps = ps('exited', 1)
+    await w.clock.advance(10_000)
+    w.psExitCode = 1
+    await w.clock.advance(10_000)
+    w.psExitCode = 0
+    w.ps = [JSON.stringify({ Service: 'app-web', State: 'exited', ExitCode: 0 }), JSON.stringify({ Service: 'app-api', State: 'exited', ExitCode: 0 })].join('\n')
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ 停止')
+    await type($)
+    expect(w.contexts[0]).toBeUndefined()
+  })
+
+  test('a healthy measurement does not discard an unconfirmed up-failure feed', async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY.replace('2026-10-24T00:00:00Z', '1970-01-01T00:00:00Z')
+    w.up = { code: 1, stderr: 'error: build failed\n' }
+    await $.session.start(START)
+    await $.command.run({ command: 'stack-up', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
+    await w.clock.settle()
+    w.psExitCode = 1
+    await w.clock.advance(10_000)
+    w.psExitCode = 0
+    await w.clock.advance(10_000)
+    expect(w.status.at(-1)).toBe('⛵ app 起動失敗')
+    await type($)
+    expect(w.contexts[0]?.at(-1)).toContain('devrouter up /w/app failed: build failed')
+  })
+
+  test('a malformed service record must not enable automatic startup', { options: { auto: 'session-start' } }, async ($, on) => {
+    const w = world(on)
+    const reg = JSON.parse(REGISTRY)
+    reg.stacks[0].services = [{}]
+    w.registry = JSON.stringify(reg)
+    await $.session.start(START)
+    await w.clock.settle()
+    expect(w.spawned).toHaveLength(0)
+    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    expect(JSON.parse(ran.result as string).phase).toBe('unavailable')
+  })
+
+  test('a sole restarting container is not a cleanly stopped stack to auto start', { options: { auto: 'session-start' } }, async ($, on) => {
+    const w = world(on)
+    const reg = JSON.parse(REGISTRY)
+    reg.stacks[0].services = reg.stacks[0].services.slice(0, 1)
+    w.registry = JSON.stringify(reg)
+    w.ps = JSON.stringify({ Service: 'app-web', State: 'restarting', ExitCode: 1 })
+    await $.session.start(START)
+    await w.clock.settle()
+    expect(w.spawned).toHaveLength(0)
+    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
+    expect(JSON.parse(ran.result as string).phase).toBe('degraded')
   })
 })

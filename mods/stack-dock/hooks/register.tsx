@@ -12,13 +12,13 @@ import {
   downFixPrompt,
   downLabel,
   errorLine,
-  hasCrashed,
   httpError,
   httpOf,
   isDown,
   isRecovered,
   isStackCommand,
   isStackFile,
+  isStopped,
   isUp,
   lineSplitter,
   logLine,
@@ -179,13 +179,21 @@ async function poll($: Api) {
     const now = await measure($, dir)
     await update($, stack, () => now)
     const failed = await read($, failure)
+    const upFailureFeed = failed === null ? null : upFeed(dir, failed)
     if (failed !== null && now !== null && isRecovered(failed, now)) {
       // Brought up since, by Claude or in a terminal: the failure and its feed are over.
       await update($, failure, () => null)
-      await update($, feed, waiting => (waiting?.includes('- devrouter up ') === true ? null : waiting))
+      await update($, feed, waiting => (waiting === upFailureFeed ? null : waiting))
     }
     // An unavailable measurement proves neither a stop nor a previously known failure.
-    if (isPrimed && (await read($, registryNote)) === null) await tell($, wasUnavailable ? null : before, now)
+    if ((await read($, registryNote)) === null) {
+      // A trustworthy recovery ends a service-down feed even if the prior poll was unavailable.
+      // A failed up still needs its own recovery evidence, not merely an older healthy stack.
+      if (isStopped(now) || now?.services.every(one => !isDown(one))) {
+        await update($, feed, waiting => (waiting === upFailureFeed ? waiting : null))
+      }
+      if (isPrimed) await tell($, wasUnavailable ? null : before, now)
+    }
     isPrimed = true
     await setStatus($)
   } finally {
@@ -200,12 +208,11 @@ async function tell($: Api, before: Stack | null, now: Stack | null) {
     $.ui.toast(`⛵ ${now.name} 起動${first === undefined ? '' : ` · ${first.url}`}${now.services.length > 1 ? ` ほか${now.services.length - 1}` : ''}`)
   }
   // A clean stop is different from the last running service crashing.
-  if (before !== null && isUp(before) && !isUp(now) && !hasCrashed(now)) {
+  if (before !== null && isUp(before) && isStopped(now)) {
     $.ui.toast(`⛵ ${before.name} 停止`)
-    await update($, feed, () => null)
     return
   }
-  if (now === null || (!isUp(now) && !hasCrashed(now))) return
+  if (now === null || isStopped(now)) return
   const wasDown = new Set((before?.services ?? []).filter(isDown).map(s => s.name))
   const down = now.services.filter(isDown)
   const fresh = down.filter(s => !wasDown.has(s.name))
@@ -215,7 +222,6 @@ async function tell($: Api, before: Stack | null, now: Stack | null) {
   }
   if (down.length === 0 && wasDown.size > 0) {
     $.ui.toast(`⛵ ${now.name} 全サービス応答`)
-    await update($, feed, () => null)
   }
 }
 
@@ -248,7 +254,7 @@ async function bringUp($: Api, isBuild: boolean) {
   const tick = $.clock.every(1000, () => void tickRun($))
   const stream = $.process.spawn({ argv: ['devrouter', 'up', ...(isBuild ? ['--build'] : []), dir], cwd: dir })
   stop = () => void stream.return(undefined as never)
-  const split = lineSplitter()
+  const split = { stdout: lineSplitter(), stderr: lineSplitter() }
   let stdout = ''
   let stderr = ''
   let code: number | null | undefined
@@ -257,7 +263,7 @@ async function bringUp($: Api, isBuild: boolean) {
     for await (const chunk of stream) {
       if (chunk.stream === 'stderr') stderr = (stderr + chunk.text).slice(-16_000)
       else stdout = (stdout + chunk.text).slice(-16_000)
-      const line = split(chunk.text).at(-1)
+      const line = split[chunk.stream](chunk.text).at(-1)
       if (line !== undefined) await update($, run, r => (r === null ? r : { ...r, line: logLine(line.trim()).slice(0, 200) }))
     }
     code = (await stream.result).code

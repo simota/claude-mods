@@ -34,6 +34,10 @@ export const discoveredCount = (d: Doctor) => {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
+const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== ''
+type RegistryService = { name: string; url: string; composeService: string }
+const isRegistryService = (value: unknown): value is RegistryService =>
+  isRecord(value) && isText(value.name) && isText(value.url) && isText(value.composeService)
 
 /**
  * The root's stack in `~/.devrouter/registry.json` (version 1, as devrouter's `registryVersion`):
@@ -49,21 +53,22 @@ export function stackOf(text: string, root: string): { stack?: Omit<Stack, 'serv
   if (!isRecord(reg) || reg.version !== 1 || !Array.isArray(reg.stacks)) {
     return { note: `registry.json の形式が想定外です（version ${isRecord(reg) ? String(reg.version) : '不明'}）` }
   }
-  if (!reg.stacks.every(isRecord)) return { note: 'registry.json の stacks の形式が想定外です' }
+  if (!reg.stacks.every(isRecord) || !reg.stacks.every(s => isText(s.repoPath))) return { note: 'registry.json の stacks の形式が想定外です' }
   const found = reg.stacks.find(s => s.repoPath === root)
   if (found === undefined) return {}
-  if (found.services !== undefined && (!Array.isArray(found.services) || !found.services.every(isRecord))) {
+  if (!isText(found.id) || !isText(found.name) || !isText(found.composeFilePath) || !isText(found.lastUpAt) || !Number.isFinite(Date.parse(found.lastUpAt))) {
+    return { note: 'registry.json のスタック情報が不完全です' }
+  }
+  if (!Array.isArray(found.services) || found.services.length === 0 || !found.services.every(isRegistryService)) {
     return { note: 'registry.json の services の形式が想定外です' }
   }
-  const services = (found.services ?? []).map(s => ({
-    name: String(s.name ?? ''),
-    url: String(s.url ?? ''),
-    composeService: String(s.composeService ?? s.name ?? ''),
-  }))
-  return { stack: { id: String(found.id ?? ''), name: String(found.name ?? ''), composeFilePath: String(found.composeFilePath ?? ''), lastUpAt: String(found.lastUpAt ?? ''), services } }
+  const services = found.services.map(({ name, url, composeService }) => ({ name, url, composeService }))
+  return { stack: { id: found.id, name: found.name, composeFilePath: found.composeFilePath, lastUpAt: found.lastUpAt, services } }
 }
 
 export type Container = { state: string; exitCode?: number }
+const isStoppedContainer = (one: Container) =>
+  one.state === 'missing' || one.state === 'created' || (one.state === 'exited' && one.exitCode === 0)
 
 /** `docker compose ps --format json`: one object a line (compose 2.21 and later) or one array (before).
  * Undefined means the output is not usable, distinct from a valid empty container list. */
@@ -77,13 +82,15 @@ export function parseComposePs(out: string): Map<string, Container> | undefined 
   }
   const containers = new Map<string, Container>()
   for (const row of rows) {
-    if (!isRecord(row) || typeof row.Service !== 'string' || row.Service === '' || typeof row.State !== 'string' || row.State === '') return undefined
+    if (!isRecord(row) || !isText(row.Service) || !isText(row.State)) return undefined
     const service = row.Service
     const state = row.State.toLowerCase()
     const exitCode = typeof row.ExitCode === 'number' ? row.ExitCode : undefined
-    // A service scaled to several containers: a running one speaks for it.
-    if (containers.get(service)?.state === 'running') continue
-    containers.set(service, { state, exitCode: state === 'running' ? undefined : exitCode })
+    const current = { state, exitCode: state === 'running' ? undefined : exitCode }
+    const previous = containers.get(service)
+    // A running replica speaks for the service; otherwise a clean stop must not hide a failure.
+    if (previous?.state === 'running' || (state !== 'running' && previous !== undefined && !isStoppedContainer(previous) && isStoppedContainer(current))) continue
+    containers.set(service, current)
   }
   return containers
 }
@@ -101,12 +108,11 @@ export const httpError = (err: unknown): Http =>
 
 export const isDown = (s: Service) => s.state !== 'running' || s.http.kind === 'bad'
 
-/** Up: some container of it runs. A stack left in the registry with every container stopped is stopped. */
+/** Up: some container of it runs. */
 export const isUp = (s: Stack | null) => s !== null && s.services.some(one => one.state === 'running')
 
-/** No running containers can mean a crash, not just an intentional clean stop. */
-export const hasCrashed = (s: Stack | null) =>
-  s !== null && s.services.some(one => one.state === 'dead' || (one.state === 'exited' && one.exitCode !== undefined && one.exitCode !== 0))
+/** Only absent, not-yet-started or cleanly exited containers establish a stopped stack. */
+export const isStopped = (s: Stack | null) => s === null || s.services.every(isStoppedContainer)
 
 /** An up that succeeded after the failure, wherever it ran: lastUpAt is RFC 3339 to the second. */
 export const isRecovered = (f: Failure, s: Stack) => Date.parse(s.lastUpAt) >= Math.floor(f.at / 1000) * 1000
@@ -222,7 +228,7 @@ export function phaseOf(s: { doctor: Doctor | null; stack: Stack | null; isRunni
   const isTarget = doctor.hasConfig || doctor.hasCompose || doctor.hasWorkspace || stack !== null
   const docker = check(doctor, 'docker')
   if (docker?.level === 'error') return isTarget ? { kind: 'no-docker', text: docker.message } : { kind: 'none' }
-  if (stack !== null && (isUp(stack) || hasCrashed(stack))) {
+  if (stack !== null && !isStopped(stack)) {
     const down = stack.services.filter(isDown)
     return down.length === 0 ? { kind: 'healthy', stack } : { kind: 'degraded', stack, down }
   }
