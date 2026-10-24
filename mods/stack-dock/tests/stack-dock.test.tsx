@@ -485,7 +485,7 @@ describe('feed and tool', () => {
     w.registry = REGISTRY
     await $.session.start(START)
     const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(ran.result).toEqual({
+    expect(JSON.parse(ran.result as string)).toEqual({
       root: ROOT,
       phase: 'healthy',
       stack: 'app',

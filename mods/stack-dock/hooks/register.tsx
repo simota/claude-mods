@@ -382,8 +382,8 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: STATUS_TOOL }, async $ => {
-    const status = await statusOf($)
-    return { result: status, text: JSON.stringify(status, null, 2) }
+    // A registered tool answers as an MCP tool does: text, not an object.
+    return { result: JSON.stringify(await statusOf($), null, 2) }
   })
 
   on('tool.call', async ($, e, next) => {
