@@ -157,7 +157,7 @@ describe('ledger', () => {
 
 type World = { toasts: string[]; status: (string | undefined)[]; kept: Record<string, unknown>; copied: string[]; race?: (mine: unknown) => unknown; limit?: number }
 
-function world(on: On): World {
+function world(on: On, now = 1_000): World {
   const w: World = { toasts: [], status: [], kept: {}, copied: [] }
   // A store in memory the test can read back.
   on('store.get', ($, e) => ({ value: w.kept[e.key] }) as never)
@@ -178,7 +178,7 @@ function world(on: On): World {
     return { value: undefined }
   })
   on('store.keys', () => ({ value: Object.keys(w.kept) }))
-  mock.clock(on, { now: 1_000 })
+  mock.clock(on, { now })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 's1' }))
   on('session.repo', () => ({ value: { root: '/w', remote: null, internal: false, name: null } }))
@@ -254,6 +254,53 @@ describe('side-effect-ledger in a session', () => {
     await $.tool.call({ tool: 'Bash', command: 'git push origin feature' })
     expect(w.toasts.some(text => text.startsWith('📒 git push origin feature'))).toBe(true)
     expect(w.status.filter(text => text !== undefined)).toEqual([])
+  })
+
+  test("an earlier session's unchecked undo that is not easy is carried forward for 14 days", async ($, on) => {
+    const DAY = 24 * 60 * 60 * 1000
+    const now = 30 * DAY
+    const w = world(on, now)
+    const entry = (id: string, at: number, extra: Record<string, unknown> = {}) => ({ id, at, kind: 'github', label: `gh release create ${id}`, source: 'gh release create', isOk: true, outcome: '', undo: `gh release delete ${id}`, reversibility: 'manual', undoState: 'unchecked', sessionId: 's0', ...extra })
+    w.kept['ledger:/w'] = [
+      entry('v3', now - DAY),
+      entry('v2', now - 2 * DAY),
+      // Not carried: too old, easy, checked, failed.
+      entry('v1', now - 15 * DAY),
+      entry('push', now - DAY, { reversibility: 'easy' }),
+      entry('done', now - DAY, { undoState: 'confirmed' }),
+      entry('failed', now - DAY, { isOk: false }),
+    ]
+    await $.session.start(START)
+    expect(w.status.at(-1)).toBe('📒 繰越 2')
+    expect(w.toasts).toEqual(['📒 前回からの繰越 2件: gh release create v3 ほか · /ledger'])
+
+    // This session's own pending call joins it in the same line.
+    await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+    expect(w.status.at(-1)).toBe('📒 取消未確認 1 · 繰越 2')
+
+    const ui = await $.ui.mount({
+      plugin: 'side-effect-ledger',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'side-effect-ledger',
+      props: { title: '外部操作の台帳', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+    })
+    expect(await ui.find({ type: 'Text', text: '繰越（前回までの未確認 2件）' })).toBeDefined()
+    // Carried entries come first, ahead of this session's newer push.
+    const ok = (await ui.findAll({ type: 'Button' })).filter(one => one.key?.startsWith('ok:'))
+    expect(ok.map(one => one.key).slice(0, 2)).toEqual(['ok:v3', 'ok:v2'])
+    await ui.press({ key: 'ok:v3' })
+    await ui.press({ key: 'skip:v2' })
+    expect(w.status.at(-1)).toBe('📒 取消未確認 1')
+    await ui.unmount()
+  })
+
+  test('nothing is carried, and nothing toasted, when earlier sessions left nothing pending', async ($, on) => {
+    const w = world(on)
+    w.kept['ledger:/w'] = [{ id: 'a', at: 500, kind: 'push', label: 'git push', source: 'git push', isOk: true, outcome: '', undo: 'x', reversibility: 'easy', undoState: 'unchecked', sessionId: 's0' }]
+    await $.session.start(START)
+    expect(w.status.filter(text => text !== undefined)).toEqual([])
+    expect(w.toasts).toEqual([])
   })
 
   test('a call that failed is given no undo that would act on what was there before', async ($, on) => {

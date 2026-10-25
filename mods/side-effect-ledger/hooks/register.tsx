@@ -127,16 +127,28 @@ async function write($: EngineInterface, fn: (list: LedgerEntry[]) => LedgerEntr
   })
 }
 
-// The status line holds only what needs a look: this session's succeeded calls whose undo is not
-// easy and nobody has checked. An easy undo (a plain push) and the full count stay in /ledger.
-const statusOf = (list: readonly LedgerEntry[], sessionId: string): string | undefined => {
-  const open = list.filter(one => one.sessionId === sessionId && one.isOk && one.undoState === 'unchecked' && one.reversibility !== 'easy').length
-  return open === 0 ? undefined : `📒 取消未確認 ${open}`
+// What needs a look: a succeeded call whose undo is not easy and nobody has checked. An easy undo
+// (a plain push) and the full count stay in /ledger.
+const isPending = (one: LedgerEntry): boolean => one.isOk && one.undoState === 'unchecked' && one.reversibility !== 'easy'
+
+// An earlier session's pending call is carried forward for this long, then left to /ledger alone.
+const CARRY_MS = 14 * 24 * 60 * 60 * 1000
+const isCarried = (one: LedgerEntry, sessionId: string, now: number): boolean => isPending(one) && one.sessionId !== sessionId && now - one.at <= CARRY_MS
+
+// The status line holds this session's pending calls and, carried forward, earlier sessions'.
+const statusOf = (list: readonly LedgerEntry[], sessionId: string, now: number): string | undefined => {
+  const mine = list.filter(one => one.sessionId === sessionId && isPending(one)).length
+  const carried = list.filter(one => isCarried(one, sessionId, now)).length
+  const parts = [...(mine === 0 ? [] : [`取消未確認 ${mine}`]), ...(carried === 0 ? [] : [`繰越 ${carried}`])]
+  return parts.length === 0 ? undefined : `📒 ${parts.join(' · ')}`
+}
+
+async function showStatus($: EngineInterface, list: readonly LedgerEntry[]): Promise<void> {
+  $.ui.status(statusOf(list, await $.session.id(), await $.clock.now()))
 }
 
 async function setState($: EngineInterface, id: string, undoState: LedgerEntry['undoState']): Promise<void> {
-  const list = await write($, all => all.map(one => (one.id === id ? { ...one, undoState } : one)))
-  $.ui.status(statusOf(list, await $.session.id()))
+  await showStatus($, await write($, all => all.map(one => (one.id === id ? { ...one, undoState } : one))))
 }
 
 /**
@@ -157,7 +169,13 @@ export const register: Register = on => {
     const started = await next(e)
     const list = ((await $.store.get(await storeKey($))) as LedgerEntry[] | undefined) ?? []
     await update($, entries, () => list)
-    $.ui.status(statusOf(list, await $.session.id()))
+    const sessionId = await $.session.id()
+    const now = await $.clock.now()
+    $.ui.status(statusOf(list, sessionId, now))
+    // Once, as the session opens: what earlier sessions left unchecked, which /ledger lists first.
+    const carried = list.filter(one => isCarried(one, sessionId, now))
+    const first = carried[0]
+    if (first !== undefined) $.ui.toast(`📒 前回からの繰越 ${carried.length}件: ${first.label}${carried.length > 1 ? ' ほか' : ''} · /ledger`)
     return started
   })
 
@@ -190,7 +208,7 @@ export const register: Register = on => {
     }))
     const ids = new Set(fresh.map(one => one.id))
     const list = await write($, old => [...[...fresh].reverse(), ...old.filter(one => !ids.has(one.id))])
-    $.ui.status(statusOf(list, sessionId))
+    $.ui.status(statusOf(list, sessionId, at))
     const first = fresh[0] as LedgerEntry
     $.ui.toast(isOk ? `📒 ${first.label} — 取り消し: ${first.undo.slice(0, 80)}` : `📒 失敗を記録: ${first.label}`)
     return ran
@@ -201,10 +219,13 @@ export const register: Register = on => {
     const list = await read($, entries)
     if (list.length === 0) return { text: '📒 このリポジトリの外部操作はまだ記録されていません。' }
     const open = list.filter(one => one.isOk && one.undoState === 'unchecked')
+    const sessionId = await $.session.id()
+    const now = await $.clock.now()
+    const carried = list.filter(one => isCarried(one, sessionId, now))
     return {
       text: [
-        `📒 記録 ${list.length}件（取り消し方法が未確認 ${open.length}件）`,
-        ...list.slice(0, 10).map(one => `- ${new Date(one.at).toLocaleString()} ${one.isOk ? '✓' : '✗'} ${one.label}\n    取り消し（${REVERSIBILITY_LABEL[one.reversibility]}）: ${one.undo}`),
+        `📒 記録 ${list.length}件（取り消し方法が未確認 ${open.length}件${carried.length === 0 ? '' : `、うち前回からの繰越 ${carried.length}件`}）`,
+        ...[...carried, ...list.filter(one => !carried.includes(one))].slice(0, 10).map(one => `- ${new Date(one.at).toLocaleString()} ${one.isOk ? '✓' : '✗'} ${one.label}\n    取り消し（${REVERSIBILITY_LABEL[one.reversibility]}）: ${one.undo}`),
       ].join('\n'),
     }
   })
@@ -215,10 +236,17 @@ export const register: Register = on => {
     if (list.length === 0) return <Text dimColor>まだ記録はありません。</Text>
     const room = Math.max(1, Math.floor(((e.props.scroll.bodyRows ?? 24) - 1) / 4))
     const mark = { unchecked: '□ 取消未確認', confirmed: '☑ 取消確認済み', waived: '– 確認不要' } as const
+    // Carried forward entries first, under their own heading; the rest newest first as before.
+    const sessionId = await $.session.id()
+    const now = await $.clock.now()
+    const carried = list.filter(one => isCarried(one, sessionId, now))
+    const shown = [...carried, ...list.filter(one => !carried.includes(one))].slice(0, room)
     return (
       <Box flexDirection="column">
-        {list.slice(0, room).map(one => (
+        {carried.length > 0 && <Text bold color="yellow">{`繰越（前回までの未確認 ${carried.length}件）`}</Text>}
+        {shown.map((one, index) => (
           <Box key={one.id} flexDirection="column" marginBottom={1}>
+            {carried.length > 0 && index === carried.length && <Text bold>そのほかの記録</Text>}
             <Text bold wrap="truncate-end" color={one.isOk ? undefined : 'red'}>
               {`${one.isOk ? '✓' : '✗'} [${KIND_LABEL[one.kind]}] ${one.label}`}
             </Text>
@@ -238,7 +266,7 @@ export const register: Register = on => {
             )}
           </Box>
         ))}
-        {list.length > room && <Text dimColor>{`…ほか ${list.length - room} 件`}</Text>}
+        {list.length > shown.length && <Text dimColor>{`…ほか ${list.length - shown.length} 件`}</Text>}
       </Box>
     )
   })
