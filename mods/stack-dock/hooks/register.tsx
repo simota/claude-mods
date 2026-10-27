@@ -34,7 +34,6 @@ import {
 
 const PANE = 'stack-dock'
 const PANE_TITLE = 'devrouter'
-const STATUS_TOOL = 'mcp__stack-dock__status'
 const HTTP_TIMEOUT_MS = 3_000
 const DOWN_TAIL = 40
 const UP_TAIL = 8
@@ -354,24 +353,6 @@ async function openPane($: Api) {
   await $.ui.open({ id: PANE, title: PANE_TITLE })
 }
 
-/** What the status tool answers: the URLs to use, so Claude need not guess a port. */
-async function statusOf($: Api) {
-  const p = await currentPhase($)
-  const s = await read($, stack)
-  return {
-    root: await read($, root),
-    phase: p.kind,
-    stack: s?.name ?? null,
-    services: (s?.services ?? []).map(one => ({
-      name: one.name,
-      url: one.url,
-      container: one.state,
-      http: one.http.kind === 'ok' ? one.http.status : one.http.kind === 'bad' ? one.http.text : one.http.kind,
-    })),
-    problem: p.kind === 'failed' ? p.failure.error : p.kind === 'broken' ? `${p.check.name}: ${p.check.message}` : p.kind === 'no-docker' || p.kind === 'unavailable' ? p.text : null,
-  }
-}
-
 export const register: Register = (on, options) => {
   isAuto = options.auto === 'session-start'
   stopOnExit = options.stopOnExit === true
@@ -386,12 +367,6 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 'stack', description: 'devrouter のスタックをペインで開く' })
     await $.command.register({ name: 'stack-up', description: 'devrouter up でこのリポジトリのスタックを起動する' })
     await $.command.register({ name: 'stack-down', description: 'devrouter down でこのリポジトリのスタックを止める' })
-    await $.tool.register({
-      name: 'status',
-      description:
-        "The repository's devrouter stack as stack-dock sees it: each service's URL (https://<stack>-<service>.localtest.me), container state and HTTP status, or why it is not up. Call it before opening or requesting a local service, instead of guessing localhost ports.",
-      inputSchema: { type: 'object', properties: {} },
-    })
     const dir = await findRoot($, e.cwd)
     await update($, root, () => dir)
     await refresh($)
@@ -415,11 +390,6 @@ export const register: Register = (on, options) => {
       await refresh($)
     }
     return done
-  })
-
-  on('tool.call', { tool: STATUS_TOOL }, async $ => {
-    // A registered tool answers as an MCP tool does: text, not an object.
-    return { result: JSON.stringify(await statusOf($), null, 2) }
   })
 
   on('tool.call', async ($, e, next) => {

@@ -398,7 +398,7 @@ doctor の出力が切り詰められた場合は、残った行が正しい形�
 
 起動中は `pollSec` 秒ごとに、各サービスのコンテナ（`docker compose ps`）と Traefik 経由の URL を確かめます。正常に動いている間は帯を出さず、ステータスラインに `⛵ app 2/2` を出すだけで、起動・停止・サービスが落ちたときにトーストで知らせます。終了した、または 5xx を返す・応答しないサービスは `devrouter ❌ api exited (1) · ほか1件` と出て、Claude に頼む でログ末尾 40 行（認証情報は zukan と同じく伏せる）を入れます。host が信頼しない証明書と Traefik 自身の 404（ルーターなし）は、落ちた扱いにせずペインで黄色に出します。`/stack` でペインを開きます: サービスごとに URL（押すとコピー）、コンテナの状態、HTTP ステータス、直近のログ、開く（`devrouter open`）と 直させる。全体には 再起動・再ビルドして起動・停止（`devrouter down`）・doctor。`/stack-up`・`/stack-down` はボタンと同じです。閉じる で、状態が変わるまで帯を隠します。
 
-Claude はツール `mcp__stack-dock__status` で、各サービスの URL・コンテナの状態・HTTP ステータスを取れます（localhost のポートを当て推量しなくて済みます）。`feed` がオンなら、サービスが落ちたことや `devrouter up` の失敗を、待機中に打った次のプロンプトに 1 回だけデータとして添えます（slash コマンド・隠しプロンプト・plugin が送ったものには添えません）。セッションを越えて何も残しません。正しい状態は devrouter の registry と Docker が持っています。
+Claude は devrouter のコマンドを Bash で直接使ってスタックを確かめます（URL は `devrouter ls`、ログは `devrouter logs <stack>/<service>`、原因は `devrouter doctor`。localhost のポートを当て推量しなくて済みます）。mod はツールを登録せず、こうしたコマンドが走ると状態を確かめ直します。`feed` がオンなら、サービスが落ちたことや `devrouter up` の失敗を、待機中に打った次のプロンプトに 1 回だけデータとして添えます（slash コマンド・隠しプロンプト・plugin が送ったものには添えません）。セッションを越えて何も残しません。正しい状態は devrouter の registry と Docker が持っています。
 
 | オプション | 既定 | |
 | --- | --- | --- |

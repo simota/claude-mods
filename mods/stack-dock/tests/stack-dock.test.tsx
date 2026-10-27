@@ -100,7 +100,6 @@ function world(on: On): World {
   mock.env(on, { HOME: '/h' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('tool.register', () => ({ value: undefined }) as never)
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
@@ -186,6 +185,13 @@ const band = (surface: (typeof SURFACES)[number]) =>
     component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 }, view: {} },
   }) as const
+
+const bandShows = async ($: Engine, text: RegExp) => {
+  const ui = await $.ui.mount(band('terminal'))
+  const found = await ui.find({ type: 'Text', text })
+  await ui.unmount()
+  return found !== undefined
+}
 
 const type = ($: Engine) => $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false })
 const endTurn = ($: Engine) => $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
@@ -339,11 +345,8 @@ describe('band', () => {
     await $.session.start(START)
     await w.clock.settle()
     expect(w.spawned).toHaveLength(0)
-    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    const result = JSON.parse(ran.result as string)
-    expect(result.phase).toBe('broken')
-    expect(result.problem).toContain('doctor terminated')
-    expect(result.problem).not.toContain('SYNTHETIC')
+    expect(await bandShows($, /❌ doctor: doctor: .*doctor terminated/)).toBe(true)
+    expect(await bandShows($, /SYNTHETIC/)).toBe(false)
   })
 
   test('doctor output with no recognized checks is not proof that a stack is ready', { options: { auto: 'session-start' } }, async ($, on) => {
@@ -352,8 +355,7 @@ describe('band', () => {
     await $.session.start(START)
     await w.clock.settle()
     expect(w.spawned).toHaveLength(0)
-    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(ran.result as string).phase).toBe('broken')
+    expect(await bandShows($, /❌ doctor: /)).toBe(true)
   })
 
   test('doctor execution errors remain visible instead of pretending devrouter is absent', { options: { auto: 'session-start' } }, async ($, on) => {
@@ -363,8 +365,7 @@ describe('band', () => {
       await $.session.start(START)
       await w.clock.settle()
       expect(w.spawned).toHaveLength(0)
-      const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-      expect(JSON.parse(ran.result as string)).toMatchObject({ phase: 'broken', problem: expect.stringContaining(message) })
+      expect(await bandShows($, new RegExp(`❌ doctor: .*${message}`))).toBe(true)
     }
   })
 
@@ -374,10 +375,8 @@ describe('band', () => {
     await $.session.start(START)
     await w.clock.settle()
     expect(w.spawned).toHaveLength(0)
-    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(ran.result as string)).toMatchObject({ phase: 'unavailable', problem: expect.stringContaining('registry.json') })
     const ui = await $.ui.mount(band('terminal'))
-    expect(await ui.find({ type: 'Text', text: /状態を確認できません/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /状態を確認できません: .*registry\.json/ })).toBeDefined()
     expect(await ui.find({ key: 'up' })).toBeUndefined()
     w.registry = REGISTRY
     await w.clock.advance(10_000)
@@ -393,8 +392,7 @@ describe('band', () => {
     await $.session.start(START)
     await w.clock.settle()
     expect(w.spawned).toHaveLength(0)
-    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(ran.result as string)).toMatchObject({ phase: 'unavailable', problem: expect.stringContaining('permission denied') })
+    expect(await bandShows($, /状態を確認できません: .*permission denied/)).toBe(true)
     w.registryError = undefined
     await w.clock.advance(10_000)
     expect(w.status.at(-1)).toBe('⛵ app 2/2')
@@ -407,16 +405,14 @@ describe('band', () => {
     await $.session.start(START)
     await w.clock.settle()
     expect(w.spawned).toHaveLength(0)
-    const malformed = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(malformed.result as string)).toMatchObject({ phase: 'unavailable', problem: expect.stringContaining('docker compose ps') })
+    expect(await bandShows($, /状態を確認できません: docker compose ps/)).toBe(true)
     w.ps = ps('running')
     await w.clock.advance(10_000)
     expect(w.status.at(-1)).toBe('⛵ app 2/2')
     w.psExitCode = 1
     w.psStderr = 'cannot connect to Docker\n'
     await w.clock.advance(10_000)
-    const failed = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(failed.result as string)).toMatchObject({ phase: 'unavailable', problem: expect.stringContaining('cannot connect to Docker') })
+    expect(await bandShows($, /状態を確認できません: .*cannot connect to Docker/)).toBe(true)
     expect(w.toasts.some(text => text.includes('停止'))).toBe(false)
     w.psExitCode = 0
     w.ps = ps('exited', 1)
@@ -587,8 +583,7 @@ describe('band', () => {
     await w.clock.advance(10_000)
     expect(w.status.at(-1)).toBe('⛵ app 0/2')
     expect(w.toasts.at(-1)).toContain('api exited (2)')
-    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(ran.result as string).phase).toBe('degraded')
+    expect(await bandShows($, /devrouter ❌ web dead \(0\) · ほか1件/)).toBe(true)
     w.ps = ps('running')
     await w.clock.advance(10_000)
     expect(w.status.at(-1)).toBe('⛵ app 2/2')
@@ -689,7 +684,7 @@ describe('band', () => {
   })
 })
 
-describe('feed and tool', () => {
+describe('feed', () => {
   test('a service going down goes beside the next typed prompt once', async ($, on) => {
     const w = world(on)
     w.registry = REGISTRY
@@ -712,23 +707,6 @@ describe('feed and tool', () => {
     await type($)
     expect(w.contexts[0]).toBeUndefined()
   })
-
-  test('the status tool answers each service URL with its state', async ($, on) => {
-    const w = world(on)
-    w.registry = REGISTRY
-    await $.session.start(START)
-    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(ran.result as string)).toEqual({
-      root: ROOT,
-      phase: 'healthy',
-      stack: 'app',
-      services: [
-        { name: 'web', url: 'http://app-web.localtest.me', container: 'running', http: 200 },
-        { name: 'api', url: 'http://app-api.localtest.me', container: 'running', http: 200 },
-      ],
-      problem: null,
-    })
-  })
 })
 
 describe('independent review counterexamples', () => {
@@ -739,8 +717,7 @@ describe('independent review counterexamples', () => {
       await $.session.start(START)
       await w.clock.settle()
       expect(w.spawned).toHaveLength(0)
-      const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-      expect(JSON.parse(ran.result as string).phase).toBe('broken')
+      expect(w.status.at(-1)).toBe('⛵ 停止')
       for (const surface of SURFACES) {
         const ui = await $.ui.mount(band(surface))
         expect(await ui.find({ type: 'Text', text: /切り詰め/ })).toBeDefined()
@@ -765,10 +742,6 @@ describe('independent review counterexamples', () => {
         await w.clock.settle()
         expect(w.spawned).toHaveLength(0)
         expect(w.status.at(-1)).toBe('⛵ 状態不明')
-        const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-        const status = JSON.parse(ran.result as string)
-        expect(status.phase).toBe('unavailable')
-        expect(status.services.every((one: { container: string }) => one.container === 'unknown')).toBe(true)
         for (const surface of SURFACES) {
           const ui = await $.ui.mount(band(surface))
           expect(await ui.find({ type: 'Text', text: /切り詰め/ })).toBeDefined()
@@ -925,8 +898,7 @@ describe('independent review counterexamples', () => {
     await $.session.start(START)
     await w.clock.settle()
     expect(w.spawned).toHaveLength(0)
-    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(ran.result as string).phase).toBe('unavailable')
+    expect(w.status.at(-1)).toBe('⛵ 状態不明')
   })
 
   test('a sole restarting container is not a cleanly stopped stack to auto start', { options: { auto: 'session-start' } }, async ($, on) => {
@@ -938,7 +910,6 @@ describe('independent review counterexamples', () => {
     await $.session.start(START)
     await w.clock.settle()
     expect(w.spawned).toHaveLength(0)
-    const ran = await $.tool.call({ tool: 'mcp__stack-dock__status' } as never)
-    expect(JSON.parse(ran.result as string).phase).toBe('degraded')
+    expect(w.status.at(-1)).toBe('⛵ app 0/1')
   })
 })
