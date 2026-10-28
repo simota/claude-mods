@@ -2,8 +2,8 @@ export type Severity = 'high' | 'medium' | 'low'
 
 export type Finding = { id: string; file: string; line: number; severity: Severity; title: string; body: string }
 
-/** What a press reviews: the uncommitted changes, or the branch against its base when nothing is uncommitted. */
-export type Scope = { kind: 'uncommitted' } | { kind: 'base'; base: string }
+/** What a press reviews: the working tree against the base it forked from, or the uncommitted changes when there is no base. */
+export type Scope = { kind: 'uncommitted' } | { kind: 'base'; base: string; mergeBase: string }
 
 export type Diff = { key: string; scope: Scope; files: number; insertions: number; deletions: number }
 

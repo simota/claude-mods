@@ -72,47 +72,57 @@ async function headOf($: Api): Promise<string | undefined> {
   throw new Error('Git の HEAD を取得できず、差分を確認できません')
 }
 
-/** The base a branch is reviewed against: origin's default branch, else a local main. */
+const BASES = ['origin/main', 'origin/master', 'main', 'master']
+
+/** The base a branch is reviewed against: origin's default branch, else the first of BASES that exists. */
 async function baseRef($: Api) {
   const remote = (await git($, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.trim()
   if (remote !== undefined && remote !== '') {
     return remote
   }
-  return (await git($, ['rev-parse', '--verify', '--quiet', 'main'])) === undefined ? undefined : 'main'
+  for (const ref of BASES) {
+    if ((await git($, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) !== undefined) return ref
+  }
+  return undefined
 }
 
-/** What a press would review now, and its key: the uncommitted changes first, else the branch. */
+/** Where HEAD left the base; undefined when they share no history (an orphan branch, a shallow clone). */
+async function mergeBaseOf($: Api, base: string) {
+  const ran = await $.process.run(['git', 'merge-base', base, 'HEAD'])
+  const found = ran.stdout.trim()
+  if (ran.exitCode === 0 && !ran.isStdoutTruncated && found !== '') return found
+  // Exit 1 with nothing said is Git's answer for no common ancestor; anything else is a failure.
+  if (ran.exitCode === 1 && ran.stdout === '' && ran.stderr === '') return undefined
+  throw new Error('Git の差分を確認できません')
+}
+
+/**
+ * What a press would review now, and its key: the working tree against where the branch left its
+ * base, so the commits and the uncommitted changes go in together; with no base or no common ancestor, the uncommitted alone.
+ */
 async function measure($: Api): Promise<Diff | null> {
   const head = await headOf($)
   if (head === undefined) {
     return null
   }
 
-  const stat = await checkedGit($, ['diff', 'HEAD', '--shortstat'])
+  const base = await baseRef($)
+  const mergeBase = base === undefined ? undefined : await mergeBaseOf($, base)
+  const from = mergeBase ?? 'HEAD'
+  const stat = await checkedGit($, ['diff', from, '--shortstat'])
   // -z: the names as they are, not quoted as core.quotePath quotes a non-ASCII one.
   const untracked = (await checkedGit($, ['ls-files', '-z', '--others', '--exclude-standard'])).split('\0').filter(name => name !== '')
-  if (stat.trim() !== '' || untracked.length > 0) {
-    const patch = await checkedGit($, ['diff', 'HEAD'])
-    const blobs = await untrackedHashes($, untracked)
-    const counted = parseShortstat(stat)
-    return {
-      key: hash(`${head}\n${patch}\n${untracked.join('\0')}\n${blobs}`),
-      scope: { kind: 'uncommitted' },
-      ...counted,
-      files: counted.files + untracked.length,
-    }
-  }
-
-  const base = await baseRef($)
-  if (base === undefined || Number((await checkedGit($, ['rev-list', '--count', `${base}..HEAD`])).trim()) === 0) {
+  if (stat.trim() === '' && untracked.length === 0) {
     return null
   }
-  const range = `${base}...HEAD`
-  const patch = await checkedGit($, ['diff', range])
+  const patch = await checkedGit($, ['diff', from])
+  const blobs = await untrackedHashes($, untracked)
+  const counted = parseShortstat(stat)
   return {
-    key: hash(`${base}\n${head}\n${patch}`),
-    scope: { kind: 'base', base },
-    ...parseShortstat(await checkedGit($, ['diff', range, '--shortstat'])),
+    key: hash(`${base === undefined || mergeBase === undefined ? '' : `${base}\n${mergeBase}\n`}${head}\n${patch}\n${untracked.join('\0')}\n${blobs}`),
+    scope: base === undefined || mergeBase === undefined ? { kind: 'uncommitted' } : { kind: 'base', base, mergeBase },
+    ...counted,
+    files: counted.files + untracked.length,
   }
 }
 

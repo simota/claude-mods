@@ -352,7 +352,7 @@ Claude in Chrome の遷移・クリック・入力・キー・フォーム入力
 
 ### cross-check
 
-Codex CLI（`codex`）が `PATH` にあり、ログイン済みであることが前提です。レビューするものがある間、入力欄の上の帯に `🔍 未レビュー（未コミットの変更） 3ファイル +120 −8 [ Codex でレビュー ]` が出ます。対象は未コミットの変更（staged・unstaged・untracked）で、それがなければ origin の既定ブランチ（なければ `main`）に対するブランチの差分です。押すと `codex exec --sandbox read-only --json --ephemeral --output-schema hooks/schema.json` をレビュー用のプロンプトで実行します（`codex exec review` はスキーマを無視して平文で答えるため使いません）。実行中の帯には経過時間と Codex がしていることが出て、中止できます。
+Codex CLI（`codex`）が `PATH` にあり、ログイン済みであることが前提です。レビューするものがある間、入力欄の上の帯に `🔍 未レビュー（origin/main との差分） 3ファイル +120 −8 [ Codex でレビュー ]` が出ます。対象は、ブランチがベースから分かれた地点と作業ツリーとの差分で、ブランチのコミットと未コミットの変更（staged・unstaged・untracked）をまとめてレビューします。ベースは origin の既定ブランチ、なければ `origin/main`・`origin/master`・`main`・`master` のうち最初にあるものです。どれもないリポジトリや、ベースと共通の履歴を持たないブランチ（orphan ブランチ、祖先を含まない shallow clone）では未コミットの変更だけを対象にします（`未コミットの変更`）。押すと `codex exec --sandbox read-only --json --ephemeral --output-schema hooks/schema.json` をレビュー用のプロンプトで実行します（`codex exec review` はスキーマを無視して平文で答えるため使いません）。実行中の帯には経過時間と Codex がしていることが出て、中止できます。
 
 終わると、帯に最も重い指摘と残りの件数（`🔍 high · m.py:4 空リストで ZeroDivisionError · ほか2件`）が出て、件数をトーストで知らせます。**Claude に直させる** は指摘をデータとして引用した依頼文を入力欄に入れるだけで、送るのはあなたです。**詳細** と `/codex` でペインが開き、指摘ごとに 直させる（その 1 件だけ）と 却下 があります。`/codex-review` はボタンと同じくレビューを始めます。ステータスラインには `🔍 codex 3件` が残ります。
 

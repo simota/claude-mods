@@ -12,7 +12,7 @@ export const reviewPrompt = (scope: Scope) =>
   [
     scope.kind === 'uncommitted'
       ? 'Review the uncommitted changes in this git repository: staged, unstaged and untracked (see `git status`, `git diff HEAD` and the untracked files).'
-      : `Review the changes this branch makes against ${scope.base} (see \`git diff ${scope.base}...HEAD\`).`,
+      : `Review the changes this working tree makes against ${scope.base}: the commits since this branch left it and the uncommitted changes, staged, unstaged and untracked (see \`git diff ${scope.mergeBase}\`, \`git status\` and the untracked files).`,
     'Report defects only: correctness bugs, broken edge cases, security problems, and changes that break callers. No style nits.',
     'Each finding names the file (repository-relative), the line in the new version, a severity (high, medium or low), a one-line title and a short body saying the failure scenario.',
     'Write title, body and summary in Japanese. An empty findings list is a valid answer. Do not modify any file.',

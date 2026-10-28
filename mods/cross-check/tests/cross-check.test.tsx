@@ -38,6 +38,13 @@ type World = {
   gitFailure?: string
   gitTruncated?: string
   headMode?: 'no-repository' | 'unborn'
+  // The refs that exist besides HEAD, and what origin/HEAD names; none by default, so the uncommitted changes alone are reviewed.
+  refs: string[]
+  originHead?: string
+  // The working tree against the merge base: the branch's commits and the uncommitted changes.
+  basePatch: string
+  // HEAD shares no history with the refs: an orphan branch, or a shallow clone without the ancestor.
+  isUnrelated?: boolean
   hashOutput?: string
   spawned: string[][]
   filled: string[]
@@ -59,6 +66,8 @@ function world(on: On): World {
     untracked: {},
     links: {},
     nonFiles: [],
+    refs: [],
+    basePatch: 'diff --git a/m.py b/m.py\n+def avg(xs):\ndiff --git a/n.py b/n.py\n+x = 1\n',
     spawned: [],
     filled: [],
     status: [],
@@ -93,6 +102,11 @@ function world(on: On): World {
     if (argv === 'git rev-parse --is-inside-work-tree') return w.headMode === 'no-repository' ? failed() : ok('true\n')
     if (argv === 'git symbolic-ref --quiet HEAD') return ok('refs/heads/main\n')
     if (argv === 'git show-ref --verify --quiet refs/heads/main') return { value: { exitCode: w.headMode === 'unborn' ? 1 : 0, stdout: '', stderr: '' } } as never
+    if (argv === 'git symbolic-ref --short refs/remotes/origin/HEAD') return w.originHead === undefined ? { value: { exitCode: 1, stdout: '', stderr: '' } } as never : ok(`${w.originHead}\n`)
+    if (e.argv[1] === 'rev-parse' && e.argv[2] === '--verify') return w.refs.includes(e.argv[4]!.replace('^{commit}', '')) ? ok('def\n') : { value: { exitCode: 1, stdout: '', stderr: '' } } as never
+    if (e.argv[1] === 'merge-base' && w.refs.includes(e.argv[2]!) && w.isUnrelated !== true) return ok('mb1\n')
+    if (argv === 'git diff mb1 --shortstat') return ok(w.basePatch === '' ? '' : ' 2 files changed, 4 insertions(+)\n')
+    if (argv === 'git diff mb1') return ok(w.basePatch)
     if (argv === 'git diff HEAD --shortstat') return ok(w.patch === '' ? '' : ' 1 file changed, 3 insertions(+)\n')
     if (argv === 'git diff HEAD') return ok(w.patch)
     if (argv === 'git ls-files -z --others --exclude-standard') return ok(Object.keys(w.untracked).map(name => `${name}\0`).join(''))
@@ -256,6 +270,62 @@ describe('band', () => {
     const ui = await $.ui.mount(band('terminal'))
     expect(await ui.find({ type: 'Text', text: /codex|未レビュー/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'engine' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('with a base, the press reviews the commits and the uncommitted changes against it together', async ($, on) => {
+    const w = world(on)
+    w.refs = ['origin/main']
+    w.originHead = 'origin/main'
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('origin/main との差分')
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('2ファイル +4')
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    await ui.unmount()
+    expect(w.spawned[0]?.at(-1)).toContain('`git diff mb1`')
+    expect(w.spawned[0]?.at(-1)).toContain('uncommitted')
+  })
+
+  test('with no origin/HEAD, the first base that exists is used, even with a clean working tree', async ($, on) => {
+    const w = world(on)
+    w.refs = ['origin/master', 'master']
+    w.patch = ''
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('origin/master との差分')
+    await ui.unmount()
+  })
+
+  test('a branch sharing no history with its base still reviews its uncommitted changes', async ($, on) => {
+    const w = world(on)
+    w.refs = ['main']
+    w.isUnrelated = true
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('未コミットの変更')
+    await ui.unmount()
+  })
+
+  test('a failed merge-base is a measurement error, not a quiet fallback', async ($, on) => {
+    const w = world(on)
+    w.refs = ['main']
+    w.gitFailure = 'git merge-base main HEAD'
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect(await ui.find({ type: 'Text', text: /未レビュー/ })).toBeUndefined()
+    await ui.unmount()
+    expect(w.status.at(-1)).toBe('🔍 codex 失敗')
+  })
+
+  test('a working tree level with its base has nothing to review', async ($, on) => {
+    const w = world(on)
+    w.refs = ['main']
+    w.basePatch = ''
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect(await ui.find({ type: 'Text', text: /未レビュー/ })).toBeUndefined()
     await ui.unmount()
   })
 
