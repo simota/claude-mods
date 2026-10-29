@@ -1,6 +1,6 @@
 {
   "name": "stack-dock",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "The repository's devrouter stack in one press: the band above the prompt says whether it is unset, stopped or up, starts it with devrouter up, shows each service's URL and health in the status line and a /stack pane, and puts doctor's findings and the failing logs into the prompt for Claude to fix when asked",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

@@ -241,6 +241,24 @@ describe('devrouter', () => {
     expect(stackOf(JSON.stringify(reg), ROOT).note).toBeDefined()
   })
 
+  test('a worker has no URL; only a worker may go without one', () => {
+    for (const url of [undefined, '']) {
+      const reg = JSON.parse(REGISTRY)
+      reg.stacks[0].services.push({ name: 'jobs', workspacePath: 'jobs', host: '', ...(url === undefined ? {} : { url }), port: 0, composeService: 'app-jobs', kind: 'worker' })
+      expect(stackOf(JSON.stringify(reg), ROOT).stack?.services.at(-1)).toEqual({ name: 'jobs', url: '', composeService: 'app-jobs' })
+    }
+    for (const kind of [undefined, 'http']) {
+      const reg = JSON.parse(REGISTRY)
+      reg.stacks[0].services[0].url = ''
+      reg.stacks[0].services[0].kind = kind
+      expect(stackOf(JSON.stringify(reg), ROOT).note).toBeDefined()
+    }
+    const reg = JSON.parse(REGISTRY)
+    reg.stacks[0].services[0].url = '   '
+    reg.stacks[0].services[0].kind = 'worker'
+    expect(stackOf(JSON.stringify(reg), ROOT).note).toBeDefined()
+  })
+
   test('reads compose ps as lines or as one array, a running container speaking for its service', () => {
     expect(parseComposePs(ps('exited', 1))?.get('app-api')).toEqual({ state: 'exited', exitCode: 1 })
     const array = JSON.stringify([

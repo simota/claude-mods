@@ -165,7 +165,8 @@ async function measure($: Api, dir: string): Promise<Stack | null> {
   const services: Service[] = []
   for (const one of seen.stack.services) {
     const container = containers === undefined ? { state: 'unknown' } : (containers.get(one.composeService) ?? { state: 'missing' })
-    const http: Http = container.state === 'running' ? await fetchHttp($, one.url) : { kind: 'unchecked' }
+    // A worker has no URL: its running container is all the health it has.
+    const http: Http = container.state === 'running' && one.url !== '' ? await fetchHttp($, one.url) : { kind: 'unchecked' }
     const service: Service = { ...one, ...container, http, tail: [] }
     const logs = container.state === 'missing' || containers === undefined ? undefined : await compose($, seen.stack.composeFilePath, ['logs', '--no-color', '--tail', String(isDown(service) ? DOWN_TAIL : UP_TAIL), one.composeService])
     services.push({ ...service, tail: logs?.exitCode === 0 ? tailOf(`${logs.stdout}\n${logs.stderr}`, isDown(service) ? DOWN_TAIL : UP_TAIL) : [] })
@@ -209,7 +210,7 @@ async function poll($: Api) {
 /** Toasts what changed, and leaves a service going down for the next prompt. */
 async function tell($: Api, before: Stack | null, now: Stack | null) {
   if (now !== null && !isUp(before) && isUp(now)) {
-    const first = now.services[0]
+    const first = now.services.find(one => one.url !== '')
     $.ui.toast(`⛵ ${now.name} 起動${first === undefined ? '' : ` · ${first.url}`}${now.services.length > 1 ? ` ほか${now.services.length - 1}` : ''}`)
   }
   // A clean stop is different from the last running service crashing.
@@ -608,15 +609,17 @@ export const register: Register = (on, options) => {
               <Text color={color(one)} bold wrap="truncate-end">
                 {isDown(one) ? '○' : '●'} {one.name}{' '}
               </Text>
-              <Button key={`copy-${one.name}`} plain onPress={press => $.ui.copy({ text: one.url, surface: press.surface })}>
-                {one.url}
-              </Button>
+              {one.url !== '' && (
+                <Button key={`copy-${one.name}`} plain onPress={press => $.ui.copy({ text: one.url, surface: press.surface })}>
+                  {one.url}
+                </Button>
+              )}
               <Text dimColor wrap="truncate-end">
                 {' '}
                 {one.state}
                 {one.exitCode === undefined ? '' : ` (${one.exitCode})`} {httpText(one.http)}{' '}
               </Text>
-              <Button key={`open-${one.name}`} label="開く" onPress={() => openService($, s, one)} />
+              {one.url !== '' && <Button key={`open-${one.name}`} label="開く" onPress={() => openService($, s, one)} />}
               {isDown(one) && <Button key={`fix-${one.name}`} label="直させる" onPress={() => $.prompt.fill({ text: downFixPrompt(s, [one]), mode: 'insert' })} />}
             </Box>
             {one.tail.slice(isDown(one) ? -DOWN_TAIL : -UP_TAIL).map((line, i) => (
