@@ -1,0 +1,13 @@
+{
+  "name": "claude-mods-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Official Landing Page for simota/claude-mods — zero-dependency TypeScript SSG + interactive client",
+  "type": "module",
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "dev": "bun run scripts/serve.ts --watch",
+    "preview": "bun run scripts/serve.ts",
+    "typecheck": "tsc --noEmit"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "1.1",
+  "project": "simota/claude-mods",
+  "artDirection": "Obsidian Precision Instrument — dark anodized optical studio photography grounded in mods/tool-row Gruvbox accents and mods/kachi emerald verification sweeps",
+  "colorProfile": "sRGB",
+  "assets": [
+    {
+      "file": "obsidian-instrument.webp",
+      "role": "Hero ambient optical backdrop (decorative, aria-hidden)",
+      "dimensions": { "width": 1280, "height": 714 },
+      "format": "image/webp",
+      "bytes": 10788,
+      "budgetBytes": 204800,
+      "source": "Derived and optimized from repository studio plate artifacts/promo/assets/images/obsidian_instrument_bg.jpg",
+      "encoding": "Pillow WebP lossy q=80, method=6, sRGB"
+    },
+    {
+      "file": "tri-engine-prism.webp",
+      "role": "Section 02 Multi-Engine Consensus studio prism diagram",
+      "dimensions": { "width": 1280, "height": 714 },
+      "format": "image/webp",
+      "bytes": 23748,
+      "budgetBytes": 122880,
+      "source": "Generated bespoke for LP via Antigravity image-generator subagent (tri_engine_prism_raw_1793337718738.jpg)",
+      "prompt": "Macro studio product photography on a matte black anodized aluminum optical bench (#080A0E). Three distinct thin precision light beams—warm amber (#FABD2F), cool steel cyan-blue (#8FBCB0), and crisp coral-orange (#FE8A2B)—enter from the left through three smoked dark-glass optical prisms, converging cleanly inside a central precision crystal cube into a single luminous mint-emerald verification beam (#8FF5AA) exiting to the right. Subtle physical refraction, realistic machined metal mounts, Leica/Teenage Engineering industrial craft, shallow depth of field, zero text, zero UI labels, no neon cyberpunk clutter.",
+      "encoding": "Resized 1280x714 Lanczos, Pillow WebP lossy q=82, method=6, sRGB"
+    },
+    {
+      "file": "kachi-refraction.webp",
+      "role": "Section 03 Kachi Acoustic Bench ambient backdrop",
+      "dimensions": { "width": 1280, "height": 714 },
+      "format": "image/webp",
+      "bytes": 23406,
+      "budgetBytes": 122880,
+      "source": "Derived and optimized from repository studio plate artifacts/promo/assets/images/kachi_emerald_refraction.jpg",
+      "encoding": "Pillow WebP lossy q=80, method=6, sRGB"
+    },
+    {
+      "file": "promo-poster.webp",
+      "role": "Section 03 38-second official product film poster frame",
+      "dimensions": { "width": 1280, "height": 720 },
+      "format": "image/webp",
+      "bytes": 46078,
+      "budgetBytes": 122880,
+      "source": "Extracted and optimized from official promo frame artifacts/promo/previews/06_consensus_review_13.8s.png",
+      "encoding": "Resized 1280x720 Lanczos, Pillow WebP lossy q=82, method=6, sRGB"
+    },
+    {
+      "file": "og-card.jpg",
+      "role": "OpenGraph / X summary_large_image social preview card",
+      "dimensions": { "width": 1200, "height": 630 },
+      "format": "image/jpeg",
+      "bytes": 54256,
+      "budgetBytes": 153600,
+      "source": "Composited from obsidian-instrument studio plate with typographic title lockup and verified repo badges",
+      "encoding": "JPEG progressive q=84, sRGB"
+    }
+  ]
+}
