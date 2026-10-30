@@ -15,12 +15,13 @@ export function renderHeader(): string {
       </a>
 
       <nav class="desktop-nav" aria-label="主要セクション">
+        <a href="#promo" class="nav-link">38秒動画</a>
         <a href="#shift" class="nav-link">解決できること</a>
-        <a href="#architecture" class="nav-link">3大AI同時レビュー</a>
-        <a href="#showcase" class="nav-link">38秒動画 &amp; 音</a>
+        <a href="#architecture" class="nav-link">3大AIレビュー</a>
+        <a href="#showcase" class="nav-link">達成音試聴</a>
         <a href="#mods" class="nav-link">全29種一覧</a>
         <a href="#setup" class="nav-link">入れ方</a>
-        <a href="#faq" class="nav-link">よくある質問</a>
+        <a href="#faq" class="nav-link">FAQ</a>
       </nav>
 
       <div class="header-actions">
@@ -55,28 +56,32 @@ export function renderHeader(): string {
 
     <div class="mobile-drawer" id="mobile-nav-drawer" hidden>
       <nav class="container mobile-drawer-inner" aria-label="モバイルナビゲーション">
-        <a href="#shift" class="mobile-nav-link">
+        <a href="#promo" class="mobile-nav-link">
           <span class="mobile-nav-num">01</span>
+          <span>38秒プロモーション動画</span>
+        </a>
+        <a href="#shift" class="mobile-nav-link">
+          <span class="mobile-nav-num">02</span>
           <span>よくある4大ストレスと解決策</span>
         </a>
         <a href="#architecture" class="mobile-nav-link">
-          <span class="mobile-nav-num">02</span>
+          <span class="mobile-nav-num">03</span>
           <span>3大AI同時レビュー &amp; 4つの安心設計</span>
         </a>
         <a href="#showcase" class="mobile-nav-link">
-          <span class="mobile-nav-num">03</span>
-          <span>38秒デモ動画 &amp; バグ解決音試聴</span>
+          <span class="mobile-nav-num">04</span>
+          <span>バグ解決音 kachi 試聴スタジオ</span>
         </a>
         <a href="#mods" class="mobile-nav-link">
-          <span class="mobile-nav-num">04</span>
+          <span class="mobile-nav-num">05</span>
           <span>全29プラグイン一覧・コマンド作成</span>
         </a>
         <a href="#setup" class="mobile-nav-link">
-          <span class="mobile-nav-num">05</span>
+          <span class="mobile-nav-num">06</span>
           <span>1分で終わる導入手順</span>
         </a>
         <a href="#faq" class="mobile-nav-link">
-          <span class="mobile-nav-num">06</span>
+          <span class="mobile-nav-num">07</span>
           <span>よくある質問（安全性・動作環境）</span>
         </a>
         <div class="mobile-drawer-cta">

@@ -102,9 +102,9 @@ export function renderHero(): string {
             <span>おすすめセット・全29種から選ぶ</span>
             ${ICONS.arrowRight}
           </a>
-          <a href="#showcase" class="btn btn-ghost btn-lg">
+          <a href="#promo" class="btn btn-ghost btn-lg">
             ${ICONS.play}
-            <span>38秒のデモ動画を見る</span>
+            <span>38秒のプロモ動画を見る</span>
           </a>
         </div>
       </div>

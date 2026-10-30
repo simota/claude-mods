@@ -419,7 +419,7 @@ section[id],
   padding-block: 16px 24px;
 }
 
-@media (min-width: 1081px) {
+@media (min-width: 1161px) {
   .mobile-drawer {
     display: none !important;
   }
@@ -1633,12 +1633,117 @@ section[id],
   line-height: 1.65;
 }
 
-/* Section 03: Kachi Acoustic Bench & Promo Film */
+/* Section 01: Widescreen Promo Video Cinema */
+.promo-section {
+  position: relative;
+  padding-block: clamp(44px, 5.5vw, 76px);
+  border-bottom: 1px solid var(--color-border-hairline);
+  background: radial-gradient(circle at 50% 0%, rgba(143, 245, 170, 0.05), transparent 58%);
+}
+
+.promo-cinema-shell {
+  max-width: 1040px;
+  margin-inline: auto;
+  padding: clamp(14px, 2.2vw, 22px);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.52);
+}
+
+.promo-cinema-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.promo-cinema-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-signal-verified);
+  box-shadow: 0 0 10px rgba(143, 245, 170, 0.65);
+  flex-shrink: 0;
+}
+
+.promo-cinema-title {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-fg-secondary);
+}
+
+.promo-unmute-btn.is-unmuted {
+  background: var(--color-bg-elevated);
+  color: var(--color-fg-primary);
+  border-color: var(--color-signal-verified);
+}
+
+.video-frame--cinema {
+  margin-top: 0;
+  border-radius: var(--radius-md);
+  aspect-ratio: 16 / 9;
+}
+
+/* Section 04: Kachi Acoustic Bench & Anti-Cheat Rules */
 .showcase-split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.04fr);
   gap: 24px;
   align-items: stretch;
+}
+
+.kachi-story-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.kachi-story-img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-bottom: 1px solid var(--color-border-hairline);
+}
+
+.kachi-story-body {
+  padding: clamp(20px, 2.6vw, 28px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+}
+
+.kachi-story-body h3 {
+  margin: 0;
+  font-size: 1.14rem;
+  line-height: 1.38;
+}
+
+.kachi-rules-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 10px;
+  font-size: 0.87rem;
+  color: var(--color-fg-secondary);
+  line-height: 1.62;
+}
+
+.kachi-rules-list strong {
+  color: var(--color-fg-primary);
 }
 
 .kachi-bench,
@@ -1962,6 +2067,19 @@ section[id],
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.film-chapters.film-chapters--cinema {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.film-chapters.film-chapters--cinema .chapter-btn {
+  justify-content: flex-start;
+  min-height: 40px;
+  width: 100%;
+  text-align: left;
 }
 
 .chapter-btn {
@@ -2749,13 +2867,19 @@ html.js-ready .reveal:not(.is-visible) {
 }
 
 /* Responsive Breakpoints */
-@media (max-width: 1080px) {
+@media (max-width: 1160px) {
   .desktop-nav {
     display: none;
   }
 
   .mobile-menu-btn {
     display: inline-flex;
+  }
+}
+
+@media (max-width: 1080px) {
+  .film-chapters.film-chapters--cinema {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .hero-grid,
@@ -2885,6 +3009,10 @@ html.js-ready .reveal:not(.is-visible) {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .film-chapters.film-chapters--cinema {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   html:not(.mods-expanded) .mod-card--extra:not(.is-selected) {
     display: none;
   }
@@ -2945,6 +3073,15 @@ html.js-ready .reveal:not(.is-visible) {
 }
 
 @media (max-width: 520px) {
+  .film-chapters.film-chapters--cinema {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .promo-unmute-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
   .hero-metrics {
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;

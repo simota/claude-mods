@@ -523,22 +523,41 @@ function initKachiBench(): void {
     });
   });
 
-  // Video overlay & chapter synchronization
+  // Promo cinema video: reduced-motion guard, unmute toggle & chapter seek
   const video = document.getElementById('promo-video') as HTMLVideoElement | null;
-  const playOverlay = document.getElementById('promo-play-overlay') as HTMLButtonElement | null;
+  const unmuteBtn = document.getElementById('promo-unmute-btn') as HTMLButtonElement | null;
+  const unmuteLabel = document.getElementById('promo-unmute-label');
   const chapterBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-seek]'));
 
-  if (video && playOverlay) {
-    playOverlay.addEventListener('click', () => {
-      playOverlay.hidden = true;
-      void video.play().catch(() => {});
+  if (video && prefersReducedMotion()) {
+    video.autoplay = false;
+    video.pause();
+  }
+
+  const syncUnmuteUi = () => {
+    if (!video || !unmuteBtn) return;
+    const isUnmuted = !video.muted;
+    unmuteBtn.setAttribute('aria-pressed', String(isUnmuted));
+    unmuteBtn.classList.toggle('is-unmuted', isUnmuted);
+    if (unmuteLabel) {
+      unmuteLabel.textContent = isUnmuted ? 'ミュートに戻す' : '音声ONで最初から再生';
+    }
+  };
+
+  if (video && unmuteBtn) {
+    unmuteBtn.addEventListener('click', () => {
+      if (video.muted) {
+        video.muted = false;
+        video.loop = false;
+        video.currentTime = 0;
+        void video.play().catch(() => {});
+      } else {
+        video.muted = true;
+        video.loop = true;
+      }
+      syncUnmuteUi();
     });
-    video.addEventListener('play', () => {
-      playOverlay.hidden = true;
-    });
-    video.addEventListener('ended', () => {
-      playOverlay.hidden = false;
-    });
+    video.addEventListener('volumechange', syncUnmuteUi);
   }
 
   const updateActiveChapter = (t: number) => {
@@ -558,7 +577,6 @@ function initKachiBench(): void {
       if (!video) return;
       const sec = Number(chapter.dataset.seek ?? '0');
       updateActiveChapter(sec);
-      if (playOverlay) playOverlay.hidden = true;
       video.currentTime = sec;
       void video.play().catch(() => {});
     });

@@ -1,5 +1,6 @@
 import { renderHeader } from './header';
 import { renderHero } from './hero';
+import { renderPromo } from './promo';
 import { renderContrast } from './contrast';
 import { renderArchitecture } from './architecture';
 import { renderShowcase } from './showcase';
@@ -22,6 +23,15 @@ export function renderFullDocument(): string {
     author: {
       '@type': 'Person',
       name: 'simota',
+    },
+    subjectOf: {
+      '@type': 'VideoObject',
+      name: 'claude-mods — 38秒プロダクトウォークスルー',
+      description: '未テスト完了の自動ブロック・1行ログ圧縮・3大AI同時レビュー・バグ解決音 kachi の実機デモ映像',
+      thumbnailUrl: 'https://simota.github.io/claude-mods/assets/images/promo-poster.webp',
+      contentUrl: 'https://simota.github.io/claude-mods/assets/video/final-promo.mp4',
+      duration: 'PT38S',
+      uploadDate: '2026-10-30',
     },
   });
 
@@ -71,6 +81,7 @@ export function renderFullDocument(): string {
   ${renderHeader()}
   <main id="main-content">
     ${renderHero()}
+    ${renderPromo()}
     ${renderContrast()}
     ${renderArchitecture()}
     ${renderShowcase()}

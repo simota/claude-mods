@@ -1,8 +1,16 @@
 # claude-mods
 
-[English](README.md) | 日本語
+[English](README.md) | 日本語 | [Webサイト](https://simota.github.io/claude-mods/)
 
 個人用の Claude Code mod（function hook の plugin）集です。1 つの marketplace として公開しています。
+
+<p align="center">
+  <a href="https://simota.github.io/claude-mods/#promo">
+    <img src="site/public/assets/images/promo-preview.webp" width="880" alt="claude-mods 38秒プロモーション動画（クリックで音声付き1080p 60fps版を再生）" />
+  </a>
+  <br />
+  <sub><a href="https://simota.github.io/claude-mods/#promo">▶ 音声付きフル動画（1080p / 60fps・38秒）を再生</a> · <a href="https://simota.github.io/claude-mods/#install">公式LP・導入コマンド作成</a></sub>
+</p>
 
 | Mod | できること |
 | --- | --- |

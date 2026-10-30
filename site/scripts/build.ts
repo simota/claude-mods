@@ -61,6 +61,7 @@ const requiredAssets = [
   'images/tri-engine-prism.webp',
   'images/kachi-refraction.webp',
   'images/promo-poster.webp',
+  'images/promo-preview.webp',
   'images/og-card.jpg',
   'audio/kachi-0.wav',
   'audio/kachi-1.wav',

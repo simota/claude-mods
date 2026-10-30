@@ -217,9 +217,10 @@ claude plugin install kachi --marketplace simota/claude-mods</code></pre>
       </div>
 
       <nav class="footer-links" aria-label="フッターナビゲーション">
+        <a href="#promo">38秒動画</a>
         <a href="#shift">解決できること</a>
         <a href="#architecture">3大AI同時レビュー</a>
-        <a href="#showcase">38秒動画 &amp; 音</a>
+        <a href="#showcase">達成音試聴</a>
         <a href="#mods">全29種一覧</a>
         <a href="#setup">入れ方</a>
         <a href="#faq">よくある質問</a>

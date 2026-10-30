@@ -1,8 +1,16 @@
 # claude-mods
 
-English | [日本語](README.ja.md)
+English | [日本語](README.ja.md) | [Website](https://simota.github.io/claude-mods/)
 
 Personal Claude Code mods (function-hook plugins), published as one marketplace.
+
+<p align="center">
+  <a href="https://simota.github.io/claude-mods/#promo">
+    <img src="site/public/assets/images/promo-preview.webp" width="880" alt="claude-mods 38-second product walkthrough (click to watch 1080p 60fps with sound)" />
+  </a>
+  <br />
+  <sub><a href="https://simota.github.io/claude-mods/#promo">▶ Watch 1080p 60fps video with sound (38s)</a> · <a href="https://simota.github.io/claude-mods/#install">Interactive Install Builder</a></sub>
+</p>
 
 | Mod | What it does |
 | --- | --- |
