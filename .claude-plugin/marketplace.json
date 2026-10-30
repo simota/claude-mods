@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click, three-way review (claude, codex, agy), local CI rehearsal, devrouter stack dock",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click, three-way review (claude, codex, agy), three-way design contest, local CI rehearsal, devrouter stack dock",
   "owner": {
     "name": "simota"
   },
@@ -134,6 +134,11 @@
       "name": "review-mods",
       "source": "./mods/review-mods",
       "description": "Three second opinions in one press: the band above the prompt reviews the current diff with claude, codex and agy in parallel (read-only), merges what they found into one list with who found each, shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; a /review-mods pane lists them"
+    },
+    {
+      "name": "design-duel",
+      "source": "./mods/design-duel",
+      "description": "A design contest in one command: /design-duel <topic> has claude, codex and agy each propose a design alone (read-only), then score each other's proposals under anonymous labels with their strongest objection; the band names the winner by the tallied scores, and the winning design goes into the prompt for Claude to build when asked"
     },
     {
       "name": "ci-rehearsal",

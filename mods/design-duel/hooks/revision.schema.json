@@ -1,0 +1,1 @@
+{"type":"object","additionalProperties":false,"required":["title","summary","approach","tradeoffs","risks","rebuttal"],"properties":{"title":{"type":"string"},"summary":{"type":"string"},"approach":{"type":"string"},"tradeoffs":{"type":"string"},"risks":{"type":"string"},"rebuttal":{"type":"string"}}}

@@ -1,0 +1,27 @@
+{
+  "name": "design-duel",
+  "version": "0.1.0",
+  "description": "A design contest in one command: /design-duel <topic> has claude, codex and agy each propose a design alone (read-only), then score each other's proposals under anonymous labels with their strongest objection; the mod tallies the scores, the band names the winner, and the winning design goes into the prompt for Claude to build when asked",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "duelists": {
+      "type": "string",
+      "title": "Duelists",
+      "description": "Comma-separated duelists: claude, codex, agy; all three by default",
+      "default": "claude,codex,agy"
+    },
+    "revise": {
+      "type": "boolean",
+      "title": "Revise round",
+      "description": "After the scoring, each author answers the objections and revises its proposal, and the revised proposals are scored again; off by default",
+      "default": false
+    },
+    "timeoutMin": {
+      "type": "number",
+      "title": "Timeout (minutes)",
+      "description": "How long one duel may run, all rounds together, before the duelists still going are stopped; 30 by default",
+      "default": 30
+    }
+  }
+}

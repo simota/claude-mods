@@ -32,6 +32,7 @@ Personal Claude Code mods (function-hook plugins), published as one marketplace.
 | `token-lens` | Checks an element's actual colours, spacing and type against the project's design tokens and lists off-token values with the nearest token; `/token-lens <selector>` |
 | `kachi` | When a check you broke turns green after a real fix, the band above the prompt sweeps green once with a short click, and the result row keeps the score: how many tries, how long it stayed red. Silent the rest of the time, but for one dim line under a check's first red |
 | `review-mods` | Three second opinions in one press: the band above the prompt reviews the current diff with `claude`, `codex` and `agy` in parallel, none allowed to edit, merges their findings into one list naming who found each, shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; `/review-mods` lists them |
+| `design-duel` | A design contest in one command: `/design-duel <topic>` has `claude`, `codex` and `agy` each propose a design alone, none allowed to edit, then score each other's proposals under anonymous labels with their strongest objection; the band names the winner by the tallied scores, and puts the winning design into the prompt for Claude to build when asked |
 | `ci-rehearsal` | CI before the push, in one press: the band above the prompt runs the push workflows locally with `runthrough`, shows the failing job and step with the count, and puts the failures and their log tails into the prompt for Claude to fix when asked; `/ci` lists every job |
 | `stack-dock` | The repository's devrouter stack in one press: the band above the prompt says whether it is unset, stopped or up, starts it with `devrouter up`, shows each service's URL and health in the status line and `/stack`, and puts doctor's findings and the failing logs into the prompt for Claude to fix when asked |
 
@@ -378,6 +379,24 @@ Untracked files are read from the session's working directory, including below t
 | --- | --- | --- |
 | `reviewers` | `claude,codex,agy` | the reviewers to run, comma-separated; none known runs all three |
 | `timeoutMin` | `15` | the reviewers still running after this many minutes are stopped, and fail |
+
+### design-duel
+
+Needs at least two of `claude`, `codex` and `agy` on `PATH`, logged in, as review-mods does. `/design-duel <topic>` starts a duel on that topic (`/design-duel 設定の読み込みをキャッシュする設計`); `/design-duel` with no topic opens the pane. A new duel replaces the last one's result; with fewer than two duelists configured, the command says so and starts nothing. Each duelist runs as it does in review-mods, none able to change a file: `codex exec --sandbox read-only --skip-git-repo-check` (a duel may run outside a git repository), `claude -p --tools Read,Grep,Glob --setting-sources ''`, and `agy -p` as the mod's own read-only agent (`agy/.agents/agents/design_duel/agent.md`) started in the mod's `agy/` folder with the repository added, the other two at the repository root; every answer is held to a schema (`hooks/proposal.schema.json`, `critique.schema.json`, `revision.schema.json`).
+
+1. **提案**: each duelist proposes a design alone, seeing no other: title, summary, approach, tradeoffs and risks.
+2. **相互採点**: the proposals get the labels A, B and C in an order the topic and start time fix, and each duelist is handed every proposal but its own under its label alone, quoted as data. It scores each from 1 to 5 on correctness, simplicity, risk (5 the least risky) and fit to the repository, and names the strongest objection. An answer that scores a label it was not handed, or misses one, is a failed judge. A duelist that failed to propose still judges the others.
+3. With `revise` on, **修正** and **再採点**: each author is handed the objections to its proposal, revises it and answers the ones it rejects, and the revised proposals are scored again from scratch.
+
+The mod tallies the last scoring itself: a proposal's total is the mean of its judges' sums (4 to 20), so one with fewer judges is not penalised. The band shows the round and each duelist's state while it runs (`⚔ 2:10 · 相互採点 · claude ✓ · codex: 実行: rg cache · agy: 起動中`, with 中止), then the winner (`⚔ 勝者 codex「設定キャッシュを読み込み層に置く」17.5/20 · claude 15.0/20 · agy 12.0/20`). **この案で進めさせる** puts the topic, the winning proposal and its judges' scores and objections into the prompt, quoted as data, for you to send; nothing is sent by itself. A tie at the top, or no scores, has no winner (`⚔ 勝者なし`), and the pane offers each proposal instead. **詳細** and `/design-duel` open the pane: each proposal in rank order with its label, total, design and every judge's scores and objection, each with its own この案で進めさせる.
+
+A duelist that fails (not logged in, not on `PATH`, its own error, an answer off the schema, the timeout) fails alone in that round, marked `· agy 失敗あり` and named with its round in the pane. Fewer than two proposals is a failure with 再試行, and nothing is scored. What each duelist reads is sent to its model provider. Nothing is kept past the session.
+
+| Option | Default | |
+| --- | --- | --- |
+| `duelists` | `claude,codex,agy` | the duelists to run, comma-separated; none known runs all three |
+| `revise` | `false` | adds the revise round and a second scoring |
+| `timeoutMin` | `30` | the duelists still running after this many minutes, all rounds together, are stopped, and fail |
 
 ### ci-rehearsal
 
