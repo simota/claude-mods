@@ -1,0 +1,21 @@
+{
+  "name": "review-mods",
+  "version": "0.2.0",
+  "description": "Three second opinions in one press: the band above the prompt reviews the current diff with claude, codex and agy in parallel (read-only), merges what they found into one list with who found each, shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; a /review-mods pane lists them",
+  "author": { "name": "simota" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "reviewers": {
+      "type": "string",
+      "title": "Reviewers",
+      "description": "Comma-separated reviewers to run: claude, codex, agy; all three by default",
+      "default": "claude,codex,agy"
+    },
+    "timeoutMin": {
+      "type": "number",
+      "title": "Timeout (minutes)",
+      "description": "How long one review may run before the reviewers still going are stopped; 15 by default",
+      "default": 15
+    }
+  }
+}
