@@ -798,6 +798,31 @@ describe('band', () => {
     await ui.unmount()
   })
 
+  test('a new review clears the last one’s findings as it starts, and 中止 does not bring them back', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    const pane = await $.ui.mount({
+      plugin: 'review-mods',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'review-mods',
+      viewport: { columns: 80, rows: 24 },
+      props: { title: 'レビュー', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+    })
+    await pane.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await pane.find({ type: 'Text', text: /ZeroDivisionError/ })).toBeDefined()
+    setChildren(w, { ...OK, hangMs: 60_000 })
+    await pane.press({ key: 'review' })
+    await w.clock.advance(3_000)
+    expect(await pane.find({ type: 'Text', text: /ZeroDivisionError/ })).toBeUndefined()
+    await pane.press({ key: 'cancel' })
+    await w.clock.settle()
+    expect(await pane.find({ type: 'Text', text: /ZeroDivisionError/ })).toBeUndefined()
+    expect((await pane.find({ type: 'Text', text: /まだレビューしていません/ }))).toBeDefined()
+    await pane.unmount()
+  })
+
   for (const name of ['メモ.txt', 'f250.txt', 'line\nbreak.txt', '"quoted.txt', 'back\\slash.txt', 'tab\tname.txt', 'control\x01name.txt']) {
     test(`an untracked file edited after the review (${name}, among 251) makes the findings old`, async ($, on) => {
       const w = world(on)

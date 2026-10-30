@@ -1,6 +1,6 @@
 {
   "name": "review-mods",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Three second opinions in one press: the band above the prompt reviews the current diff with claude, codex and agy in parallel (read-only), merges what they found into one list with who found each, shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; a /review-mods pane lists them",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

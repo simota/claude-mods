@@ -363,7 +363,7 @@ Claude Code CLI（`claude`）・Codex CLI（`codex`）・Antigravity CLI（`agy`
 - `codex exec --sandbox read-only --json --ephemeral --output-schema hooks/schema.json`（`codex exec review` はスキーマを無視して平文で答えるため使いません）。常に `gpt-6.1-sol`（reasoning effort medium）
 - `agy -p --output-format stream-json --json-schema hooks/schema.json --agent review_mods --add-dir <リポジトリ> --sandbox`。mod 自身の `agy/` フォルダで起動し、そこの `.agents/agents/review_mods/agent.md` が agy に読み取り系ツール（`read_file`・`view_file`・`list_dir`・`grep_search`・`find_by_name`）と `finish` だけを与えます。claude と同じ変更ファイル一覧・差分・未追跡ファイル名をプロンプトに入れて渡し、全体を UTF-8 で 10 万バイトまでに切り詰めます（Linux では 1 引数が 128 KiB までのため）。agy にはツールを外すフラグがなく、print モードでは確認が必要な操作に当たった時点で回答なしにターンを終えます。そうしたツールを持たせないので止まりません。`--mode plan` は使いません。計画を立てた段階で止まり、回答を返さないためです
 
-claude と agy はそれぞれの既定モデルで、effort は medium です。実行中の帯には経過時間とレビュアーごとの状態（`🔍 1:42 · claude ✓ · codex: 実行: git diff mb1 · agy: 起動中`）が出て、中止できます。
+claude と agy はそれぞれの既定モデルで、effort は medium です。実行中の帯には経過時間とレビュアーごとの状態（`🔍 1:42 · claude ✓ · codex: 実行: git diff mb1 · agy: 起動中`）が出て、中止できます。新しいレビューを始めた時点で前回の指摘は消えるので、中止しても前回の指摘は残りません。
 
 終わると指摘をまとめます。異なるレビュアーが同じファイルの 3 行以内について述べた指摘は 1 件にし、最も重い見立てを先頭に、挙げたレビュアー全員を添えます。同じ重さの中では、多くのレビュアーが挙げた指摘ほど上に来ます。帯に最も重い指摘と残りの件数（`🔍 high · m.py:4 空リストで ZeroDivisionError（claude・codex）· ほか2件`）が出て、件数をトーストで知らせます。**Claude に直させる** は各レビュアーの見立てをデータとして引用した依頼文を入力欄に入れるだけで、送るのはあなたです。**詳細** と `/review-mods` でペインが開き、レビュアーごとの要約と件数、指摘ごとの全レビュアーの見立て、直させる（その 1 件だけ）と 却下 があります。`/review-diff` はボタンと同じくレビューを始めます。ステータスラインには `🔍 review 3件` が残ります。
 

@@ -277,6 +277,9 @@ async function review($: Api) {
   if (!isFirst) {
     return
   }
+  // A new run replaces the last one: its findings go now, not when (or if) the new ones arrive.
+  await update($, result, () => null)
+  await update($, dismissed, () => [])
   // Retrying is not recovery: cancellation must leave the last failure visible.
   await update($, hiddenFor, () => null)
   isCancelled = false
