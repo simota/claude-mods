@@ -67,7 +67,7 @@ type World = {
   http: Record<string, { status: number; text: string } | 'tls'>
   files: string[]
   /** What `devrouter up` does: write the registry and exit with `code`. */
-  up: { code: number; stderr: string; registry?: string; hangMs?: number; progress?: { stream: 'stdout' | 'stderr'; text: string }[]; pauseAfterProgressMs?: number }
+  up: { code: number; stderr: string; registry?: string; hangMs?: number; progress?: { stream: 'stdout' | 'stderr'; text: string }[]; pauseAfterProgressMs?: number; error?: string }
   runs: string[]
   spawned: string[][]
   filled: string[]
@@ -161,6 +161,7 @@ function world(on: On): World {
     yield { stream: 'stderr' as const, text: ' Container app-web  Start' }
     yield { stream: 'stderr' as const, text: 'ing\n' }
     for (const chunk of w.up.progress ?? []) yield chunk
+    if (w.up.error !== undefined) throw new Error(w.up.error)
     if (w.up.pauseAfterProgressMs !== undefined) await w.clock.sleep(w.up.pauseAfterProgressMs)
     if (w.up.stderr !== '') yield { stream: 'stderr' as const, text: w.up.stderr }
     if (w.up.code === 0) {
@@ -327,6 +328,72 @@ describe('devrouter', () => {
 })
 
 describe('band', () => {
+  test('a startup stream exception masks its diagnostic and final partial line before recording them', async ($, on) => {
+    const w = world(on)
+    const kept: unknown[] = []
+    on('state.set', ($, e, next) => {
+      if (e.plugin === 'stack-dock' && ['run', 'failure', 'feed'].includes(e.key)) kept.push(e.value)
+      return next(e)
+    })
+    await $.session.start(START)
+    w.up = {
+      code: 1,
+      stderr: '',
+      progress: [{ stream: 'stderr', text: 'PASSWORD=SYNTHETIC-PARTIAL-SECRET' }],
+      error: 'startup stream failed PASSWORD=SYNTHETIC-EXCEPTION-SECRET',
+    }
+    await $.command.run({ command: 'stack-up', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
+    await w.clock.settle()
+    expect(JSON.stringify(kept)).toContain('startup stream failed PASSWORD=***')
+    expect(JSON.stringify(kept)).not.toContain('SYNTHETIC-')
+    expect(w.toasts.at(-1)).toContain('startup stream failed PASSWORD=***')
+    await type($)
+    expect(w.contexts[0]?.at(-1)).toContain('startup stream failed PASSWORD=***')
+    expect(JSON.stringify(w.contexts)).not.toContain('SYNTHETIC-')
+  })
+
+  for (const stream of ['stdout', 'stderr'] as const) {
+    for (const ending of ['\n', '']) {
+      test(`startup failure masks a long ${stream} credential before retaining its tail (${ending === '' ? 'EOF' : 'newline'})`, async ($, on) => {
+        const w = world(on)
+        const kept: unknown[] = []
+        on('state.set', ($, e, next) => {
+          if (e.plugin === 'stack-dock' && ['run', 'failure', 'feed'].includes(e.key)) kept.push(e.value)
+          return next(e)
+        })
+        await $.session.start(START)
+        const secret = `SYNTHETIC-${'s'.repeat(20_000)}-PRIVATE-SUFFIX`
+        const output = `error: PASSWORD=${secret}${ending}`
+        w.up = {
+          code: 1,
+          stderr: '',
+          progress: [
+            { stream, text: output.slice(0, 8) },
+            { stream: stream === 'stdout' ? 'stderr' : 'stdout', text: 'building dependency\n' },
+            { stream, text: output.slice(8, 16_000) },
+            { stream, text: output.slice(16_000) },
+          ],
+        }
+        await $.command.run({ command: 'stack-up', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
+        await w.clock.settle()
+        const retained = JSON.stringify(kept)
+        expect(retained).toContain('PASSWORD=***')
+        expect(retained).not.toContain('PRIVATE-SUFFIX')
+        expect(retained).not.toContain('ssssssssssssssssssss')
+        expect(w.toasts.at(-1)).toContain('PASSWORD=***')
+        for (const surface of SURFACES) {
+          const ui = await $.ui.mount(band(surface))
+          expect((await ui.find({ type: 'Text', text: /up 失敗/ }))?.text).toContain('PASSWORD=***')
+          expect(await ui.find({ type: 'Text', text: /PRIVATE-SUFFIX/ })).toBeUndefined()
+          await ui.unmount()
+        }
+        await type($)
+        expect(w.contexts[0]?.at(-1)).toContain('PASSWORD=***')
+        expect(JSON.stringify(w.contexts)).not.toContain('PRIVATE-SUFFIX')
+      })
+    }
+  }
+
   test('live startup output is masked before truncation in state and on both surfaces', async ($, on) => {
     const w = world(on)
     const kept: unknown[] = []

@@ -12,7 +12,9 @@ export type Redirect = { op: string; target?: string; body?: string }
 /** One simple command: its words, its redirections, and the operator that follows it. */
 export type Simple = { words: string[]; redirects: Redirect[]; after: Op }
 
-export type Parsed = { commands: Simple[]; nested: string[] }
+// Keep group boundaries for exit-status analysis; observers still use the flat command list.
+type Syntax = Simple | Exclude<Op, ''> | '(' | ')' | '!'
+export type Parsed = { commands: Simple[]; nested: string[]; syntax: Syntax[] }
 
 const MAX_DEPTH = 8
 
@@ -122,6 +124,7 @@ const REDIRECT = /^(&>>?|[<>]&[0-9]+-?|[<>]&-|>>|>\||<>|>&|<&|[<>])/
 export function parse(command: string): Parsed {
   const commands: Simple[] = []
   const nested: string[] = []
+  const syntax: Syntax[] = []
   let words: string[] = []
   let redirects: Redirect[] = []
   let word: string | undefined
@@ -141,7 +144,9 @@ export function parse(command: string): Parsed {
     endWord()
     pendingRedirect = undefined
     if (words.length > 0 || redirects.length > 0) {
-      commands.push({ words, redirects, after })
+      const simple = { words, redirects, after }
+      commands.push(simple)
+      syntax.push(simple)
     } else if (after !== '') {
       // An operator after a group's `)`: it belongs to the command the group ended with.
       const last = commands[commands.length - 1]
@@ -149,6 +154,7 @@ export function parse(command: string): Parsed {
     }
     words = []
     redirects = []
+    if (after !== '') syntax.push(after)
   }
   const skipHeredocBodies = () => {
     for (const doc of heredocs) {
@@ -296,6 +302,7 @@ export function parse(command: string): Parsed {
     if (ch === '(' || ch === ')' || isBrace) {
       // A subshell or group edge, glued to a word or not: what is inside runs as commands.
       endCommand('')
+      syntax.push(ch === '(' || ch === '{' ? '(' : ')')
       i += 1
       continue
     }
@@ -303,7 +310,7 @@ export function parse(command: string): Parsed {
     i += 1
   }
   endCommand('')
-  return { commands, nested }
+  return { commands, nested, syntax }
 }
 
 /**
@@ -340,7 +347,7 @@ const WRAPPERS: Record<string, Set<string>> = {
   sudo: new Set(['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-U', '-T', '--user', '--group', '--chdir', '--prompt']),
   doas: new Set(['-u', '-C']),
   nice: new Set(['-n', '--adjustment']),
-  env: new Set(['-u', '--unset', '-C', '--chdir', '-S', '--split-string']),
+  env: new Set(['-u', '--unset', '-C', '--chdir', '-a', '--argv0', '-S', '--split-string']),
   command: new Set([]),
   exec: new Set(['-a']),
   nohup: new Set([]),
@@ -365,7 +372,7 @@ const RUNNERS: Record<string, number> = { npx: 1, bunx: 1, pnpx: 1, uvx: 1, pipx
 export const base = (word: string) => word.slice(word.lastIndexOf('/') + 1)
 
 /** The program a simple command runs and its arguments, past assignments, keywords and wrappers. */
-export function program(words: readonly string[]): { name: string; args: string[] } | undefined {
+export function program(words: readonly string[], onWrapper?: (name: string) => void): { name: string; args: string[] } | undefined {
   let k = 0
   for (;;) {
     const word = words[k]
@@ -374,21 +381,29 @@ export function program(words: readonly string[]): { name: string; args: string[
     if (CLAUSE_KEYWORDS.has(word)) return undefined
     if (ASSIGNMENT.test(word) || PREFIX_KEYWORDS.has(word)) {
       k += 1
-    } else if (WRAPPERS[name] !== undefined && word === name) {
+    } else if (WRAPPERS[name] !== undefined) {
+      onWrapper?.(name)
       const values = WRAPPERS[name] as Set<string>
+      const wrapperArgs = words.slice(k + 1)
       k += 1
       while (words[k] !== undefined && (words[k] as string).startsWith('-')) {
         const option = words[k] as string
         k += 1
         if (option === '--') break
+        // These return information without running the apparent command after them.
+        if (option === '--help' || option === '--version' || (name === 'command' && /^-[p]*[vV]/.test(option))) return { name, args: wrapperArgs }
+        // -S is decoded by innerText; its remaining words are arguments, not another program.
+        if (name === 'env' && /^(?:--split-string(?:=|$)|-[iv0]*S)/.test(option)) return { name, args: wrapperArgs }
         if (values.has(option)) k += 1
       }
       if (name === 'env') while (words[k] !== undefined && ASSIGNMENT.test(words[k] as string)) k += 1
-    } else if (name === 'timeout' && word === name) {
+    } else if (name === 'timeout') {
+      const wrapperArgs = words.slice(k + 1)
       k += 1
       while (words[k] !== undefined && (words[k] as string).startsWith('-')) {
         const option = words[k] as string
         k += 1
+        if (option === '--help' || option === '--version') return { name, args: wrapperArgs }
         if (TIMEOUT_VALUES.has(option)) k += 1
       }
       k += 1 // the duration
@@ -404,21 +419,70 @@ export function program(words: readonly string[]): { name: string; args: string[
   return { name: base(name), args: words.slice(k + 1) }
 }
 
+/** env -S splits argv, never shell syntax. Decode its literal quoting/escapes only;
+ * environment values stay opaque, so they cannot invent a known program or flag. */
+function splitEnvWords(text: string): string[] | undefined {
+  const words: string[] = []
+  let word: string | undefined
+  let quote = ''
+  const finish = () => {
+    if (word !== undefined) words.push(word)
+    word = undefined
+  }
+  const escapes: Record<string, string> = { f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '#': '#', '$': '$', '"': '"', "'": "'", '\\': '\\' }
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i] as string
+    if (quote === '' && /\s/.test(ch)) finish()
+    else if (quote === '' && ch === '#' && word === undefined) break
+    else if ((ch === '"' || ch === "'") && (quote === '' || quote === ch)) {
+      quote = quote === '' ? ch : ''
+      word ??= ''
+    } else if (ch === '\\') {
+      const next = text[i + 1]
+      if (next === undefined) return undefined
+      if (quote === "'" && next !== "'" && next !== '\\') word = (word ?? '') + ch
+      else {
+        i += 1
+        if (next === 'c' && quote === '') break
+        if (next === '_' && quote === '') finish()
+        else if (next === '_' && quote === '"') word = (word ?? '') + ' '
+        else if (escapes[next] !== undefined) word = (word ?? '') + escapes[next]
+        else return undefined
+      }
+    } else if (ch === '$' && quote !== "'") {
+      const variable = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}/.exec(text.slice(i))?.[0]
+      if (variable === undefined) return undefined
+      word = (word ?? '') + variable
+      i += variable.length - 1
+    } else word = (word ?? '') + ch
+  }
+  if (quote !== '') return undefined
+  finish()
+  return words
+}
+
 /** The command text a `bash -c "<text>"`, `eval <words>` or `env -S "<text>"` runs, if the words are one. */
 export function innerText(words: readonly string[]): string | undefined {
+  const run = program(words)
+  if (run === undefined) return undefined
   // env -S splits its value into the command it runs: `env -S "git commit -n"`.
-  const at = words.findIndex(word => base(word) === 'env')
-  if (at !== -1 && (at === 0 || words.slice(0, at).every(word => ASSIGNMENT.test(word) || PREFIX_KEYWORDS.has(word) || WRAPPERS[base(word)] !== undefined))) {
+  // Resolve the active wrapper, including `sudo -u name env -S` and `env env -S`.
+  if (run.name === 'env') {
+    const at = words.length - run.args.length - 1
     for (let k = at + 1; k < words.length && (words[k] as string).startsWith('-'); k++) {
       const option = words[k] as string
-      const glued = /^(?:--split-string=|-[A-RT-Za-z]*S)(.+)$/.exec(option)
-      if (glued !== null) return [glued[1], ...words.slice(k + 1)].join(' ')
-      if (option === '--split-string' || /^-[A-RT-Za-z]*S$/.test(option)) return words.slice(k + 1).join(' ')
+      if (option === '--help' || option === '--version' || option === '--') return undefined
+      const glued = /^--split-string=(.*)$/.exec(option) ?? /^-[iv0]*S(.+)$/.exec(option)
+      if (glued !== null || option === '--split-string' || /^-[iv0]*S$/.test(option)) {
+        const text = glued?.[1] ?? words[k + 1]
+        const split = text === undefined ? undefined : splitEnvWords(text)
+        if (split === undefined) return undefined
+        const prefix = option.startsWith('--') ? '' : option.slice(0, option.indexOf('S'))
+        return quoteWords([...words.slice(0, k), ...(prefix.length > 1 ? [prefix] : []), ...split, ...words.slice(k + (glued === null ? 2 : 1))])
+      }
       if (WRAPPERS.env?.has(option) === true) k += 1
     }
   }
-  const run = program(words)
-  if (run === undefined) return undefined
   if (run.name === 'eval') return run.args.join(' ')
   if (run.name === 'find') {
     // `find … -exec git commit -n \;`: the words up to `;` or `+` run as a command, for every -exec.
@@ -588,28 +652,114 @@ function isCheckCommand(simple: Simple, depth: number): boolean {
   return inner !== undefined && depth < MAX_DEPTH && verifies(inner, depth + 1)
 }
 
-// Between the check and the end, only these keep the check's failure the command's failure.
-const CARRIES_FAILURE = new Set<Op>(['&&', '|', '|&'])
+function successProves(parsed: Parsed, isCheck: (simple: Simple) => boolean, needsSuccess = true): boolean {
+  // Track possible outcomes on paths where NO check has passed. A successful shell exit
+  // verifies only when that success is impossible on all such paths. Unknown commands can
+  // succeed or fail; a check can only fail without establishing verification.
+  type Unverified = { success: boolean; failure: boolean }
+  const unknown = (): Unverified => ({ success: true, failure: true })
+  const tokens = parsed.syntax.flatMap((token): Syntax[] => {
+    if (typeof token === 'string') return [token]
+    const prefixes: Syntax[] = []
+    let k = 0
+    while (token.words[k] === '!' || token.words[k] === 'time') {
+      if (token.words[k++] === '!') prefixes.push('!')
+      else if (token.words[k] === '-p') k += 1
+    }
+    return [...prefixes, ...(k === token.words.length && token.redirects.length === 0 ? [] : [token])]
+  })
+  let at = 0
+  let sawCheck = false
+  let invalid = false
+  // These can end or replace the current shell, or change what a later failure does.
+  // They are not ordinary commands that necessarily return to the following check.
+  const unsupportedFlow = new Set(['exit', 'return', 'break', 'continue', 'exec', 'eval', 'source', '.', 'trap'])
+  const then = (left: Unverified, right: Unverified): Unverified => ({
+    success: (left.success || left.failure) && right.success,
+    failure: (left.success || left.failure) && right.failure,
+  })
+  const primary = (level: number): Unverified => {
+    const token = tokens[at++]
+    if (token === '(' && level < MAX_DEPTH) {
+      const result = list(level + 1)
+      if (tokens[at++] !== ')') invalid = true
+      return result
+    }
+    if (token === undefined || typeof token === 'string') {
+      invalid = true
+      return unknown()
+    }
+    let replacesShell = false
+    const run = program(token.words, name => { if (name === 'exec') replacesShell = true })
+    if (unsupportedFlow.has(run?.name ?? '') || replacesShell) invalid = true
+    const checked = isCheck(token)
+    sawCheck ||= checked
+    return { success: !checked, failure: !checked || needsSuccess }
+  }
+  const pipeline = (level: number): Unverified => {
+    let negate = false
+    while (tokens[at] === '!') {
+      negate = !negate
+      at += 1
+    }
+    let result = primary(level)
+    while (tokens[at] === '|' || tokens[at] === '|&') {
+      at += 1
+      // Without proof of pipefail, only the last stage determines the pipeline's status.
+      result = then(result, primary(level))
+    }
+    return negate ? { success: result.failure, failure: result.success } : result
+  }
+  const andOr = (level: number): Unverified => {
+    let result = pipeline(level)
+    while (tokens[at] === '&&' || tokens[at] === '||') {
+      const op = tokens[at++]
+      const right = pipeline(level)
+      // AND and OR have equal precedence and associate left to right in the shell.
+      result = op === '&&'
+        ? { success: result.success && right.success, failure: result.failure || (result.success && right.failure) }
+        : { success: result.success || (result.failure && right.success), failure: result.failure && right.failure }
+    }
+    return result
+  }
+  const list = (level: number): Unverified => {
+    let result = andOr(level)
+    while (tokens[at] === ';' || tokens[at] === '\n' || tokens[at] === '&') {
+      // A background list may still be running: launching it establishes no passed check.
+      if (tokens[at++] === '&') result = unknown()
+      while (tokens[at] === '\n') at += 1
+      if (at === tokens.length || tokens[at] === ')') break
+      result = then(result, andOr(level))
+    }
+    return result
+  }
+  while (tokens[at] === '\n') at += 1
+  const result = list(0)
+  return !invalid && at === tokens.length && sawCheck && !result.success
+}
+
+/** A successful shell exit must prove this particular command succeeded, not another check
+ * on a different OR branch. Reuses a scan's parse; the caller has identified its own check. */
+export function passesCommandStatus(parsed: Parsed, index: number): boolean {
+  const selected = parsed.commands[index]
+  return selected !== undefined && successProves(parsed, simple => simple === selected)
+}
+
+/** Even output-based evidence needs the selected command to have run: a skipped quiet
+ * compiler has the same empty stdout as a compiler that ran successfully. */
+export function executesCommandOnSuccess(parsed: Parsed, index: number): boolean {
+  const selected = parsed.commands[index]
+  return selected !== undefined && successProves(parsed, simple => simple === selected, false)
+}
 
 function verifies(command: string, depth: number): boolean {
-  const { commands } = parse(command)
-  const last = commands.length - 1
-  // carries[i]: every command from i up to the one before the last passes a failure on. Built once from
-  // the end, so a command of thousands of checks is not read again after each one.
-  const carries: boolean[] = new Array(commands.length + 1).fill(true)
-  for (let i = last - 1; i >= 0; i -= 1) carries[i] = CARRIES_FAILURE.has((commands[i] as Simple).after) && (carries[i + 1] as boolean)
-  return commands.some((one, k) => {
-    if (!isCheckCommand(one, depth)) return false
-    if (k === last) return one.after === '' || one.after === ';' || one.after === '\n'
-    // `npm test | tail`, `npm test || true`, `npm test; git status`: the exit status is not the check's.
-    if (one.after !== '&&') return false
-    return carries[k + 1] as boolean
-  })
+  return successProves(parse(command), simple => isCheckCommand(simple, depth))
 }
 
 /**
- * Whether a command's exit status is that of a test, lint, typecheck or build step: the
- * check is the last command, or only `&&` chains follow it, so a failing check fails the command.
+ * Whether a successful command implies a test, lint, typecheck or build step passed.
+ * Short-circuited checks, negated failures and non-final pipeline stages prove no success.
+ * Groups, pipelines and left-associative AND/OR lists retain their shell exit-status rules.
  */
 export function isVerification(command: string): boolean {
   return verifies(command, 0)

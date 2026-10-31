@@ -3,8 +3,8 @@
 
 import type { Band, CheckRecord, Edits, Locale, Tier } from '../types'
 
-import type { Simple } from './shell'
-import { innerText, isVerification, parse, program } from './shell'
+import type { Parsed, Simple } from './shell'
+import { executesCommandOnSuccess, innerText, isVerification, parse, passesCommandStatus, program } from './shell'
 
 /** The most of a command's output any parser here reads: its last 4 KiB. */
 export const TAIL = 4096
@@ -192,7 +192,7 @@ function asCheck(words: readonly string[]): { words: readonly string[]; scope: s
 }
 
 /** A check a command runs, whether the command's exit status is the check's, and which top-level command runs it. */
-export type Reading = { check: Check; isStatus: boolean; index: number }
+export type Reading = { check: Check; isStatus: boolean; isExecuted: boolean; index: number }
 
 // Between the check and the end, only these keep the check's failure the command's failure.
 const CARRIES_FAILURE = new Set<string>(['&&', '|', '|&'])
@@ -262,18 +262,19 @@ function checkIn(words: readonly string[], depth: number, dir: string, index: nu
   const inner = innerText(words)
   if (inner !== undefined) {
     if (depth >= MAX_DEPTH) return undefined
-    const found = walk(parse(inner).commands, depth + 1, dir, index, walker)
+    const found = walk(parse(inner), depth + 1, dir, index, walker)
     return found !== undefined && !passesStatus(words) ? { ...found, isStatus: false } : found
   }
   const run = program(words)
   if (run === undefined || (!CHECK_PROGRAMS.has(run.name) && run.name !== 'claude')) return undefined
   const found = asCheck(words)
   const check = found === undefined ? undefined : named(found.words, found.scope, words.length > MAX_WORDS, { dir, root: walker.root })
-  return check === undefined ? undefined : { check, isStatus: true, index }
+  return check === undefined ? undefined : { check, isStatus: true, isExecuted: true, index }
 }
 
 /** Reads commands once each, in order, with the directory the `cd`s before each left; `index` is the top-level command's, or -1 at the top. */
-function walk(commands: readonly Simple[], depth: number, start: string, index: number, walker: Walker): Reading | undefined {
+function walk(parsed: Parsed, depth: number, start: string, index: number, walker: Walker): Reading | undefined {
+  const { commands } = parsed
   walker.left -= commands.length
   if (walker.left < 0) walker.isOver = true
   if (walker.isOver) return undefined
@@ -296,13 +297,15 @@ function walk(commands: readonly Simple[], depth: number, start: string, index: 
     if (k < last - 1 && !CARRIES_FAILURE.has((commands[k + 1] as Simple).after)) break
     const after = (commands[k] as Simple).after
     const found = readings[k]
-    if (found !== undefined && (k === last ? ENDS.has(after) : after === '&&')) return found
+    if (found !== undefined && (k === last ? ENDS.has(after) : after === '&&')) {
+      return { ...found, isStatus: found.isStatus && passesCommandStatus(parsed, k), isExecuted: found.isExecuted && executesCommandOnSuccess(parsed, k) }
+    }
   }
   let only: Reading | undefined
-  for (const found of readings) {
+  for (const [k, found] of readings.entries()) {
     if (found === undefined) continue
     if (only !== undefined) return undefined
-    only = { ...found, isStatus: false }
+    only = { ...found, isStatus: false, isExecuted: found.isExecuted && executesCommandOnSuccess(parsed, k) }
   }
   return only
 }
@@ -310,8 +313,8 @@ function walk(commands: readonly Simple[], depth: number, start: string, index: 
 /**
  * Reads a command line once: the check it runs, its record keyed by the directory it runs in
  * (`cwd`, moved by the command's own `cd`s; one that cannot be told from the text is no reading).
- * Its exit status is the command's (shell.ts's isVerification) when it is the last command or only
- * `&&` chains follow it. Otherwise (`pnpm test 2>&1 | tail -20`, `pytest || true`, `make check;
+ * A shell success counts only when shell.ts's structural analysis proves this selected check
+ * passed. Otherwise (`pnpm test 2>&1 | tail -20`, `pytest || true`, `make check;
  * echo done`) the one check in the command is read for its output; two checks printing into one
  * output are none. 256 commands are read at most, nested text included; a longer line is none.
  */
@@ -319,7 +322,7 @@ export function scanCommand(command: string, cwd: string): Scan {
   // Parsing is what costs: a line with more operators or words than it could read is over unparsed.
   if (isTooLong(command)) return { reading: undefined, met: [], isOver: true }
   const walker: Walker = { left: MAX_COMMANDS, isOver: false, met: [], root: cwd }
-  const reading = walk(parse(command).commands, 0, cwd, -1, walker)
+  const reading = walk(parse(command), 0, cwd, -1, walker)
   return walker.isOver ? { reading: undefined, met: [], isOver: true } : { reading, met: walker.met, isOver: false }
 }
 
@@ -443,6 +446,9 @@ export function classify(outcome: BashOutcome, scanned: Scan = scanCommand(outco
     return IGNORE
   }
   const { check, index } = reading
+  // A successful OR branch can skip this check altogether. Its output (including silence)
+  // cannot then be attributed to the selected check, even if another check printed a pass.
+  if (!outcome.isError && !reading.isExecuted) return IGNORE
   // No status line on a failed call means interrupted, denied or timed out: nothing ran to the end.
   const code = outcome.isError ? exitCodeOf(outcome.text) : 0
   if (code === undefined || code === 126 || code === 127) return IGNORE

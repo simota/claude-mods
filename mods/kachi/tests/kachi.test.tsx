@@ -1229,6 +1229,40 @@ function nestedCommand(): string {
 }
 
 describe('boundaries', () => {
+  test('a skipped check cannot earn a green from silence or another OR branch\'s output', () => {
+    for (const command of [
+      'true || tsc',
+      'true || npm test',
+      'npm run lint || npm test',
+      "bash -c 'true || tsc'",
+      `env -S 'sh -c "true || tsc"'`,
+      "env -S 'printf %s' 'x; npm test'",
+      '/usr/bin/env --help npm test',
+      'exit 0; tsc',
+      'exec true; tsc',
+      "trap 'exit 0' ERR; tsc",
+    ]) {
+      expect(classify(outcome({ command, stdout: '' })).kind, command).toBe('ignore')
+      expect(classify(outcome({ command, stdout: PASS })).kind, command).toBe('ignore')
+    }
+  })
+
+  test('grouped pipelines require output evidence, while a required selected check keeps its status', () => {
+    const discarded = '(npm test && echo done) | cat'
+    expect(scanCommand(discarded, CWD).reading?.isStatus).toBe(false)
+    expect(classify(outcome({ command: discarded, stdout: '' })).kind).toBe('unread')
+    expect(classify(outcome({ command: discarded, stdout: FAIL })).kind).toBe('fail')
+    for (const command of ['true || echo skipped && npm test', '(true || echo skipped) && npm test', 'npm test && echo done', '/usr/bin/env npm test']) {
+      expect(scanCommand(command, CWD).reading?.isStatus, command).toBe(true)
+      expect(classify(outcome({ command, stdout: '' })).kind, command).toBe('pass')
+    }
+    // These execute the check even when the surrounding command replaces its status.
+    for (const command of ['npm test || true', 'npm test | cat']) {
+      expect(classify(outcome({ command, stdout: PASS })).kind, command).toBe('pass')
+      expect(classify(outcome({ command, stdout: FAIL })).kind, command).toBe('fail')
+    }
+  })
+
   type Red = Extract<CheckRecord, { isRed: true }>
   const red = (over: Partial<Red> = {}): Red => ({ isRed: true, at: 0, dir: CWD, firstFailAt: 0, failRuns: 1, scope: [], isCredited: true, ...over })
 
