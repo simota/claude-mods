@@ -1263,6 +1263,106 @@ describe('boundaries', () => {
     }
   })
 
+  test('multiline checks keep their execution and success evidence', () => {
+    for (const command of [
+      'echo ready &&\n tsc',
+      'tsc &&\n echo done',
+      'cat |\n tsc',
+      'cat |&\n tsc',
+      '(\ntsc\n)',
+      '{\n # grouped check\n tsc\n}',
+      'echo ready &&\n\n # continuation\n tsc',
+      'tsc && # continuation\n\n echo done',
+      '! ! (\n tsc\n)',
+      '!\n tsc',
+    ]) {
+      const scanned = scanCommand(command, CWD)
+      expect(scanned.reading?.isExecuted, command).toBe(true)
+      expect(scanned.reading?.isStatus, command).toBe(true)
+      // Nonempty wrapper output makes this depend on status proof, not SILENT_PASS.
+      expect(classify(outcome({ command, stdout: 'wrapper output\n' }), scanned).kind, command).toBe('pass')
+    }
+    for (const command of ['true ||\n tsc', '!\n ! tsc', 'echo ready\n&& tsc', 'cat\n| tsc', 'tsc &&\n']) {
+      expect(classify(outcome({ command, stdout: '' })).kind, command).toBe('ignore')
+    }
+  })
+
+  test('quiet output cannot turn a negated failure or hidden diagnostics into a pass', () => {
+    for (const command of [
+      '! (tsc)',
+      '! (\n tsc\n)',
+      '! ((tsc))',
+      '! { tsc; }',
+      '! cat | tsc',
+      '! cat |\n tsc',
+      '! (cat | tsc)',
+      'cat | (! (tsc))',
+      '(! (tsc)) && echo done >/dev/null',
+      'echo before >/dev/null && ! (tsc)',
+      "bash -c '! (tsc)'",
+      "! (bash -c 'tsc')",
+      `env -S 'bash -c "! (tsc)"'`,
+      'tsc >/dev/null 2>&1 | cat',
+      'tsc >check.log 2>&1 || true',
+      'tsc >&- | cat',
+      'tsc 2>&3 | cat',
+      '! (tsc >/dev/null 2>&1 && echo done)',
+      '! (tsc >/dev/null 2>&1) || true',
+      "bash -c 'tsc >/dev/null 2>&1' | cat",
+      "bash -c 'tsc' >/dev/null 2>&1 | cat",
+    ]) expect(classify(outcome({ command })).kind, command).toBe('unread')
+
+    // Negating a wrapper's failure can hide a skipped check as well as a failed one.
+    for (const command of [
+      "! (bash -c 'false && tsc')",
+      `! (bash -c 'printf "3 passed\\n"; false && tsc')`,
+    ]) {
+      expect(classify(outcome({ command })).kind, command).toBe('ignore')
+      expect(classify(outcome({ command, stdout: PASS })).kind, command).toBe('ignore')
+    }
+    const header = '> app@1.0.0 typecheck /repo\n> tsc --noEmit && eslint src\n'
+    for (const command of ['! (pnpm typecheck)', 'pnpm typecheck >/dev/null 2>&1 | tail -5']) {
+      expect(classify(outcome({ command, stdout: header })).kind, command).toBe('unread')
+    }
+    // A runner can print passing tests before failing later; negation still proves failure.
+    expect(classify(outcome({ command: '! (npm test)', stdout: PASS })).kind).toBe('unread')
+    const skipped = `! (bash -c 'printf "3 passed\\n"; true || tsc')`
+    expect(classify(outcome({ command: skipped, isError: true, text: 'Exit code 1\n3 passed\n' })).kind).toBe('ignore')
+  })
+
+  test('quiet pipelines keep visible output contracts and nested status proofs', () => {
+    for (const command of [
+      'tsc',
+      'tsc 2>&1 | head -30',
+      'tsc 2>& 1 | cat',
+      'tsc 1>&2 | cat',
+      'npx eslint src 2>&1 | tail -20',
+      'tsc || true',
+      '! (! (tsc))',
+      '! (! (\n tsc\n))',
+      "! (bash -c '! (tsc)')",
+      'tsc && ! false',
+      '! true; tsc',
+      '! (tsc; false)',
+      'echo before >/dev/null; tsc | cat',
+      'tsc | cat; echo after >/dev/null',
+      // A proven successful status still counts when the caller redirected output.
+      'tsc >/dev/null 2>&1',
+      "! (bash -c '! (tsc >/dev/null 2>&1)')",
+    ]) expect(classify(outcome({ command })).kind, command).toBe('pass')
+
+    const header = '> app@1.0.0 typecheck /repo\n> tsc --noEmit && eslint src\n'
+    for (const [command, stdout] of [
+      ['pnpm typecheck 2>&1 | tail -5', header],
+      ['cargo build 2>&1 | tail -3', '    Finished `dev` profile target(s) in 1.2s'],
+      ['swift build 2>&1 | tail -3', 'Build complete! (2.31s)'],
+      ['npm test || true', PASS],
+    ]) expect(classify(outcome({ command, stdout })).kind, command).toBe('pass')
+    for (const command of ['! (tsc)', "bash -c '! (tsc)'"]) {
+      expect(classify(outcome({ command, stdout: 'Found 1 error\n' })).kind, command).toBe('fail')
+    }
+  })
+
   type Red = Extract<CheckRecord, { isRed: true }>
   const red = (over: Partial<Red> = {}): Red => ({ isRed: true, at: 0, dir: CWD, firstFailAt: 0, failRuns: 1, scope: [], isCredited: true, ...over })
 

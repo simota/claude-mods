@@ -652,12 +652,11 @@ function isCheckCommand(simple: Simple, depth: number): boolean {
   return inner !== undefined && depth < MAX_DEPTH && verifies(inner, depth + 1)
 }
 
-function successProves(parsed: Parsed, isCheck: (simple: Simple) => boolean, needsSuccess = true): boolean {
-  // Track possible outcomes on paths where NO check has passed. A successful shell exit
-  // verifies only when that success is impossible on all such paths. Unknown commands can
-  // succeed or fail; a check can only fail without establishing verification.
-  type Unverified = { success: boolean; failure: boolean }
-  const unknown = (): Unverified => ({ success: true, failure: true })
+/** The exit statuses a command can produce under a particular assumption about one check. */
+export type Statuses = { success: boolean; failure: boolean }
+
+function possibleStatus(parsed: Parsed, statusOf: (simple: Simple) => Statuses): Statuses | undefined {
+  const unknown = (): Statuses => ({ success: true, failure: true })
   const tokens = parsed.syntax.flatMap((token): Syntax[] => {
     if (typeof token === 'string') return [token]
     const prefixes: Syntax[] = []
@@ -669,18 +668,21 @@ function successProves(parsed: Parsed, isCheck: (simple: Simple) => boolean, nee
     return [...prefixes, ...(k === token.words.length && token.redirects.length === 0 ? [] : [token])]
   })
   let at = 0
-  let sawCheck = false
   let invalid = false
   // These can end or replace the current shell, or change what a later failure does.
   // They are not ordinary commands that necessarily return to the following check.
   const unsupportedFlow = new Set(['exit', 'return', 'break', 'continue', 'exec', 'eval', 'source', '.', 'trap'])
-  const then = (left: Unverified, right: Unverified): Unverified => ({
+  const then = (left: Statuses, right: Statuses): Statuses => ({
     success: (left.success || left.failure) && right.success,
     failure: (left.success || left.failure) && right.failure,
   })
-  const primary = (level: number): Unverified => {
+  // A linebreak is whitespace only where the shell is waiting for a right-hand side
+  // or the start of a group. Elsewhere it still separates lists (and must stay one).
+  const skipNewlines = () => { while (tokens[at] === '\n') at += 1 }
+  const primary = (level: number): Statuses => {
     const token = tokens[at++]
     if (token === '(' && level < MAX_DEPTH) {
+      skipNewlines()
       const result = list(level + 1)
       if (tokens[at++] !== ')') invalid = true
       return result
@@ -692,28 +694,33 @@ function successProves(parsed: Parsed, isCheck: (simple: Simple) => boolean, nee
     let replacesShell = false
     const run = program(token.words, name => { if (name === 'exec') replacesShell = true })
     if (unsupportedFlow.has(run?.name ?? '') || replacesShell) invalid = true
-    const checked = isCheck(token)
-    sawCheck ||= checked
-    return { success: !checked, failure: !checked || needsSuccess }
+    return statusOf(token)
   }
-  const pipeline = (level: number): Unverified => {
+  const pipeline = (level: number): Statuses => {
+    const start = at
     let negate = false
     while (tokens[at] === '!') {
       negate = !negate
       at += 1
     }
+    // A bare `!` can end an empty command in Bash; `!\n check` does not negate
+    // check. Keep the separator and learn no verification from the empty command.
+    const next = tokens[at]
+    if (at > start && (next === undefined || next === '\n' || next === ';' || next === '&' || next === ')')) return unknown()
     let result = primary(level)
     while (tokens[at] === '|' || tokens[at] === '|&') {
       at += 1
+      skipNewlines()
       // Without proof of pipefail, only the last stage determines the pipeline's status.
       result = then(result, primary(level))
     }
     return negate ? { success: result.failure, failure: result.success } : result
   }
-  const andOr = (level: number): Unverified => {
+  const andOr = (level: number): Statuses => {
     let result = pipeline(level)
     while (tokens[at] === '&&' || tokens[at] === '||') {
       const op = tokens[at++]
+      skipNewlines()
       const right = pipeline(level)
       // AND and OR have equal precedence and associate left to right in the shell.
       result = op === '&&'
@@ -722,7 +729,7 @@ function successProves(parsed: Parsed, isCheck: (simple: Simple) => boolean, nee
     }
     return result
   }
-  const list = (level: number): Unverified => {
+  const list = (level: number): Statuses => {
     let result = andOr(level)
     while (tokens[at] === ';' || tokens[at] === '\n' || tokens[at] === '&') {
       // A background list may still be running: launching it establishes no passed check.
@@ -735,7 +742,27 @@ function successProves(parsed: Parsed, isCheck: (simple: Simple) => boolean, nee
   }
   while (tokens[at] === '\n') at += 1
   const result = list(0)
-  return !invalid && at === tokens.length && sawCheck && !result.success
+  return !invalid && at === tokens.length ? result : undefined
+}
+
+function successProves(parsed: Parsed, isCheck: (simple: Simple) => boolean, needsSuccess = true): boolean {
+  // Track paths where NO check has passed (or run). A successful shell exit proves the
+  // desired event only when that success is impossible on every such path.
+  let sawCheck = false
+  const result = possibleStatus(parsed, simple => {
+    const checked = isCheck(simple)
+    sawCheck ||= checked
+    return { success: !checked, failure: !checked || needsSuccess }
+  })
+  return sawCheck && result?.success === false
+}
+
+/** The enclosing shell's possible statuses when the selected command has these statuses.
+ * Short-circuited paths remain possible; {false, false} keeps only paths skipping it.
+ * Keeping both statuses lets an outer `!` reverse an inner shell without losing the proof. */
+export function statusWithCommand(parsed: Parsed, index: number, statuses: Statuses): Statuses | undefined {
+  const selected = parsed.commands[index]
+  return selected === undefined ? undefined : possibleStatus(parsed, simple => simple === selected ? statuses : { success: true, failure: true })
 }
 
 /** A successful shell exit must prove this particular command succeeded, not another check
