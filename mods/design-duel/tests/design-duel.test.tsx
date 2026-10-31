@@ -3,7 +3,7 @@ import type { Engine, MockClock } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
 import type { Duelist, Proposal } from '../types'
-import { duelArgv, duelistsOf } from '../hooks/cli'
+import { duelArgv, duelistsOf, lineSplitter } from '../hooks/cli'
 import { SCHEMAS, adoptPrompt, critiquePrompt, labelsOf, parseCritiques, parseProposal, parseRevision, proposePrompt, tally } from '../hooks/duel'
 
 const proposalOf = (duelist: Duelist): Proposal => ({
@@ -59,6 +59,9 @@ type World = {
   toasts: string[]
   answers: Record<Duelist, Answer>
   hangMs?: number
+  output?: (duelist: Duelist, kind: Kind, output: string) => string
+  chunkSize?: number
+  code?: number
   clock: MockClock
 }
 
@@ -107,8 +110,10 @@ function world(on: On): World {
       yield { stream: 'stderr' as const, text: answer.fail }
       return { value: { code: 1, signal: null } }
     }
-    yield { stream: 'stdout' as const, text: printed[duelist](answer) }
-    return { value: { code: 0, signal: null } }
+    const output = w.output ? w.output(duelist, kind, printed[duelist](answer)) : printed[duelist](answer)
+    const size = w.chunkSize ?? output.length
+    for (let i = 0; i < output.length; i += size) yield { stream: 'stdout' as const, text: output.slice(i, i + size) }
+    return { value: { code: w.code ?? 0, signal: null } }
   })
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -139,6 +144,16 @@ const command = ($: Engine, args: string) =>
   $.command.run({ command: 'design-duel', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } })
 
 describe('duel', () => {
+  test('the line splitter keeps chunk fragments and flushes the final nonempty line once', () => {
+    const split = lineSplitter()
+    expect(split('{"a":')).toEqual([])
+    expect(split('1}\n\n{"b":2}\r')).toEqual(['{"a":1}'])
+    expect(split.flush()).toEqual(['{"b":2}\r'])
+    expect(split.flush()).toEqual([])
+    expect(split(' \r')).toEqual([])
+    expect(split.flush()).toEqual([])
+  })
+
   test('each duelist runs read-only, the prompt last', () => {
     const schema = { path: '/p/hooks/proposal.schema.json', value: SCHEMAS.proposal }
     const codex = duelArgv('codex', 'P', schema, '/w/app')
@@ -413,4 +428,247 @@ describe('the command', () => {
     expect(await detail.find({ type: 'Text', text: /反論への回答: claude の反論/ })).toBeDefined()
     await detail.unmount()
   })
+})
+
+describe('independent protocol regressions', () => {
+  test('a final failed turn rejects a prior schema-valid proposal even if the process exits zero', async ($, on) => {
+    const w = world(on)
+    w.output = (duelist, kind, output) => duelist === 'codex' && kind === 'propose'
+      ? output.replace('{"type":"turn.completed"}', '{"type":"turn.failed","error":{"message":"model turn failed"}}')
+      : output
+    await $.session.start(START)
+    await command($, 'お題')
+    await w.clock.settle()
+    const detail = await $.ui.mount(pane)
+    expect(await detail.find({ type: 'Text', text: /codex 失敗（提案）: model turn failed/ })).toBeDefined()
+    expect(await detail.find({ type: 'Text', text: /位 codex/ })).toBeUndefined()
+    await detail.unmount()
+  })
+
+  test('a Codex proposal without a completed turn is incomplete evidence', async ($, on) => {
+    const w = world(on)
+    w.output = (duelist, kind, output) => duelist === 'codex' && kind === 'propose'
+      ? output.replace('{"type":"turn.completed"}\n', '')
+      : output
+    await $.session.start(START)
+    await command($, 'お題')
+    await w.clock.settle()
+    const detail = await $.ui.mount(pane)
+    expect(await detail.find({ type: 'Text', text: /codex 失敗（提案）/ })).toBeDefined()
+    expect(await detail.find({ type: 'Text', text: /位 codex/ })).toBeUndefined()
+    await detail.unmount()
+  })
+
+  test('complete final result records are read even when EOF has no newline', async ($, on) => {
+    const w = world(on)
+    w.output = (_duelist, _kind, output) => output.trimEnd()
+    await $.session.start(START)
+    await command($, 'お題')
+    await w.clock.settle()
+    const ui = await $.ui.mount(band)
+    expect(await ui.find({ type: 'Text', text: /勝者 claude/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /失敗/ })).toBeUndefined()
+    await ui.unmount()
+  })
+})
+
+describe('stream completion', () => {
+  for (const duelist of ['claude', 'agy'] as const) {
+    test(`${duelist}: a failed result after an answer rejects that proposal`, async ($, on) => {
+      const w = world(on)
+      const failed = duelist === 'claude'
+        ? { type: 'result', subtype: 'error_during_execution', is_error: true, result: 'terminal failure' }
+        : { event: 'result', result: { status: 'ERROR' } }
+      w.output = (who, kind, output) => who === duelist && kind === 'propose' ? output + lines([failed]) : output
+      await $.session.start(START)
+      await command($, 'お題')
+      await w.clock.settle()
+      const detail = await $.ui.mount(pane)
+      expect(await detail.find({ type: 'Text', text: new RegExp(`${duelist} 失敗（提案）`) })).toBeDefined()
+      expect(await detail.find({ type: 'Text', text: new RegExp(`位 ${duelist}`) })).toBeUndefined()
+      await detail.unmount()
+    })
+  }
+
+  test('a failed scoring turn contributes no scores even when its answer matches the schema', async ($, on) => {
+    const w = world(on)
+    w.output = (duelist, kind, output) => duelist === 'codex' && kind === 'critique'
+      ? output.replace('{"type":"turn.completed"}', '{"type":"turn.failed","error":{"message":"scoring failed"}}')
+      : output
+    await $.session.start(START)
+    await command($, 'お題')
+    await w.clock.settle()
+    const detail = await $.ui.mount(pane)
+    expect(await detail.find({ type: 'Text', text: /codex 失敗（相互採点）: scoring failed/ })).toBeDefined()
+    expect(await detail.find({ type: 'Text', text: /^\s*codex（/ })).toBeUndefined()
+    await detail.unmount()
+  })
+
+  test('a new Codex turn cannot reuse the previous answer or completion', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    for (const tail of [
+      [{ type: 'turn.started' }, { type: 'turn.completed' }],
+      [{ type: 'turn.started' }, { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(proposalOf('codex')) } }],
+    ]) {
+      w.output = (duelist, kind, output) => duelist === 'codex' && kind === 'propose' ? output + lines(tail) : output
+      await command($, 'お題')
+      await w.clock.settle()
+      const detail = await $.ui.mount(pane)
+      expect(await detail.find({ type: 'Text', text: /codex 失敗（提案）/ })).toBeDefined()
+      expect(await detail.find({ type: 'Text', text: /位 codex/ })).toBeUndefined()
+      await detail.unmount()
+    }
+  })
+
+  test('Codex reconnect diagnostics recover only after a successful completion', async ($, on) => {
+    const w = world(on)
+    const diagnostic = { type: 'error', message: 'temporary network failure' }
+    w.output = (duelist, _kind, output) => duelist === 'codex'
+      ? output.replace('{"type":"turn.completed"}', `${JSON.stringify(diagnostic)}\n{"type":"turn.completed"}`)
+      : output
+    await $.session.start(START)
+    await command($, '復旧した実行')
+    await w.clock.settle()
+    const ui = await $.ui.mount(band)
+    expect(await ui.find({ type: 'Text', text: /勝者 claude/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /失敗/ })).toBeUndefined()
+    await ui.unmount()
+
+    w.output = (duelist, kind, output) => duelist === 'codex' && kind === 'propose' ? output + lines([diagnostic]) : output
+    await command($, '復旧していない実行')
+    await w.clock.settle()
+    const detail = await $.ui.mount(pane)
+    expect(await detail.find({ type: 'Text', text: /codex 失敗（提案）: temporary network failure/ })).toBeDefined()
+    expect(await detail.find({ type: 'Text', text: /位 codex/ })).toBeUndefined()
+    await detail.unmount()
+  })
+
+  test('a terminal failure is not erased by a later success record', async ($, on) => {
+    const w = world(on)
+    w.output = (duelist, kind, output) => duelist === 'codex' && kind === 'propose'
+      ? lines([{ type: 'turn.failed', error: { message: 'terminal failure' } }]) + output
+      : output
+    await $.session.start(START)
+    await command($, 'お題')
+    await w.clock.settle()
+    const detail = await $.ui.mount(pane)
+    expect(await detail.find({ type: 'Text', text: /codex 失敗（提案）: terminal failure/ })).toBeDefined()
+    expect(await detail.find({ type: 'Text', text: /位 codex/ })).toBeUndefined()
+    await detail.unmount()
+  })
+
+  test('Claude requires an explicit successful result subtype', async ($, on) => {
+    const w = world(on)
+    w.output = (duelist, kind, output) => duelist === 'claude' && kind === 'propose'
+      ? output.replace('"subtype":"success",', '')
+      : output
+    await $.session.start(START)
+    await command($, 'お題')
+    await w.clock.settle()
+    const detail = await $.ui.mount(pane)
+    expect(await detail.find({ type: 'Text', text: /claude 失敗（提案）/ })).toBeDefined()
+    expect(await detail.find({ type: 'Text', text: /位 claude/ })).toBeUndefined()
+    await detail.unmount()
+  })
+
+  test('fragmented final records without newlines still complete, but truncated records do not', async ($, on) => {
+    const w = world(on)
+    w.chunkSize = 7
+    w.output = (_duelist, _kind, output) => output.trimEnd()
+    await $.session.start(START)
+    await command($, '末尾改行なし')
+    await w.clock.settle()
+    const ui = await $.ui.mount(band)
+    expect(await ui.find({ type: 'Text', text: /勝者 claude/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /失敗/ })).toBeUndefined()
+
+    w.output = (_duelist, _kind, output) => output.trimEnd().slice(0, -1)
+    await command($, '最後のJSONが不完全')
+    await w.clock.settle()
+    expect(await ui.find({ type: 'Text', text: /失敗: 比べられる案が2つ未満/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /勝者/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('successful result events still require a zero process exit', async ($, on) => {
+    const w = world(on)
+    w.code = 1
+    await $.session.start(START)
+    await command($, 'お題')
+    await w.clock.settle()
+    const ui = await $.ui.mount(band)
+    expect(await ui.find({ type: 'Text', text: /失敗: 比べられる案が2つ未満/ })).toBeDefined()
+    expect(w.spawned.filter(s => s.kind === 'critique')).toHaveLength(0)
+    expect(await ui.find({ type: 'Text', text: /勝者/ })).toBeUndefined()
+    await ui.unmount()
+  })
+})
+
+describe('incomplete output after a successful result', () => {
+  const cases: { title: string; duelist: Duelist; tail: string }[] = [
+    { title: 'Codex failed-turn JSON cut at EOF', duelist: 'codex', tail: '{"type":"turn.failed","error":' },
+    { title: 'Claude failed-result JSON cut at EOF', duelist: 'claude', tail: '{"type":"result","subtype":"error_during_execution","is_error":' },
+    { title: 'agy failed-result JSON cut at EOF', duelist: 'agy', tail: '{"event":"result","result":{"status":"ERROR"' },
+    { title: 'invalid newline-terminated JSON', duelist: 'codex', tail: '{"type":"turn.failed","error":\n' },
+    { title: 'Claude successful result without an answer', duelist: 'claude', tail: lines([{ type: 'result', subtype: 'success', is_error: false }]) },
+    { title: 'agy result record without a result', duelist: 'agy', tail: lines([{ event: 'result' }]) },
+    { title: 'Codex completed message without text', duelist: 'codex', tail: lines([{ type: 'item.completed', item: { type: 'agent_message' } }, { type: 'turn.completed' }]) },
+    { title: 'Codex completed item without an item', duelist: 'codex', tail: lines([{ type: 'item.completed' }, { type: 'turn.completed' }]) },
+    { title: 'Codex completed item without its type', duelist: 'codex', tail: lines([{ type: 'item.completed', item: {} }, { type: 'turn.completed' }]) },
+  ]
+  for (const { title, duelist, tail } of cases) {
+    test(`${title} does not fall back to an earlier answer`, async ($, on) => {
+      const w = world(on)
+      w.chunkSize = 7
+      w.output = (who, kind, output) => who === duelist && kind === 'propose' ? output + tail : output
+      await $.session.start(START)
+      await command($, 'お題')
+      await w.clock.settle()
+      const detail = await $.ui.mount(pane)
+      expect(await detail.find({ type: 'Text', text: new RegExp(`${duelist} 失敗（提案）`) })).toBeDefined()
+      expect(await detail.find({ type: 'Text', text: new RegExp(`位 ${duelist}`) })).toBeUndefined()
+      await detail.unmount()
+    })
+  }
+
+  test('unknown valid progress records preserve a completed answer', async ($, on) => {
+    const w = world(on)
+    w.output = (duelist, _kind, output) => output + lines(duelist === 'codex'
+      ? [{ type: 'item.updated', item: { type: 'reasoning', text: 'Finished' } }, { type: 'item.completed', item: { type: 'future_progress' } }]
+      : duelist === 'claude' ? [{ type: 'future_progress' }] : [{ event: 'future_progress' }])
+    await $.session.start(START)
+    await command($, 'お題')
+    await w.clock.settle()
+    const ui = await $.ui.mount(band)
+    expect(await ui.find({ type: 'Text', text: /勝者 claude/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /失敗/ })).toBeUndefined()
+    await ui.unmount()
+  })
+})
+
+describe('malformed diagnostics fail only their participant', () => {
+  const cases: { title: string; duelist: Duelist; event: unknown; failure: string }[] = [
+    { title: 'Codex failed-turn message', duelist: 'codex', event: { type: 'turn.failed', error: { message: {} } }, failure: 'turn failed' },
+    { title: 'Codex diagnostic message', duelist: 'codex', event: { type: 'error', message: {} }, failure: 'error' },
+    { title: 'Claude result subtype', duelist: 'claude', event: { type: 'result', subtype: {}, is_error: true }, failure: 'error' },
+    { title: 'agy result status', duelist: 'agy', event: { event: 'result', result: { status: {} } }, failure: 'error' },
+  ]
+  for (const { title, duelist, event, failure } of cases) {
+    test(`${title} must be a string; the other proposals are still scored`, async ($, on) => {
+      const w = world(on)
+      w.output = (who, kind, output) => who === duelist && kind === 'propose' ? output + lines([event]) : output
+      await $.session.start(START)
+      await command($, 'お題')
+      await w.clock.settle()
+      expect(w.spawned.filter(s => s.kind === 'critique')).toHaveLength(3)
+      const detail = await $.ui.mount(pane)
+      expect(await detail.find({ type: 'Text', text: new RegExp(`${duelist} 失敗（提案）: ${failure}`) })).toBeDefined()
+      expect(await detail.find({ type: 'Text', text: new RegExp(`位 ${duelist}`) })).toBeUndefined()
+      const winner = duelist === 'claude' ? 'codex' : 'claude'
+      expect(await detail.find({ type: 'Text', text: new RegExp(`1位 ${winner}（案[A-C]）`) })).toBeDefined()
+      expect(await detail.find({ type: 'Text', text: /2位/ })).toBeDefined()
+      await detail.unmount()
+    })
+  }
 })

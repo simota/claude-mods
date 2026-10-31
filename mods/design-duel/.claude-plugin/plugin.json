@@ -1,6 +1,6 @@
 {
   "name": "design-duel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A design contest in one command: /design-duel <topic> has claude, codex and agy each propose a design alone (read-only), then score each other's proposals under anonymous labels with their strongest objection; the mod tallies the scores, the band names the winner, and the winning design goes into the prompt for Claude to build when asked",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",

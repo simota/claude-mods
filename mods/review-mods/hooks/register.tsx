@@ -120,8 +120,9 @@ async function measure($: Api): Promise<Diff | null> {
   const mergeBase = base === undefined ? undefined : await mergeBaseOf($, base)
   const from = mergeBase ?? 'HEAD'
   const stat = await checkedGit($, ['diff', from, '--shortstat'])
-  // -z: the names as they are, not quoted as core.quotePath quotes a non-ASCII one.
-  const untracked = (await checkedGit($, ['ls-files', '-z', '--others', '--exclude-standard'])).split('\0').filter(name => name !== '')
+  // -z: raw names; :/ includes the whole repository even when the session sits below its root.
+  // Without --full-name they remain relative to the session cwd, as untrackedHashes expects.
+  const untracked = (await checkedGit($, ['ls-files', '-z', '--others', '--exclude-standard', '--', ':/'])).split('\0').filter(name => name !== '')
   if (stat.trim() === '' && untracked.length === 0) {
     return null
   }
@@ -192,7 +193,7 @@ async function handedOf($: Api, scope: Scope): Promise<Handed> {
   const changed = (await checkedGit($, ['diff', '-z', '--name-only', from])).split('\0').filter(name => name !== '')
   const patch = await checkedGit($, ['diff', from])
   // From the repository root, as the diff names its files, though the session may sit below it.
-  const untracked = (await checkedGit($, ['ls-files', '-z', '--full-name', '--others', '--exclude-standard'])).split('\0').filter(name => name !== '')
+  const untracked = (await checkedGit($, ['ls-files', '-z', '--full-name', '--others', '--exclude-standard', '--', ':/'])).split('\0').filter(name => name !== '')
   return { root, changed, patch, untracked }
 }
 
@@ -201,10 +202,33 @@ async function reviewWith($: Api, reviewer: Reviewer, scope: Scope, isTimedOut: 
   const split = lineSplitter()
   let message: string | undefined
   let failure: string | undefined
+  let pendingError: string | undefined
+  let isComplete = false
   let stderr = ''
   let code: number | null | undefined
   let startError: string | undefined
   let isCut = false
+  const observe = async (line: string) => {
+    const seen = readEvent(reviewer, line)
+    if (seen.isNewTurn) {
+      message = undefined
+      isComplete = false
+    }
+    if (seen.message !== undefined) {
+      message = seen.message
+      isComplete = false
+    }
+    if (seen.error !== undefined) {
+      pendingError = seen.error
+      isComplete = false
+    }
+    failure = seen.failure ?? failure
+    if (seen.isComplete) {
+      isComplete = true
+      pendingError = undefined
+    }
+    if (seen.phase !== undefined) await setLane($, reviewer, { phase: seen.phase })
+  }
   try {
     const handed = reviewer === 'codex' ? undefined : await handedOf($, scope)
     // 中止 or the timeout while the diff was read stopped the children there were; start none after it.
@@ -228,15 +252,10 @@ async function reviewWith($: Api, reviewer: Reviewer, scope: Scope, isTimedOut: 
         continue
       }
       for (const line of split(chunk.text)) {
-        const seen = readEvent(reviewer, line)
-        message = seen.message ?? message
-        failure = seen.failure ?? failure
-        const phase = seen.phase
-        if (phase !== undefined) {
-          await setLane($, reviewer, { phase })
-        }
+        await observe(line)
       }
     }
+    for (const line of split.flush()) await observe(line)
     code = (await stream.result).code
   } catch (err) {
     startError = startFailureText(reviewer, err)
@@ -245,8 +264,9 @@ async function reviewWith($: Api, reviewer: Reviewer, scope: Scope, isTimedOut: 
   let outcome: Outcome
   if (isTimedOut()) {
     outcome = { reviewer, error: `${timeoutMin}分で打ち切りました` }
-  } else if (startError !== undefined || code !== 0 || message === undefined) {
-    outcome = { reviewer, error: startError ?? failureText(reviewer, stderr, failure, code ?? null) }
+  } else if (startError !== undefined || code !== 0 || failure !== undefined || pendingError !== undefined || !isComplete || message === undefined) {
+    const reason = failure ?? pendingError ?? (code === 0 && !isComplete ? 'レビューの完了を確認できません' : undefined)
+    outcome = { reviewer, error: startError ?? failureText(reviewer, stderr, reason, code ?? null) }
   } else {
     try {
       outcome = { reviewer, review: parseReview(message), isCut }

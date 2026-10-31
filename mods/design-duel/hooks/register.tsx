@@ -82,8 +82,34 @@ async function ask($: Api, duelist: Duelist, prompt: string, schema: SchemaName,
   const split = lineSplitter()
   let message: string | undefined
   let failure: string | undefined
+  let pendingError: string | undefined
+  let isComplete = false
   let stderr = ''
   let code: number | undefined
+  const observe = async (line: string) => {
+    const seen = readEvent(duelist, line)
+    if (seen.isNewTurn) {
+      message = undefined
+      isComplete = false
+    }
+    if (seen.message !== undefined) {
+      message = seen.message
+      isComplete = false
+    }
+    if (seen.error !== undefined) {
+      pendingError = seen.error
+      isComplete = false
+    }
+    if (seen.failure !== undefined) {
+      failure = seen.failure
+      isComplete = false
+    }
+    if (seen.isComplete) {
+      isComplete = true
+      pendingError = undefined
+    }
+    if (seen.phase !== undefined) await setLane($, duelist, { phase: seen.phase })
+  }
   try {
     if (isCancelled || isTimedOut()) throw new Error('stopped before start')
     const argv = duelArgv(duelist, prompt, { path: `${$.plugin.root}/hooks/${schema}.schema.json`, value: SCHEMAS[schema] }, root)
@@ -96,18 +122,19 @@ async function ask($: Api, duelist: Duelist, prompt: string, schema: SchemaName,
         continue
       }
       for (const line of split(chunk.text)) {
-        const seen = readEvent(duelist, line)
-        message = seen.message ?? message
-        failure = seen.failure ?? failure
-        if (seen.phase !== undefined) await setLane($, duelist, { phase: seen.phase })
+        await observe(line)
       }
     }
+    for (const line of split.flush()) await observe(line)
     code = (await stream.result).code ?? undefined
   } catch (err) {
     return { error: isTimedOut() ? `${timeoutMin}分で打ち切りました` : startFailureText(duelist, err) }
   }
   if (isTimedOut()) return { error: `${timeoutMin}分で打ち切りました` }
-  if (code !== 0 || message === undefined) return { error: failureText(duelist, stderr, failure, code ?? null) }
+  if (code !== 0 || message === undefined || failure !== undefined || !isComplete) {
+    const why = failure ?? pendingError ?? (code === 0 && !isComplete ? '回答の完了を確認できません' : undefined)
+    return { error: failureText(duelist, stderr, why, code ?? null) }
+  }
   return { message }
 }
 

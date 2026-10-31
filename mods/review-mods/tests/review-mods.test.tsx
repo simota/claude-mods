@@ -56,7 +56,7 @@ const agyEvents = (message: string) => {
   ])
 }
 
-type Child = { answer?: string; stderr: string; code: number; hangMs?: number }
+type Child = { rawStdout?: string; answer?: string; stderr: string; code: number; hangMs?: number }
 
 const OK: Child = { answer: JSON.stringify(FINDINGS), stderr: '', code: 0 }
 
@@ -65,6 +65,7 @@ type World = {
   cwd: string
   repoRoot: string
   rootFiles: Record<string, string>
+  rootUntracked: Record<string, string>
   statPaths: string[]
   normalizeLineEndings: boolean
   // Untracked files by name, each with the blob hash git would give its content.
@@ -98,6 +99,15 @@ type World = {
   clock: MockClock
 }
 
+const normalizedPath = (path: string) => {
+  const parts: string[] = []
+  for (const part of path.split('/')) {
+    if (part === '..') parts.pop()
+    else if (part !== '' && part !== '.') parts.push(part)
+  }
+  return `/${parts.join('/')}`
+}
+
 // The engine beneath the plugin: a repository with one modified file, and each reviewer as `children` says.
 function world(on: On): World {
   const w: World = {
@@ -105,6 +115,7 @@ function world(on: On): World {
     cwd: '/w/app',
     repoRoot: '/w/app',
     rootFiles: {},
+    rootUntracked: {},
     statPaths: [],
     normalizeLineEndings: false,
     untracked: {},
@@ -137,7 +148,9 @@ function world(on: On): World {
   })
   on('process.run', async ($, e) => {
     // Fault injection names the Git operation independently of clean-filter mode.
-    const argv = e.argv.filter(arg => arg !== '--no-filters').join(' ')
+    const allUntracked = e.argv.at(-1) === ':/'
+    const scopedArgv = allUntracked ? e.argv.slice(0, -2) : e.argv
+    const argv = scopedArgv.filter(arg => arg !== '--no-filters').join(' ')
     const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: argv === w.gitTruncated } }) as never
     const failed = () => ({ value: { exitCode: 128, stdout: '', stderr: 'cannot read the working tree' } }) as never
     if (argv === w.gitFailure) return failed()
@@ -162,10 +175,14 @@ function world(on: On): World {
     }
     if (argv === 'git diff HEAD --shortstat') return ok(w.patch === '' ? '' : ' 1 file changed, 3 insertions(+)\n')
     if (argv === 'git diff HEAD') return ok(w.patch)
-    if (argv === 'git ls-files -z --others --exclude-standard') return ok(Object.keys(w.untracked).map(name => `${name}\0`).join(''))
+    if (argv === 'git ls-files -z --others --exclude-standard') {
+      const prefix = '../'.repeat(w.cwd === w.repoRoot ? 0 : w.cwd.slice(w.repoRoot.length + 1).split('/').length)
+      const outside = allUntracked ? Object.keys(w.rootUntracked).map(name => `${prefix}${name}`) : []
+      return ok([...Object.keys(w.untracked), ...outside].map(name => `${name}\0`).join(''))
+    }
     if (argv === 'git ls-files -z --full-name --others --exclude-standard') {
       const below = w.cwd === w.repoRoot ? '' : `${w.cwd.slice(w.repoRoot.length + 1)}/`
-      return ok(Object.keys(w.untracked).map(name => `${below}${name}\0`).join(''))
+      return ok([...Object.keys(w.untracked).map(name => `${below}${name}`), ...(allUntracked ? Object.keys(w.rootUntracked) : [])].map(name => `${name}\0`).join(''))
     }
     if (argv === 'git hash-object --stdin-paths') {
       if (w.hashOutput !== undefined) return ok(w.hashOutput)
@@ -182,12 +199,12 @@ function world(on: On): World {
       // name from the repository root, even when the process cwd is a subdirectory.
       const contents = names.map(name => {
         if (name === undefined) return undefined
-        const absolute = name.startsWith('/') ? name : `${w.repoRoot}/${name}`
+        const absolute = normalizedPath(name.startsWith('/') ? name : `${w.repoRoot}/${name}`)
         if (absolute.startsWith(`${w.cwd}/`)) {
           const relative = absolute.slice(w.cwd.length + 1)
           return relative in w.links ? undefined : w.untracked[relative]
         }
-        return absolute.startsWith(`${w.repoRoot}/`) ? w.rootFiles[absolute.slice(w.repoRoot.length + 1)] : undefined
+        return absolute.startsWith(`${w.repoRoot}/`) ? (w.rootUntracked[absolute.slice(w.repoRoot.length + 1)] ?? w.rootFiles[absolute.slice(w.repoRoot.length + 1)]) : undefined
       })
       if (contents.some(bytes => bytes === undefined)) return failed()
       return ok(contents.map(bytes => {
@@ -206,6 +223,7 @@ function world(on: On): World {
   on('fs.stat', ($, e) => {
     // The test engine resolves filesystem paths against the plugin's directory.
     w.statPaths.push(e.path)
+    if (Object.keys(w.rootUntracked).some(name => normalizedPath(e.path) === `${w.repoRoot}/${name}`)) return { value: { kind: 'file', size: 4, mtimeMs: 0, isLink: false } }
     const name = Object.keys(w.untracked).find(name => e.path === name || e.path.endsWith(`/${name}`))
     if (name === undefined) throw new Error('ENOENT')
     return { value: { kind: w.nonFiles.includes(name) ? 'other' : 'file', size: 4, mtimeMs: 0, isLink: name in w.links } }
@@ -215,8 +233,8 @@ function world(on: On): World {
     const reviewer = e.argv[0] as Reviewer
     if (e.input !== undefined) w.inputs[reviewer] = e.input
     if (w.missing.includes(reviewer)) throw new Error(`spawn ${reviewer} ENOENT`)
-    const { answer, stderr, code, hangMs } = w.children[reviewer]
-    const stdout = answer === undefined ? '' : { codex: events, claude: printEvents, agy: agyEvents }[reviewer](answer)
+    const { rawStdout, answer, stderr, code, hangMs } = w.children[reviewer]
+    const stdout = rawStdout ?? (answer === undefined ? '' : { codex: events, claude: printEvents, agy: agyEvents }[reviewer](answer))
     if (e.cwd !== undefined) w.cwds[reviewer] = e.cwd
     if (hangMs !== undefined) {
       // A child that runs until killed: the wait ends with the stream.
@@ -340,7 +358,8 @@ describe('reviewers', () => {
   test('reads progress, the message and failure from codex events', () => {
     expect(readCodexEvent(JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: "/bin/zsh -lc 'git diff'" } })).phase).toBe('実行: git diff')
     expect(readCodexEvent(JSON.stringify({ type: 'turn.failed', error: { message: 'boom' } })).failure).toBe('boom')
-    expect(readCodexEvent('not json')).toEqual({})
+    // A malformed record could be a truncated failure after an otherwise valid answer.
+    expect(readCodexEvent('not json').failure).toBeDefined()
     expect(parseShortstat(' 2 files changed, 10 insertions(+), 1 deletion(-)')).toEqual({ files: 2, insertions: 10, deletions: 1 })
   })
 
@@ -352,7 +371,7 @@ describe('reviewers', () => {
     expect(readPrintEvent(JSON.stringify({ type: 'result', subtype: 'success', result: '{"a":1}' })).message).toBe('{"a":1}')
     expect(readPrintEvent(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true })).failure).toBe('error_max_turns')
     expect(readPrintEvent(JSON.stringify({ type: 'result', subtype: 'success', result: '{"a":1}', structured_output: null })).message).toBe('{"a":1}')
-    expect(readPrintEvent('not json')).toEqual({})
+    expect(readPrintEvent('not json').failure).toBeDefined()
   })
 
   test('reads progress, the answer and an unanswered end from agy events', () => {
@@ -1006,6 +1025,237 @@ describe('pane', () => {
     expect(await drops()).toHaveLength(2)
     await ui.press({ key: String((await drops())[0]!.key) })
     expect(await drops()).toHaveLength(1)
+    await ui.unmount()
+  })
+})
+
+// Independent review regressions. The fixture emits the real CLI event shapes,
+// including a successful process exit that contradicts its terminal event.
+describe('independent review: child evidence and repository scope', () => {
+  const empty = JSON.stringify({ summary: 'clean', findings: [] })
+  const finalFailure: Record<Reviewer, unknown> = {
+    codex: { type: 'turn.failed', error: { message: 'failed after partial answer' } },
+    claude: { type: 'result', subtype: 'error_during_execution', is_error: true, result: 'failed after partial answer' },
+    agy: { event: 'result', result: { status: 'ERROR', response: 'failed after partial answer' } },
+  }
+  for (const reviewer of REVIEWERS) {
+    test(`IR: ${reviewer} terminal failure overrides a prior valid answer even with exit zero`, { options: { reviewers: reviewer } }, async ($, on) => {
+      const w = world(on)
+      const prior = { codex: events, claude: printEvents, agy: agyEvents }[reviewer](empty)
+      w.children[reviewer] = { rawStdout: `${prior}${JSON.stringify(finalFailure[reviewer])}\n`, stderr: '', code: 0 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+      expect(w.status.at(-1)).toBe('🔍 review 失敗')
+      await ui.unmount()
+    })
+
+    test(`IR: ${reviewer} complete final JSONL record does not require a trailing newline`, { options: { reviewers: reviewer } }, async ($, on) => {
+      const w = world(on)
+      w.children[reviewer] = { rawStdout: { codex: events, claude: printEvents, agy: agyEvents }[reviewer](empty).trimEnd(), stderr: '', code: 0 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeDefined()
+      expect(w.status.at(-1)).toBe('🔍 review 0件')
+      await ui.unmount()
+    })
+  }
+
+  test('IR: Codex needs a completed turn after its answer, not just process exit zero', { options: { reviewers: 'codex' } }, async ($, on) => {
+    const w = world(on)
+    w.children.codex = {
+      rawStdout: lines([{ type: 'item.completed', item: { type: 'agent_message', text: empty } }]),
+      stderr: '', code: 0,
+    }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('a Codex retry diagnostic recovers only when the turn completes successfully', { options: { reviewers: 'codex' } }, async ($, on) => {
+    const w = world(on)
+    w.children.codex = {
+      rawStdout: lines([
+        { type: 'turn.started' },
+        { type: 'error', message: 'Reconnecting... 1/5' },
+        { type: 'item.completed', item: { type: 'agent_message', text: empty } },
+        { type: 'turn.completed' },
+      ]),
+      stderr: '', code: 0,
+    }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const [name, tail] of [
+    ['error after completion', [{ type: 'error', message: 'stream disconnected' }]],
+    ['a new turn without a result', [{ type: 'turn.started' }]],
+    ['a new completed turn without an answer', [{ type: 'turn.started' }, { type: 'turn.completed' }]],
+    ['a new answer without completion', [{ type: 'item.completed', item: { type: 'agent_message', text: empty } }]],
+    ['terminal failure followed by success', [{ type: 'turn.failed', error: { message: 'failed' } }, { type: 'turn.completed' }]],
+  ] as const) {
+    test(`an earlier Codex completion cannot cover ${name}`, { options: { reviewers: 'codex' } }, async ($, on) => {
+      const w = world(on)
+      // No final newline: failure evidence must be read at EOF too.
+      w.children.codex = { rawStdout: `${events(empty)}${lines([...tail]).trimEnd()}`, stderr: '', code: 0 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+      await ui.unmount()
+    })
+  }
+
+  test('a Claude result without an explicit success subtype does not establish completion', { options: { reviewers: 'claude' } }, async ($, on) => {
+    const w = world(on)
+    w.children.claude = { rawStdout: lines([{ type: 'result', structured_output: JSON.parse(empty) }]), stderr: '', code: 0 }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('a Claude success result without an answer cannot reuse an earlier result', { options: { reviewers: 'claude' } }, async ($, on) => {
+    const w = world(on)
+    w.children.claude = { rawStdout: `${printEvents(empty)}${lines([{ type: 'result', subtype: 'success', is_error: false }])}`, stderr: '', code: 0 }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ type: 'Text', text: /レビュー失敗:.*スキーマに沿った回答がありません/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  for (const [reviewer, name, tail] of [
+    ['codex', 'truncated failed turn', '{"type":"turn.failed","error":'],
+    ['claude', 'truncated failed result', '{"type":"result","subtype":"error_during_execution","is_error":'],
+    ['agy', 'truncated error result', '{"event":"result","result":{"status":"ERROR"'],
+    ['codex', 'malformed newline-terminated record', '{"type":"turn.failed","error":\n'],
+    ['agy', 'missing result', lines([{ event: 'result' }])],
+    ['agy', 'null result', lines([{ event: 'result', result: null }])],
+    ['codex', 'missing message text', lines([{ type: 'item.completed', item: { type: 'agent_message' } }, { type: 'turn.completed' }])],
+    ['codex', 'null message text', lines([{ type: 'item.completed', item: { type: 'agent_message', text: null } }, { type: 'turn.completed' }])],
+    ['codex', 'missing completed item', lines([{ type: 'item.completed' }, { type: 'turn.completed' }])],
+    ['codex', 'missing completed item type', lines([{ type: 'item.completed', item: {} }, { type: 'turn.completed' }])],
+  ] as const) {
+    test(`${reviewer}: ${name} after success cannot reuse the previous answer`, { options: { reviewers: reviewer } }, async ($, on) => {
+      const w = world(on)
+      const valid = { codex: events, claude: printEvents, agy: agyEvents }[reviewer](empty)
+      w.children[reviewer] = { rawStdout: valid + tail, stderr: '', code: 0 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
+      await ui.unmount()
+    })
+  }
+
+  for (const reviewer of REVIEWERS) {
+    test(`${reviewer}: an unknown valid progress event preserves a complete result`, { options: { reviewers: reviewer } }, async ($, on) => {
+      const w = world(on)
+      const valid = { codex: events, claude: printEvents, agy: agyEvents }[reviewer](empty)
+      const progress = reviewer === 'agy' ? { event: 'metrics', tokens: 4 } : { type: 'metrics', tokens: 4 }
+      w.children[reviewer] = { rawStdout: valid + lines([progress]), stderr: '', code: 0 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeDefined()
+      await ui.unmount()
+    })
+  }
+
+  test('an unknown Codex completed item type preserves a complete result', { options: { reviewers: 'codex' } }, async ($, on) => {
+    const w = world(on)
+    w.children.codex = { rawStdout: events(empty) + lines([{ type: 'item.completed', item: { type: 'metrics', tokens: 4 } }]), stderr: '', code: 0 }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const [reviewer, name, malformed] of [
+    ['codex', 'failed turn message', { type: 'turn.failed', error: { message: {} } }],
+    ['codex', 'error message', { type: 'error', message: {} }],
+    ['claude', 'failure subtype', { type: 'result', subtype: {}, is_error: true }],
+    ['agy', 'result status', { event: 'result', result: { status: {} } }],
+  ] as const) {
+    test(`${reviewer}: a non-string ${name} fails only that reviewer`, async ($, on) => {
+      const w = world(on)
+      w.children[reviewer] = { rawStdout: lines([malformed]), stderr: '', code: 0 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      await ui.press({ key: 'review' })
+      await w.clock.settle()
+      const finding = (await ui.find({ type: 'Text', text: /ZeroDivisionError/ }))?.text
+      expect(finding).toContain(`${reviewer} 失敗`)
+      expect(finding).toContain(`（${REVIEWERS.filter(who => who !== reviewer).join('・')}）`)
+      expect(await ui.find({ type: 'Text', text: /レビュー失敗:/ })).toBeUndefined()
+      expect(w.status.at(-1)).toBe(`🔍 review 2件 · ${reviewer} 失敗`)
+      await ui.unmount()
+    })
+  }
+
+  test('IR: a nested session can review root and sibling untracked files with no tracked changes', async ($, on) => {
+    const w = world(on)
+    w.cwd = '/w/app/packages/client'
+    w.patch = ''
+    w.rootUntracked = { 'outside.ts': 'root change', 'packages/api/new.ts': 'sibling change' }
+    await $.session.start({ ...START, cwd: w.cwd })
+    const ui = await $.ui.mount(band('terminal'))
+    expect(await ui.find({ key: 'review' })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('2ファイル')
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(w.inputs.claude).toContain('outside.ts')
+    expect(w.inputs.claude).toContain('packages/api/new.ts')
+    const agyPrompt = w.spawned.find(argv => argv[0] === 'agy')?.at(-1)
+    expect(agyPrompt).toContain('outside.ts')
+    expect(agyPrompt).toContain('packages/api/new.ts')
+    await ui.unmount()
+  })
+
+  test('IR: editing an untracked sibling invalidates a nested session review', async ($, on) => {
+    const w = world(on)
+    w.cwd = '/w/app/packages/client'
+    w.rootUntracked = { 'outside.ts': 'before' }
+    setChildren(w, { answer: empty })
+    await $.session.start({ ...START, cwd: w.cwd })
+    const ui = await $.ui.mount(band('terminal'))
+    await ui.press({ key: 'review' })
+    await w.clock.settle()
+    expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeDefined()
+    w.rootUntracked['outside.ts'] = 'after'
+    await endTurn($)
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('古い')
+    expect(await ui.find({ type: 'Text', text: /指摘なし/ })).toBeUndefined()
     await ui.unmount()
   })
 })
