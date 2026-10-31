@@ -144,53 +144,140 @@ const isStrongName = (name: string) =>
   SECRET_ENDINGS.some(end => name.toLowerCase().replace(/[_-]/g, '').endsWith(end))
 const isSecretName = (name: string) => name.toLowerCase().split(/[_-]/).some(part => SECRET_WORDS.has(part)) || isStrongName(name)
 
-// A value: quoted whole, or up to whitespace or a shell separator.
-const VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s&;|'"]+)`
-
 type Replacer = (substring: string, ...groups: string[]) => string
 type Mask = [RegExp, string | Replacer]
+type Quote = '' | '"' | "'"
+type ValueMode = 'word' | 'cookie' | 'userinfo'
+const JSON_VALUE = /("([\w-]+)"\s*:\s*)"(?:\\[\s\S]|[^"\\])*(?:\\$|"|$)/g
 
-// NAME=value. The name is bounded so a long run such as `a-a-a-…` is scanned in linear time, not once per hyphen.
-const NAME_VALUE = new RegExp(String.raw`\b([A-Za-z][\w-]{0,127})=(${VALUE})`, 'g')
-const maskName: Replacer = (whole, name = '') => (isSecretName(name) ? `${name}=***` : whole)
-// One level into the value, not recursively: `a=a=a=…` must not grow the stack.
-const maskNameValue: Replacer = (whole, name = '', value = '') =>
-  isSecretName(name) ? `${name}=***` : value.includes('=') ? `${name}=${value.replace(NAME_VALUE, maskName)}` : whole
+// Read a shell word without evaluating it. Quoted pieces can be adjacent, and a backslash
+// outside single quotes protects the next character, including a space or a separator.
+// `inQuote` belongs to the surrounding argument (-H "Key: …", -u "user:…", a quoted URL).
+// Its final quote is kept when the secret reaches the end of that argument. URL query
+// separators still bound a parameter; they are not part of its value.
+function valueEnd(text: string, start: number, inQuote: Quote, inUrl: boolean, mode: ValueMode, inJson: boolean) {
+  // A credential marker may be inside an otherwise public JSON string. Its closing
+  // quote belongs to that field, even when the JSON is itself a single-quoted argument.
+  if (inJson && mode !== 'userinfo') {
+    let end = start
+    while (end < text.length) {
+      if (inUrl && /[&;|]/.test(text[end] as string)) return { end, hasValue: end > start, close: '' }
+      if (text[end] === '"') return { end: end + 1, hasValue: end > start, close: '"' }
+      end = Math.min(text.length, end + (text[end] === '\\' ? 2 : 1))
+    }
+    return { end, hasValue: end > start, close: '' }
+  }
+  let quote = inQuote
+  let end = start
+  let hasValue = false
+  let afterSemicolon = false
+  while (end < text.length) {
+    const char = text[end] as string
+    if (char === '\\' && quote !== "'") {
+      end = Math.min(text.length, end + 2)
+      hasValue = true
+      afterSemicolon = false
+      continue
+    }
+    if (mode === 'userinfo' && /[/@?#\s]/.test(char)) break
+    if (mode !== 'userinfo' && inUrl && /[&;|]/.test(char)) break
+    if (quote !== '') {
+      if (char === quote) quote = ''
+      else hasValue = true
+    } else if (char === '"' || char === "'") {
+      quote = char
+      hasValue = true
+    } else if (/\s/.test(char)) {
+      // A raw Cookie line may have spaces between its semicolon-separated pairs.
+      if (mode !== 'cookie' || !afterSemicolon || /[\r\n]/.test(char)) break
+    } else {
+      if (mode === 'word' && /[&;|]/.test(char)) break
+      hasValue = true
+      afterSemicolon = char === ';'
+    }
+    end++
+  }
+  return { end, hasValue, close: inQuote !== '' && quote === '' ? inQuote : '' }
+}
+
+// Match only credential prefixes, then consume their values in a linear scan. Quoting
+// context is advanced once across the input; repeated nonsecret `a=a=…` is never recursive.
+function maskValues(text: string, pattern: RegExp, accepts: (match: RegExpExecArray) => boolean = () => true, mode: ValueMode = 'word') {
+  const parts: string[] = []
+  let copied = 0
+  let scanned = 0
+  let quote: Quote = ''
+  let urlStart = -1
+  let jsonFields: { start: number; end: number }[] | undefined
+  let fieldIndex = 0
+  pattern.lastIndex = 0
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    if (!accepts(match)) continue
+    const start = pattern.lastIndex
+    for (; scanned < start; scanned++) {
+      const char = text[scanned] as string
+      if (char === '\\' && quote !== "'") {
+        scanned++
+        continue
+      }
+      if (quote !== '') {
+        if (char === quote) quote = ''
+      } else if (char === '"' || char === "'") {
+        quote = char
+      }
+      if (/\s/.test(char) || (quote === '' && /[&;|]/.test(char))) urlStart = -1
+      if (text.startsWith('://', scanned)) urlStart = scanned
+    }
+    jsonFields ??= [...text.matchAll(JSON_VALUE)].map(field => ({
+      start: field.index + (field[1]?.length ?? 0) + 1,
+      end: field.index + field[0].length,
+    }))
+    while ((jsonFields[fieldIndex]?.end ?? Infinity) <= start) fieldIndex++
+    const field = jsonFields[fieldIndex]
+    const inJson = field !== undefined && field.start <= start && start < field.end
+    // A URL in an earlier JSON field cannot give a later password URL boundaries.
+    const inUrl = urlStart >= 0 && (!inJson || urlStart >= (field?.start ?? 0))
+    const value = valueEnd(text, start, quote, inUrl, mode, inJson)
+    if (!value.hasValue || (mode === 'userinfo' && text[value.end] !== '@')) continue
+    parts.push(text.slice(copied, start), '***', value.close)
+    copied = value.end
+    pattern.lastIndex = value.end
+  }
+  parts.push(text.slice(copied))
+  return parts.join('')
+}
+
+function maskStructured(text: string): string {
+  // JSON string escapes do not terminate the value. An unfinished string is masked to
+  // the end too; clipping a diagnostic must not turn a known secret into visible text.
+  let masked = text.replace(
+    JSON_VALUE,
+    (whole, head = '', name = '') => isSecretName(name) && !/^(?:key|session)$/i.test(name) ? `${head}"***"` : whole,
+  )
+  // Userinfo ends at @, not at an apostrophe (which is legal in a URI) or a shell
+  // quote joining adjacent pieces. Keep the username, authority, path and outer quote.
+  masked = maskValues(masked, /\b[a-z][\w+.-]{0,31}:\/\/[^/\s:@?#]+:/gi, undefined, 'userinfo')
+  masked = maskValues(masked, /\b[a-z][\w+.-]{0,31}:\/\/(?=[^/\s:@*?#]+@)/gi, undefined, 'userinfo')
+  // Quoted credential headers consume the whole argument. Authorization is handled
+  // separately to keep its scheme. An unquoted header must put its value next to the
+  // colon: grep -H password: config.yml does not carry config.yml as a password.
+  masked = maskValues(masked,
+    /(?:^|\s)(?:-H|--header)(?:=|\s*)(?:(["'])([\w-]+)(:\s*)|([\w-]+):)/g,
+    match => isSecretName(match[2] ?? match[4] ?? ''),
+  )
+  masked = maskValues(masked, /authorization:\s*(?:(?:bearer|basic|token)\s+)?/gi)
+  masked = maskValues(masked, /\bcookie:\s*/gi, undefined, 'cookie')
+  masked = maskValues(masked, /\bbearer\s+(?!\*\*\*)/gi)
+  // Keep the user, but consume the password's quoted fragments and escaped delimiters.
+  masked = maskValues(masked, /(?:^|\s)(?:-u|--user)(?:=|\s+)?["']?[^\s:'"\\]+:/g)
+  masked = maskValues(masked, /--(?:client-secret|api-?key|secret|token|auth-token|access-token|password|passwd)(?:=|\s+)/gi)
+  // Start once per name, including option dashes, not again after every hyphen.
+  masked = maskValues(masked, /(?<![\w-])(-*[A-Za-z][\w-]*)=/g, match => isSecretName(match[1] ?? ''))
+  return masked
+}
 
 // Credentials a command line may carry, each kept to its name.
 const SECRETS: Mask[] = [
-  // URL userinfo: user:password@ keeps the user, a token alone@ goes whole; host and path stay.
-  // The scheme is bounded, as the NAME=value name below is, to keep a long hyphenated run linear.
-  [/(\b[a-z][\w+.-]{0,31}:\/\/)([^/\s:@'"]+):([^/\s@'"]+)@/gi, '$1$2:***@'],
-  [/(\b[a-z][\w+.-]{0,31}:\/\/)([^/\s:@'"*]+)@/gi, '$1***@'],
-  // Headers: Authorization keeps its scheme, Cookie loses every pair.
-  [/(authorization:\s*)(?:(bearer|basic|token)\s+)?[^\s'"]+/gi, (_, head = '', scheme = '') => `${head}${scheme ? `${scheme} ` : ''}***`],
-  [/(\bcookie:\s*)[^\s'";]+(?:;\s*[^\s'";]+)*;?/gi, '$1***'],
-  [/\b(bearer)\s+(?!\*\*\*)[\w.~+/=-]+/gi, '$1 ***'],
-  // Any other header a request sends whose name reads as a credential (-H "X-API-Key: x"); only
-  // as -H/--header, so an error line such as `Unexpected token: '<'` is left as it is. A quoted
-  // value goes whole up to its closing quote (`X-Auth: Token abc`); an unquoted header is one shell
-  // word with no space after the colon, so `grep -H password: config.yml` keeps its file name.
-  [
-    /((?:^|\s)(?:-H|--header)(?:=|\s*))(?:(["'])([\w-]+)(:\s*)(?:(?!\2)[^\n])+|([\w-]+)(:)[^\s'"]+)/g,
-    (whole, head = '', quote = '', quotedName = '', quotedColon = '', name = '', colon = '') => {
-      if (quote !== '') return isSecretName(quotedName) ? `${head}${quote}${quotedName}${quotedColon}***` : whole
-      return isSecretName(name) ? `${head}${name}${colon}***` : whole
-    },
-  ],
-  // -u user:pass, -uuser:pass, --user=user:pass, -u "user:pass"
-  [/(\s(?:-u|--user)(?:=|\s+)?)(["']?)([^\s:'"]+):([^\s'"]+)/g, '$1$2$3:***'],
-  // --password x, --token=x, --client-secret "x"
-  [
-    new RegExp(String.raw`(--(?:client-secret|api-?key|secret|token|auth-token|access-token|password|passwd)(?:=|\s+))${VALUE}`, 'gi'),
-    '$1***',
-  ],
-  // NAME=value where the name reads as a credential, quoted values too (env assignments, query strings).
-  // A value that is itself NAME=value (kubectl --from-literal=password=x) is looked into.
-  [NAME_VALUE, maskNameValue],
-  // "name": "value" (JSON in an output line) where the name reads as a credential.
-  // A bare "key" or "session" is an id there (a path, an S3 key), not a credential.
-  [/("([\w-]+)"\s*:\s*)"[^"]*"/g, (whole, head = '', name = '') => (isSecretName(name) && !/^(?:key|session)$/i.test(name) ? `${head}"***"` : whole)],
   // Bare tokens with a known shape.
   [/\b(sk-(?:ant-)?)[\w-]{16,}/g, '$1***'],
   [/\b(gh[pousr]_)[A-Za-z0-9]{10,}/g, '$1***'],
@@ -212,9 +299,9 @@ const SPACED_P = /\bsshpass\b|\b(?:docker|podman|nerdctl|helm)\b(?:\s+\S+){0,8}?
 
 /** The command as an example: credentials masked, cut to a line. */
 export function exampleOf(command: string): string {
-  let masked = SECRETS.reduce((text, [pattern, mask]) => text.replace(pattern, mask as Replacer), command)
-  if (ATTACHED_P.test(masked)) masked = masked.replace(/(\s-p)(?!\s)\S+/g, '$1***')
-  if (SPACED_P.test(masked)) masked = masked.replace(/(\s-p\s+)\S+/g, '$1***')
+  let masked = SECRETS.reduce((text, [pattern, mask]) => text.replace(pattern, mask as Replacer), maskStructured(command))
+  if (ATTACHED_P.test(masked)) masked = maskValues(masked, /\s-p(?!\s)/g)
+  if (SPACED_P.test(masked)) masked = maskValues(masked, /\s-p\s+/g)
   masked = masked.replace(/ {2,}/g, ' ')
   return masked.length > EXAMPLE_CHARS ? `${masked.slice(0, EXAMPLE_CHARS)}…` : masked
 }

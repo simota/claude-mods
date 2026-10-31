@@ -142,11 +142,19 @@ export const errorLine = (stderr: string, stdout: string) => {
 /** Splits streamed text into whole lines: a piece may end mid-line, and compose redraws with `\r`. */
 export const lineSplitter = () => {
   let rest = ''
-  return (text: string) => {
+  const split = (text: string) => {
     const lines = (rest + text).split(/\r?\n|\r/)
     rest = lines.pop() ?? ''
     return lines.filter(line => line.trim() !== '')
   }
+  // A final line need not end in a newline. Keep its prefix until it is masked,
+  // including when the process fails after writing only part of a line.
+  split.flush = () => {
+    const last = rest
+    rest = ''
+    return last.trim() === '' ? [] : [last]
+  }
+  return split
 }
 
 export const clockText = (seconds: number) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`

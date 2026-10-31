@@ -3,8 +3,8 @@
 
 import type { Band, CheckRecord, Edits, Locale, Tier } from '../types'
 
-import type { Simple } from './shell'
-import { innerText, isVerification, parse, program } from './shell'
+import type { Parsed, Simple, Statuses } from './shell'
+import { innerText, isVerification, parse, program, statusWithCommand } from './shell'
 
 /** The most of a command's output any parser here reads: its last 4 KiB. */
 export const TAIL = 4096
@@ -191,8 +191,20 @@ function asCheck(words: readonly string[]): { words: readonly string[]; scope: s
   return isVerification(quote(inner.words)) ? inner : undefined
 }
 
-/** A check a command runs, whether the command's exit status is the check's, and which top-level command runs it. */
-export type Reading = { check: Check; isStatus: boolean; index: number }
+// Possible shell results without a passed/executed check, or assuming that check passed.
+// Both exit polarities must survive nested shells: an outer `!` can swap their meaning.
+type Proof = { withoutPass: Statuses; withoutRun: Statuses; whenPassed: Statuses }
+
+/** A check a command runs, its status/execution evidence, and which top-level command runs it. */
+export type Reading = {
+  check: Check
+  isStatus: boolean
+  isExecuted: boolean
+  proof: Proof | undefined
+  /** No known output redirection prevents silence from being this check's own output. */
+  canReadQuiet: boolean
+  index: number
+}
 
 // Between the check and the end, only these keep the check's failure the command's failure.
 const CARRIES_FAILURE = new Set<string>(['&&', '|', '|&'])
@@ -262,18 +274,33 @@ function checkIn(words: readonly string[], depth: number, dir: string, index: nu
   const inner = innerText(words)
   if (inner !== undefined) {
     if (depth >= MAX_DEPTH) return undefined
-    const found = walk(parse(inner).commands, depth + 1, dir, index, walker)
-    return found !== undefined && !passesStatus(words) ? { ...found, isStatus: false } : found
+    const found = walk(parse(inner), depth + 1, dir, index, walker)
+    const hidden = (status: Statuses): Statuses => ({ success: status.success || status.failure, failure: status.success || status.failure })
+    return found !== undefined && !passesStatus(words)
+      ? { ...found, isStatus: false, proof: found.proof === undefined ? undefined : {
+        withoutPass: hidden(found.proof.withoutPass), withoutRun: hidden(found.proof.withoutRun), whenPassed: hidden(found.proof.whenPassed),
+      } }
+      : found
   }
   const run = program(words)
   if (run === undefined || (!CHECK_PROGRAMS.has(run.name) && run.name !== 'claude')) return undefined
   const found = asCheck(words)
   const check = found === undefined ? undefined : named(found.words, found.scope, words.length > MAX_WORDS, { dir, root: walker.root })
-  return check === undefined ? undefined : { check, isStatus: true, index }
+  return check === undefined ? undefined : {
+    check, isStatus: true, isExecuted: true, canReadQuiet: true, index,
+    proof: { withoutPass: { success: false, failure: true }, withoutRun: { success: false, failure: false }, whenPassed: { success: true, failure: false } },
+  }
 }
 
+// Captured stdout/stderr may be merged, but a file, closed fd or other destination can hide
+// a compiler's diagnostics. With no reliable exit status, that silence proves no pass.
+const hidesOutput = (one: Simple) => one.redirects.some(redirect =>
+  redirect.op.includes('>') && !/^>&[12]$/.test(redirect.op) && !(redirect.op === '>&' && /^[12]$/.test(redirect.target ?? '')),
+)
+
 /** Reads commands once each, in order, with the directory the `cd`s before each left; `index` is the top-level command's, or -1 at the top. */
-function walk(commands: readonly Simple[], depth: number, start: string, index: number, walker: Walker): Reading | undefined {
+function walk(parsed: Parsed, depth: number, start: string, index: number, walker: Walker): Reading | undefined {
+  const { commands } = parsed
   walker.left -= commands.length
   if (walker.left < 0) walker.isOver = true
   if (walker.isOver) return undefined
@@ -292,17 +319,32 @@ function walk(commands: readonly Simple[], depth: number, start: string, index: 
     if (walker.isOver) return undefined
   }
   const last = commands.length - 1
+  const within = (found: Reading, k: number, isStatus: boolean): Reading => {
+    const around = (status: Statuses) => statusWithCommand(parsed, k, status)
+    const withoutPass = found.proof === undefined ? undefined : around(found.proof.withoutPass)
+    const withoutRun = found.proof === undefined ? undefined : around(found.proof.withoutRun)
+    const whenPassed = found.proof === undefined ? undefined : around(found.proof.whenPassed)
+    const proof = withoutPass === undefined || withoutRun === undefined || whenPassed === undefined ? undefined : { withoutPass, withoutRun, whenPassed }
+    return {
+      ...found, proof,
+      isStatus: isStatus && proof?.withoutPass.success === false,
+      isExecuted: proof?.withoutRun.success === false,
+      canReadQuiet: found.canReadQuiet && !hidesOutput(commands[k] as Simple),
+    }
+  }
   for (let k = last; k >= 0; k--) {
     if (k < last - 1 && !CARRIES_FAILURE.has((commands[k + 1] as Simple).after)) break
     const after = (commands[k] as Simple).after
     const found = readings[k]
-    if (found !== undefined && (k === last ? ENDS.has(after) : after === '&&')) return found
+    if (found !== undefined && (k === last ? ENDS.has(after) : after === '&&')) {
+      return within(found, k, true)
+    }
   }
   let only: Reading | undefined
-  for (const found of readings) {
+  for (const [k, found] of readings.entries()) {
     if (found === undefined) continue
     if (only !== undefined) return undefined
-    only = { ...found, isStatus: false }
+    only = within(found, k, false)
   }
   return only
 }
@@ -310,8 +352,8 @@ function walk(commands: readonly Simple[], depth: number, start: string, index: 
 /**
  * Reads a command line once: the check it runs, its record keyed by the directory it runs in
  * (`cwd`, moved by the command's own `cd`s; one that cannot be told from the text is no reading).
- * Its exit status is the command's (shell.ts's isVerification) when it is the last command or only
- * `&&` chains follow it. Otherwise (`pnpm test 2>&1 | tail -20`, `pytest || true`, `make check;
+ * A shell success counts only when shell.ts's structural analysis proves this selected check
+ * passed. Otherwise (`pnpm test 2>&1 | tail -20`, `pytest || true`, `make check;
  * echo done`) the one check in the command is read for its output; two checks printing into one
  * output are none. 256 commands are read at most, nested text included; a longer line is none.
  */
@@ -319,7 +361,7 @@ export function scanCommand(command: string, cwd: string): Scan {
   // Parsing is what costs: a line with more operators or words than it could read is over unparsed.
   if (isTooLong(command)) return { reading: undefined, met: [], isOver: true }
   const walker: Walker = { left: MAX_COMMANDS, isOver: false, met: [], root: cwd }
-  const reading = walk(parse(command).commands, 0, cwd, -1, walker)
+  const reading = walk(parse(command), 0, cwd, -1, walker)
   return walker.isOver ? { reading: undefined, met: [], isOver: true } : { reading, met: walker.met, isOver: false }
 }
 
@@ -443,6 +485,9 @@ export function classify(outcome: BashOutcome, scanned: Scan = scanCommand(outco
     return IGNORE
   }
   const { check, index } = reading
+  // A successful OR branch can skip this check altogether. Its output (including silence)
+  // cannot then be attributed to the selected check, even if another check printed a pass.
+  if (!outcome.isError && !reading.isExecuted) return IGNORE
   // No status line on a failed call means interrupted, denied or timed out: nothing ran to the end.
   const code = outcome.isError ? exitCodeOf(outcome.text) : 0
   if (code === undefined || code === 126 || code === 127) return IGNORE
@@ -453,16 +498,25 @@ export function classify(outcome: BashOutcome, scanned: Scan = scanCommand(outco
     if (!outcome.isError) return { kind: 'pass', check, isZeroRun: isZeroRun(tail, outcome.command), index }
     return !isMarked && NOT_RUN.test(tail.slice(-1024)) ? IGNORE : { kind: 'fail', check, failCount, index }
   }
-  // The status is another command's (`| tail`, `|| true`, `; echo`): the check's own output decides.
-  // A count beats a FAIL line: a printed pass count with no failure count is green.
+  // The status is another command's or inverted: only this check's own output can decide.
+  // Even printed passes need execution evidence and a success compatible with that status.
+  const observed = outcome.isError ? 'failure' : 'success'
+  const ran = reading.proof?.withoutRun[observed] === false
+  const canPass = ran && reading.proof?.whenPassed[observed] === true
+  // A compatible count beats a FAIL line: a pass count with no failure count is green.
   if ((failCount ?? 0) > 0) return { kind: 'fail', check, failCount, index }
   const printed = largest(PASS_COUNT, tail)
-  if (printed !== undefined) return { kind: 'pass', check, isZeroRun: printed === 0 || isZeroRun(tail, outcome.command), index }
+  if (printed !== undefined && canPass) return { kind: 'pass', check, isZeroRun: printed === 0 || isZeroRun(tail, outcome.command), index }
   if (isMarked) return { kind: 'fail', check, failCount, index }
   if (NOT_RUN.test(tail.slice(-1024))) return IGNORE
+  if (!ran) return IGNORE
+  if (!canPass) return { kind: 'unread', check, index }
   const quiet = SILENT_PASS[check.name]
   const isScript = PACKAGE_MANAGERS.has(check.name.split(' ')[0] as string) && isQuietScript(tail)
-  if (parsePassCount(tail) !== undefined || (quiet !== undefined && quiet.test(tail.trim())) || isScript) return { kind: 'pass', check, isZeroRun: false, index }
+  // Silence/header-only output cannot replace diagnostics sent elsewhere. Printed
+  // completion/pass markers still provide evidence when the check's status was hidden.
+  const quietPass = quiet !== undefined && quiet.test(tail.trim()) && (!QUIET_PROGRAMS.has(check.name) || reading.canReadQuiet)
+  if (parsePassCount(tail) !== undefined || quietPass || (isScript && reading.canReadQuiet)) return { kind: 'pass', check, isZeroRun: false, index }
   return { kind: 'unread', check, index }
 }
 

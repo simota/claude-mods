@@ -211,6 +211,20 @@ describe('hit-rate', () => {
     expect(await report($)).toContain('unknown 1')
   })
 
+  test('done-gate: skipped or negated checks do not turn an unverified finding into a false positive', ON, async ($, on) => {
+    const d: Detectors = { isFlagged: true }
+    const bottom = world(on, d)
+    await $.session.start(START)
+    await type($)
+    for (const command of ['true || bun test', '! bun test', '(bun test && echo done) | cat', '/usr/bin/env --help bun test']) {
+      await bash($, command)
+      expect(await report($), command).toContain('まだ判定はありません')
+    }
+    bottom.isError = true
+    await bash($, 'bun test')
+    expect(await report($)).toContain('done-gate:unverified  TP 1 / FP 0 / unknown 0')
+  })
+
   test('assertion-guard: a reverted weakening is tp, one reviewed and left standing a turn is fp', ON, async ($, on) => {
     const d: Detectors = {}
     const bottom = world(on, d)

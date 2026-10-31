@@ -261,6 +261,105 @@ describe('exampleOf', () => {
     expect(exampleOf('aws s3 ls AKIAABCDEFGHIJKLMNOP')).toBe('aws s3 ls AKIA***')
   })
 
+  test('masks escaped quotes, adjacent quoted pieces and escaped word separators', () => {
+    const values = [
+      String.raw`"prefix\"SENTINEL_SUFFIX"`,
+      String.raw`'prefix'\''SENTINEL_SUFFIX'`,
+      String.raw`prefix\ SENTINEL_SUFFIX`,
+      String.raw`prefix\;SENTINEL_SUFFIX`,
+      String.raw`'prefix'"SENTINEL_SUFFIX"`,
+      String.raw`prefix"SENTINEL_SUFFIX"`,
+      String.raw`"prefix"SENTINEL_SUFFIX`,
+      String.raw`'prefix SENTINEL_SUFFIX'`,
+      String.raw`"prefix'SENTINEL_SUFFIX"`,
+    ]
+    for (const value of values) {
+      for (const prefix of ['PASSWORD=', 'tool --token ', 'tool --password=', 'kubectl --from-literal=password=', 'mysql -p', 'docker login -p ']) {
+        expect(exampleOf(`${prefix}${value} next=VISIBLE`)).toBe(`${prefix}*** next=VISIBLE`)
+      }
+    }
+    const cases = [
+      [String.raw`curl -H "X-Api-Key: prefix\"SENTINEL_SUFFIX" next=VISIBLE`, 'curl -H "X-Api-Key: ***" next=VISIBLE'],
+      [String.raw`curl -H 'X-Api-Key: prefix'\''SENTINEL_SUFFIX' next=VISIBLE`, "curl -H 'X-Api-Key: ***' next=VISIBLE"],
+      [String.raw`curl --header='X-Api-Key: prefix'"SENTINEL_SUFFIX" next=VISIBLE`, "curl --header='X-Api-Key: ***' next=VISIBLE"],
+      [String.raw`curl -H X-Api-Key:prefix\ SENTINEL_SUFFIX next=VISIBLE`, 'curl -H X-Api-Key:*** next=VISIBLE'],
+      [String.raw`curl --user "user:prefix\"SENTINEL_SUFFIX" next=VISIBLE`, 'curl --user "user:***" next=VISIBLE'],
+      [String.raw`curl -u 'user:prefix SENTINEL_SUFFIX' next=VISIBLE`, "curl -u 'user:***' next=VISIBLE"],
+      [String.raw`curl -u user:prefix\ SENTINEL_SUFFIX next=VISIBLE`, 'curl -u user:*** next=VISIBLE'],
+      [String.raw`curl -u'user:prefix'"SENTINEL_SUFFIX" next=VISIBLE`, "curl -u'user:***' next=VISIBLE"],
+    ] as const
+    for (const [input, expected] of cases) expect(exampleOf(input)).toBe(expected)
+  })
+
+  test('masks entire escaped JSON strings and preserves the following field', () => {
+    for (const value of ['prefix"SENTINEL_SUFFIX', 'prefix\\SENTINEL_SUFFIX', 'prefix\\"SENTINEL_SUFFIX', 'prefix\nSENTINEL_SUFFIX']) {
+      const input = JSON.stringify({ password: value, public: 'VISIBLE' })
+      expect(JSON.parse(exampleOf(input))).toEqual({ password: '***', public: 'VISIBLE' })
+    }
+  })
+
+  test('masks an unfinished JSON credential even when its last escape is incomplete', () => {
+    for (const value of ['SENTINEL_SUFFIX', String.raw`prefix\"SENTINEL_SUFFIX`]) {
+      const head = '{"password":"' + value
+      expect(exampleOf(head)).toBe('{"password":"***"')
+      expect(exampleOf(head + '\\')).toBe('{"password":"***"')
+    }
+  })
+
+  test('keeps URL host and path while masking apostrophes and quoted userinfo fragments', () => {
+    const cases = [
+      [String.raw`curl "https://user:prefix'SENTINEL_SUFFIX@x.io/p" next=VISIBLE`, 'curl "https://user:***@x.io/p" next=VISIBLE'],
+      [String.raw`curl 'https://user:prefix'"SENTINEL_SUFFIX"'@x.io/p' next=VISIBLE`, "curl 'https://user:***@x.io/p' next=VISIBLE"],
+      [String.raw`curl 'https://user:prefixSENTINEL_SUFFIX'@x.io/p next=VISIBLE`, "curl 'https://user:***'@x.io/p next=VISIBLE"],
+      [String.raw`curl "https://prefix'SENTINEL_SUFFIX@x.io/p" next=VISIBLE`, 'curl "https://***@x.io/p" next=VISIBLE'],
+      [String.raw`curl 'https://prefix'"SENTINEL_SUFFIX"'@x.io/p' next=VISIBLE`, "curl 'https://***@x.io/p' next=VISIBLE"],
+      [String.raw`curl 'https://prefixSENTINEL_SUFFIX'@x.io/p next=VISIBLE`, "curl 'https://***'@x.io/p next=VISIBLE"],
+      ['curl https://user:password=SENTINEL_SUFFIX@x.io/p next=VISIBLE', 'curl https://user:***@x.io/p next=VISIBLE'],
+    ] as const
+    for (const [input, expected] of cases) expect(exampleOf(input)).toBe(expected)
+    expect(exampleOf('curl "https://x.io:443/p" next=VISIBLE')).toBe('curl "https://x.io:443/p" next=VISIBLE')
+  })
+
+  test('preserves adjacent JSON fields when a credential marker is inside a public string', () => {
+    for (const [message, masked] of [
+      ['Authorization: Bearer SENTINEL_SUFFIX', 'Authorization: Bearer ***'],
+      ['PASSWORD=SENTINEL_SUFFIX', 'PASSWORD=***'],
+    ]) {
+      const input = JSON.stringify({ message, public: 'VISIBLE' })
+      const expected = JSON.stringify({ message: masked, public: 'VISIBLE' })
+      expect(exampleOf(input)).toBe(expected)
+      expect(exampleOf(`curl -d '${input}' next=OK`)).toBe(`curl -d '${expected}' next=OK`)
+    }
+    expect(exampleOf('PASSWORD="" next=VISIBLE')).toBe('PASSWORD=*** next=VISIBLE')
+    const url = JSON.stringify({ url: "https://user:prefix'SENTINEL_SUFFIX@x.io/p", public: 'VISIBLE' })
+    expect(exampleOf(url)).toBe(JSON.stringify({ url: 'https://user:***@x.io/p', public: 'VISIBLE' }))
+    const separate = { url: 'https://x', message: "PASSWORD='prefix;SENTINEL_SUFFIX'", public: 'V' }
+    expect(exampleOf(JSON.stringify(separate))).toBe(JSON.stringify({ ...separate, message: 'PASSWORD=***' }))
+    const message = { message: "https://x PASSWORD='prefix;SENTINEL_SUFFIX'", public: 'V' }
+    expect(exampleOf(JSON.stringify(message))).toBe(JSON.stringify({ ...message, message: 'https://x PASSWORD=***' }))
+
+
+  })
+
+  test('masks a credential URL nested in a query or fragment', () => {
+    for (const separator of ['?next=', '#']) {
+      const prefix = `curl 'https://outer.invalid${separator}https://user:`
+      expect(exampleOf(`${prefix}SENTINEL_SUFFIX@x.io/p' next=VISIBLE`)).toBe(`${prefix}***@x.io/p' next=VISIBLE`)
+    }
+  })
+
+  test('keeps nonsecret quoting and the closing quote of a URL', () => {
+    for (const input of [
+      String.raw`tool --filter "prefix\"VISIBLE" next=VISIBLE`,
+      String.raw`{"key":"prefix\"VISIBLE","session":"VISIBLE"}`,
+      String.raw`curl -H "Content-Type: application/json" next=VISIBLE`,
+    ]) expect(exampleOf(input)).toBe(input)
+    expect(exampleOf('curl "https://x.io/a?api_key=VALUE" next=VISIBLE')).toBe('curl "https://x.io/a?api_key=***" next=VISIBLE')
+    expect(exampleOf('curl "https://x.io/a?api_key=VALUE&b=1" next=VISIBLE')).toBe('curl "https://x.io/a?api_key=***&b=1" next=VISIBLE')
+    const query = { url: 'https://x.io/?api_key=SENTINEL_SUFFIX&visible=1', public: 'VISIBLE' }
+    expect(exampleOf(JSON.stringify(query))).toBe(JSON.stringify({ ...query, url: 'https://x.io/?api_key=***&visible=1' }))
+  })
+
   test('does not over-mask', () => {
     // The user of a token URL, the host and the path stay.
     expect(exampleOf('git clone https://x-access-token:ghp_abc@github.com/a/b')).toBe(

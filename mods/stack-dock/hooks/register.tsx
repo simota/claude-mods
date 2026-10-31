@@ -263,22 +263,32 @@ async function bringUp($: Api, isBuild: boolean) {
   const split = { stdout: lineSplitter(), stderr: lineSplitter() }
   let stdout = ''
   let stderr = ''
+  const retain = (channel: 'stdout' | 'stderr', lines: string[]) => {
+    // Retain only masked complete lines. Cutting raw output can drop PASSWORD=
+    // while keeping its value; masking each chunk would lose split credentials.
+    const masked = lines.map(logLine)
+    if (masked.length > 0) {
+      const text = `${masked.join('\n')}\n`
+      if (channel === 'stderr') stderr = (stderr + text).slice(-16_000)
+      else stdout = (stdout + text).slice(-16_000)
+    }
+    return masked.at(-1)
+  }
   let code: number | null | undefined
   let startError: string | undefined
   try {
     for await (const chunk of stream) {
-      if (chunk.stream === 'stderr') stderr = (stderr + chunk.text).slice(-16_000)
-      else stdout = (stdout + chunk.text).slice(-16_000)
-      const line = split[chunk.stream](chunk.text).at(-1)
-      if (line !== undefined) await update($, run, r => (r === null ? r : { ...r, line: logLine(line.trim()).slice(0, 200) }))
+      const line = retain(chunk.stream, split[chunk.stream](chunk.text))
+      if (line !== undefined) await update($, run, r => (r === null ? r : { ...r, line: line.trim().slice(0, 200) }))
     }
     code = (await stream.result).code
   } catch (err) {
-    startError = /ENOENT|not found|no such file/i.test(String(err)) ? 'devrouter が見つかりません（PATH）' : String(err).slice(0, 200)
+    startError = /ENOENT|not found|no such file/i.test(String(err)) ? 'devrouter が見つかりません（PATH）' : errorLine(String(err), '').slice(0, 200)
   } finally {
     tick.cancel()
     stop = undefined
   }
+  for (const channel of ['stdout', 'stderr'] as const) retain(channel, split[channel].flush())
   await update($, run, () => null)
 
   if (isCancelled) {
@@ -299,7 +309,7 @@ function start($: Api, isBuild = false) {
   void bringUp($, isBuild).catch(async err => {
     await update($, run, () => null)
     const at = await $.clock.now()
-    await update($, failure, () => ({ at, error: String(err).slice(0, 200), checks: [], tail: [] }))
+    await update($, failure, () => ({ at, error: errorLine(String(err), '').slice(0, 200), checks: [], tail: [] }))
     await setStatus($)
   })
 }

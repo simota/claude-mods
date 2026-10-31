@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 
 import { VERIFY_PROMPT } from '../hooks/register'
-import { isVerification } from '../hooks/shell'
+import { isVerification, program, skipsHooks } from '../hooks/shell'
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -158,6 +158,145 @@ test('a check that decides the exit status verifies', async ($, on) => {
     await endTurn($)
     expect(await isBandShown($, 'terminal')).toBe(false)
   }
+})
+
+test('a successful shell exit does not verify skipped, negated or discarded checks', async ($, on) => {
+  engine(on)
+  for (const command of [
+    'true || npm test',
+    'test -d dist || npm run build',
+    '! npm test',
+    '! (npm test)',
+    'true || (npm test && echo done)',
+    'true || (false; npm test)',
+    '(npm test && echo done) | cat',
+    '(npm test;) | cat',
+    '! cat | npm test',
+    "bash -c 'true || npm test'",
+    "bash -c '! npm test'",
+    'env --help npm test',
+    '/usr/bin/env --version npm test',
+    'command -v pytest',
+    'command -V pytest',
+    'timeout --help 1 npm test',
+    'nice --version npm test',
+    'nohup --help npm test',
+    'exit 0; npm test',
+    'exec true; npm test',
+    "trap 'exit 0' ERR; npm test",
+    "bash -c 'exit 0; npm test'",
+    "eval 'exit 0'; npm test",
+    'if true; then exit 0; fi; npm test',
+  ]) {
+    await startTurn($)
+    await edit($)
+    await bash($, command)
+    await endTurn($)
+    expect(await isBandShown($, 'terminal'), command).toBe(true)
+  }
+})
+
+test('AND/OR associativity, group boundaries and a later required check preserve verification', () => {
+  for (const command of [
+    'true || echo skipped && npm test',
+    '(true || echo skipped) && npm test',
+    '(true || echo skipped); npm test',
+    'npm test || npm test',
+    'npm test && (echo done | cat)',
+    '(npm test;) && echo done',
+    'true | (npm test && echo done)',
+    '! ! npm test',
+    '/usr/bin/env X=1 npm test',
+  ]) expect(isVerification(command), command).toBe(true)
+  expect(isVerification('('.repeat(20) + 'npm test' + ')'.repeat(20))).toBe(false)
+})
+
+test('multiline shell continuations preserve checks and keep separate lists separate', () => {
+  for (const command of [
+    'npm test &&\n echo done',
+    'echo ready &&\n npm test',
+    'npm test ||\n npm test',
+    'cat |\n npm test',
+    'cat |&\n npm test',
+    '(\nnpm test\n)',
+    '{\nnpm test\n}',
+    'npm test &&\n\n # still the right-hand side\n echo done',
+    'cat | # producer\n\n # consumer\n npm test',
+    '(\n # check the group\n\n npm test\n\n)',
+    'echo ready &&\n (\n npm test\n)',
+    'true ||\n echo skipped &&\n npm test',
+    '! ! (\n npm test\n)',
+    '!\n npm test',
+    '! # the next line is a separate list\n npm test',
+  ]) expect(isVerification(command), command).toBe(true)
+  for (const command of [
+    'true ||\n npm test',
+    '! (\n npm test\n)',
+    '!\n ! npm test',
+    '(\n npm test &&\n echo done\n) | cat',
+    'npm test\n echo done',
+    'npm test\n&& echo done',
+    'cat\n| npm test',
+    'cat\n|& npm test',
+    'npm test &&\n',
+    'npm test ||\n # missing right-hand side\n',
+    'cat |\n',
+    'cat |&\n',
+    'npm test &&\n ; echo done',
+    '(\n)',
+    '(\n npm test',
+    '! &&\n npm test',
+    'cat |\n ! npm test',
+    'npm test &&\r\n echo done',
+    'npm test\r\n',
+    `printf '%s' 'cat |\n npm test'`,
+  ]) expect(isVerification(command), command).toBe(false)
+})
+
+test('multiline successful checks clear the unverified band', async ($, on) => {
+  engine(on)
+  for (const command of ['npm test &&\n echo done', 'cat |\n npm test', '(\nnpm test\n)']) {
+    await startTurn($)
+    await edit($)
+    await bash($, command)
+    await endTurn($)
+    expect(await isBandShown($, 'terminal'), command).toBe(false)
+  }
+})
+
+test('wrapper information requests keep their own program identity', () => {
+  expect(program(['FOO=1', '/usr/bin/env', '--help', 'npm', 'test'])).toEqual({ name: 'env', args: ['--help', 'npm', 'test'] })
+  expect(program(['command', '-v', 'pytest'])).toEqual({ name: 'command', args: ['-v', 'pytest'] })
+  expect(program(['/usr/bin/timeout', '--help', '1', 'npm', 'test'])).toEqual({ name: 'timeout', args: ['--help', '1', 'npm', 'test'] })
+})
+
+test('env split-string keeps argv literals separate from executable shell text', () => {
+  for (const command of [
+    `env -S 'printf %s' 'x; npm test'`,
+    `env -S 'printf %s; npm test'`,
+    `env -S 'printf %s "x; npm test"'`,
+    String.raw`env -S '-i\c npm test'`,
+    `env -S '\${UNKNOWN_PROGRAM} npm test'`,
+    `env --help -S 'npm test'`,
+  ]) expect(isVerification(command), command).toBe(false)
+  for (const command of [
+    `env -S 'printf %s; git commit -n'`,
+    `env -S 'printf %s' 'x; git commit -n'`,
+    `env -S 'printf %s' '$(git commit -n)'`,
+    `env -S 'git commit -m "literal; git push --no-verify"'`,
+  ]) expect(skipsHooks(command), command).toBe(false)
+  for (const command of [`env -S 'npm test'`, `env -S 'sh -c "npm test"'`, String.raw`env -S 'npm\_test'`]) {
+    expect(isVerification(command), command).toBe(true)
+  }
+  for (const command of [
+    `/usr/bin/env -iS 'git commit -n -m x'`,
+    `HUSKY=0 env -S 'git commit -m x'`,
+    String.raw`env -S 'git\_commit\_-n'`,
+    `env -S 'sh -c "git commit -n"'`,
+    `env env -S 'git commit -n'`,
+    `sudo -u root env -S 'git commit -n'`,
+    `timeout 10 env -S 'git commit -n'`,
+  ]) expect(skipsHooks(command), command).toBe(true)
 })
 
 test('checks behind package-manager options and other runners verify', async ($, on) => {
@@ -364,6 +503,22 @@ test('git --no-verify is denied before the tool runs', async ($, on) => {
   const ok = await bash($, 'git commit -m "mention no-verify in text"')
   expect(ok.deny).toBeUndefined()
   expect(bottom.ran).toEqual(['Bash'])
+})
+
+test('absolute wrapper paths preserve the same hook guard as PATH-resolved wrappers', async ($, on) => {
+  const bottom = engine(on)
+  for (const command of [
+    '/usr/bin/env HUSKY=0 git commit -m x',
+    '/usr/bin/env git push --no-verify origin main',
+    '/usr/bin/timeout 10 git commit -n -m x',
+    '/usr/bin/nice -n 5 git commit --no-verify -m x',
+    `/usr/bin/env -S 'git commit -n -m x'`,
+  ]) expect((await bash($, command)).deny, command).toContain('--no-verify')
+  expect(bottom.ran).toHaveLength(0)
+  for (const command of ['/usr/bin/env HUSKY=1 git commit -m x', '/usr/bin/env --help git commit --no-verify']) {
+    expect((await bash($, command)).deny, command).toBeUndefined()
+  }
+  expect(bottom.ran).toHaveLength(2)
 })
 
 test('spellings that still skip hooks are denied', async ($, on) => {

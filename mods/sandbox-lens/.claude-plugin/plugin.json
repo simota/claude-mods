@@ -1,6 +1,6 @@
 {
   "name": "sandbox-lens",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Tallies sandbox denials seen in Bash output and reports them with /sandbox-report",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts"
