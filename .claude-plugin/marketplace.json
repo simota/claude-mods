@@ -1,6 +1,6 @@
 {
   "name": "simota-mods",
-  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click, three-way review (claude, codex, agy), three-way design contest, local CI rehearsal, devrouter stack dock",
+  "description": "Personal Claude Code mods: agent pane, quality gate, sandbox denial report, TODO(agent) list, compact tool rows, image preview, quick actions, self-audit, browser cam, prompt coach, loopback, error book, pull request lamp, exploration map, assertion guard, negative-space tests, mutation tap, perf delta, port lantern, artifact shelf, side-effect ledger, visual diff, journey trace, token lens, hit rate, earned-green click, three-way review (claude, codex, agy), three-way design contest, local CI rehearsal, devrouter stack dock, docview document preview",
   "owner": {
     "name": "simota"
   },
@@ -149,6 +149,11 @@
       "name": "stack-dock",
       "source": "./mods/stack-dock",
       "description": "The repository's devrouter stack in one press: the band above the prompt says whether it is unset, stopped or up, starts it with devrouter up, shows each service's URL and health in the status line and a /stack pane, and puts doctor's findings and the failing logs into the prompt for Claude to fix when asked"
+    },
+    {
+      "name": "doc-preview",
+      "source": "./mods/doc-preview",
+      "description": "Previews the documents Claude writes in docview: the band above the prompt offers the Markdown, diagram, data or HTML file a turn changed, opens it in the browser at the edited line, and the open tab follows later edits by itself; /docview lists them"
     }
   ]
 }
