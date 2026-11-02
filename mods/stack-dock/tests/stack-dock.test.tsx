@@ -99,6 +99,8 @@ function world(on: On): World {
   }
   mock.env(on, { HOME: '/h' })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: ROOT }) as never)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', ($, e) => {
@@ -996,5 +998,51 @@ describe('independent review counterexamples', () => {
     await w.clock.settle()
     expect(w.spawned).toHaveLength(0)
     expect(w.status.at(-1)).toBe('⛵ app 0/1')
+  })
+})
+
+const pane = {
+  plugin: 'stack-dock',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'stack-dock',
+  props: { title: 'devrouter', isFocused: false, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+} as const
+
+const CLEAR = { reason: 'clear', sessionId: 's1', resume: {} } as never
+
+describe('after /clear', () => {
+  // A /clear ends the session and no session.start follows it, so nothing it set up remains.
+  test('doctor in the pane finds the root from the session directory when no session.start came', async ($, on) => {
+    const w = world(on)
+    w.registry = REGISTRY
+    const ui = await $.ui.mount(pane)
+    await ui.press({ key: 'doctor' })
+    await w.clock.settle()
+    expect(w.runs).toContain(`devrouter doctor ${ROOT}`)
+    expect(await ui.find({ type: 'Text', text: /devrouter で起動できるものが見つかりません/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /app 2\/2/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('/stack after a /clear runs doctor again from the session directory', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await $.session.end(CLEAR)
+    const before = w.runs.filter(r => r === `devrouter doctor ${ROOT}`).length
+    await $.command.run({ command: 'stack', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as never)
+    expect(w.runs.filter(r => r === `devrouter doctor ${ROOT}`).length).toBe(before + 1)
+  })
+
+  test('polling stopped by the /clear starts again when the next turn ends', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await $.session.end(CLEAR)
+    w.registry = REGISTRY
+    await endTurn($)
+    w.status.length = 0
+    await w.clock.advance(10_000)
+    await w.clock.settle()
+    expect(w.status.at(-1)).toMatch(/app/)
   })
 })

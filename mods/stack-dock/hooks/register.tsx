@@ -63,6 +63,9 @@ let isPolling = false
 let isDirty = false
 // The first poll after a load only learns what is there: no toast for a stack already up.
 let isPrimed = false
+// Whether this session has found its root and started polling. A /clear ends the session with
+// no session.start for the next one, so the next press, command or turn starts it again.
+let isBegun = false
 
 const basename = (path: string) => path.slice(path.lastIndexOf('/') + 1)
 const isMissing = (err: unknown) => /\bENOENT\b|no such file or directory|(?:command|executable) not found/i.test(String(err))
@@ -232,8 +235,25 @@ async function tell($: Api, before: Stack | null, now: Stack | null) {
 }
 
 async function refresh($: Api) {
+  if (!isBegun) return begin($, await $.session.cwd())
   await refreshDoctor($)
   await poll($)
+}
+
+async function begin($: Api, cwd: string) {
+  isBegun = true
+  isPrimed = false
+  const dir = await findRoot($, cwd)
+  await update($, root, () => dir)
+  await refreshDoctor($)
+  await poll($)
+  cancelPoll?.()
+  const timer = $.clock.every(pollMs, () => void poll($).catch(() => undefined))
+  cancelPoll = () => timer.cancel()
+}
+
+async function ensureBegun($: Api) {
+  if (!isBegun) await begin($, await $.session.cwd())
 }
 
 async function tickRun($: Api) {
@@ -374,29 +394,27 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     // A reload killed any child this module had: what it was doing is over.
     await update($, run, () => null)
-    isPrimed = false
     await $.command.register({ name: 'stack', description: 'devrouter のスタックをペインで開く' })
     await $.command.register({ name: 'stack-up', description: 'devrouter up でこのリポジトリのスタックを起動する' })
     await $.command.register({ name: 'stack-down', description: 'devrouter down でこのリポジトリのスタックを止める' })
-    const dir = await findRoot($, e.cwd)
-    await update($, root, () => dir)
-    await refresh($)
-    cancelPoll?.()
-    const timer = $.clock.every(pollMs, () => void poll($).catch(() => undefined))
-    cancelPoll = () => timer.cancel()
+    await begin($, e.cwd)
     if (isAuto && (await currentPhase($)).kind === 'ready') start($)
     return started
   })
 
   on('session.end', async ($, e, next) => {
     cancelPoll?.()
+    isBegun = false
     if (stopOnExit && (await read($, stack)) !== null) await bringDown($).catch(() => undefined)
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
-    if (e.agentId === undefined && isDirty) {
+    if (e.agentId === undefined && !isBegun) {
+      isDirty = false
+      await ensureBegun($)
+    } else if (e.agentId === undefined && isDirty) {
       isDirty = false
       await refresh($)
     }
@@ -427,17 +445,20 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'stack' }, async $ => {
+    await ensureBegun($)
     await openPane($)
     return { text: 'devrouter のペインを開きました。' }
   })
 
   on('command.run', { command: 'stack-up' }, async $ => {
+    await ensureBegun($)
     if ((await read($, run)) !== null) return { text: 'devrouter up はもう走っています。' }
     start($)
     return { text: 'devrouter up を始めました。経過は入力欄の上の帯と /stack に出ます。' }
   })
 
   on('command.run', { command: 'stack-down' }, async $ => {
+    await ensureBegun($)
     await bringDown($)
     return { text: 'devrouter down を実行しました。' }
   })
