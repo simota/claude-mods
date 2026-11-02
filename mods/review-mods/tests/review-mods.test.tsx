@@ -82,6 +82,16 @@ type World = {
   basePatch: string
   // HEAD shares no history with the refs: an orphan branch, or a shallow clone without the ancestor.
   isUnrelated?: boolean
+  // The branch checked out; main by default.
+  branch: string
+  // The refs holding HEAD: the branch's pushed copy, a branch cut from it.
+  holdingHead: string[]
+  // The refs holding where the branch left, and how many commits each has past it; every ref, none past it, by default.
+  holdingFork?: Record<string, number>
+  // Git before 2.41, without for-each-ref's ahead-behind.
+  isOldGit?: boolean
+  // The branches the first-parent walk stopped at, as rev-list was handed them.
+  stoppedAt?: string
   hashOutput?: string
   spawned: string[][]
   // What each spawn was given on standard input, by reviewer.
@@ -122,6 +132,8 @@ function world(on: On): World {
     links: {},
     nonFiles: [],
     refs: [],
+    branch: 'main',
+    holdingHead: [],
     basePatch: 'diff --git a/m.py b/m.py\n+def avg(xs):\ndiff --git a/n.py b/n.py\n+x = 1\n',
     spawned: [],
     inputs: {},
@@ -161,7 +173,27 @@ function world(on: On): World {
     }
     if (argv === 'git rev-parse --show-toplevel') return ok(`${w.repoRoot}\n`)
     if (argv === 'git rev-parse --is-inside-work-tree') return w.headMode === 'no-repository' ? failed() : ok('true\n')
-    if (argv === 'git symbolic-ref --quiet HEAD') return ok('refs/heads/main\n')
+    if (argv === 'git symbolic-ref --quiet HEAD') return ok(`refs/heads/${w.branch}\n`)
+    // Git lists refs sorted by their full name, the checked-out branch among them.
+    const full = (ref: string) => (ref.startsWith('origin/') ? `refs/remotes/${ref}` : `refs/heads/${ref}`)
+    const listed = (refs: string[]) => ok([...new Set(refs)].map(full).sort().map(ref => `${ref}\n`).join(''))
+    const holdingFork = () => Object.entries(w.holdingFork ?? Object.fromEntries(w.refs.map(ref => [ref, 0])))
+    if (argv === 'git for-each-ref --format=%(refname) refs/heads refs/remotes') return listed([...w.refs, w.branch, ...(w.originHead === undefined ? [] : ['origin/HEAD'])])
+    if (argv === 'git for-each-ref --no-contains HEAD --format=%(refname) refs/heads refs/remotes') return listed(w.refs.filter(ref => ref !== w.branch && !w.holdingHead.includes(ref)))
+    if (argv === 'git rev-list --count --first-parent HEAD --stdin') {
+      w.stoppedAt = e.init?.stdin
+      return ok('2\n')
+    }
+    if (argv === 'git rev-parse --verify --quiet HEAD~2^{commit}') return w.isUnrelated === true ? { value: { exitCode: 1, stdout: '', stderr: '' } } as never : ok('fork1\n')
+    if (argv === 'git for-each-ref --contains fork1 --format=%(refname)%09%(ahead-behind:fork1) refs/heads refs/remotes') {
+      if (w.isOldGit === true) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: unknown field name: ahead-behind:fork1\n' } } as never
+      return ok(holdingFork().map(([ref, ahead]) => [full(ref), ahead] as const).sort(([a], [b]) => a.localeCompare(b)).map(([ref, ahead]) => `${ref}\t${ahead} 0\n`).join(''))
+    }
+    if (argv === 'git for-each-ref --contains fork1 --format=%(refname) refs/heads refs/remotes') return listed(holdingFork().map(([ref]) => ref))
+    if (e.argv[1] === 'rev-list' && e.argv[3]?.startsWith('fork1..refs/')) {
+      const ahead = holdingFork().find(([ref]) => e.argv[3] === `fork1..${full(ref)}`)
+      return ahead === undefined ? failed() : ok(`${ahead[1]}\n`)
+    }
     if (argv === 'git show-ref --verify --quiet refs/heads/main') return { value: { exitCode: w.headMode === 'unborn' ? 1 : 0, stdout: '', stderr: '' } } as never
     if (argv === 'git symbolic-ref --short refs/remotes/origin/HEAD') return w.originHead === undefined ? { value: { exitCode: 1, stdout: '', stderr: '' } } as never : ok(`${w.originHead}\n`)
     if (e.argv[1] === 'rev-parse' && e.argv[2] === '--verify') return w.refs.includes(e.argv[4]!.replace('^{commit}', '')) ? ok('def\n') : { value: { exitCode: 1, stdout: '', stderr: '' } } as never
@@ -626,6 +658,37 @@ describe('band', () => {
     const ui = await $.ui.mount(band('terminal'))
     expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('origin/master との差分')
     await ui.unmount()
+  })
+
+  for (const isOldGit of [false, true]) {
+    test(`a branch is reviewed against the branch it was cut from, not the default branch${isOldGit ? ', on Git without ahead-behind' : ''}`, async ($, on) => {
+      const w = world(on)
+      w.isOldGit = isOldGit
+      w.branch = 'feat/x'
+      w.originHead = 'origin/main'
+      w.refs = ['origin/main', 'main', 'develop', 'origin/develop', 'fix/sibling', 'origin/feat/x', 'feat/child']
+      // Its pushed copy and a branch cut from it hold HEAD; main lies 3 commits past the fork, develop and a sibling at it.
+      w.holdingHead = ['origin/feat/x', 'feat/child']
+      w.holdingFork = { 'origin/main': 3, main: 3, develop: 0, 'origin/develop': 0, 'fix/sibling': 0, 'origin/feat/x': 2, 'feat/child': 4 }
+      await $.session.start(START)
+      const ui = await $.ui.mount(band('terminal'))
+      expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('origin/develop との差分')
+      await ui.unmount()
+      expect(w.stoppedAt?.split('\n').filter(line => line !== '').sort()).toEqual(['^refs/heads/develop', '^refs/heads/fix/sibling', '^refs/heads/main', '^refs/remotes/origin/develop', '^refs/remotes/origin/main'])
+    })
+  }
+
+  test('on the default branch, its remote copy is the base, so what is not pushed is reviewed', async ($, on) => {
+    const w = world(on)
+    w.originHead = 'origin/main'
+    w.refs = ['origin/main', 'develop']
+    w.holdingFork = { 'origin/main': 0, develop: 0 }
+    await $.session.start(START)
+    const ui = await $.ui.mount(band('terminal'))
+    expect((await ui.find({ type: 'Text', text: /未レビュー/ }))?.text).toContain('origin/main との差分')
+    await ui.unmount()
+    expect(w.stoppedAt).toContain('^refs/remotes/origin/main')
+    expect(w.stoppedAt).not.toContain('refs/heads/main')
   })
 
   test('a branch sharing no history with its base still reviews its uncommitted changes', async ($, on) => {

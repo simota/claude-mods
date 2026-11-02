@@ -54,8 +54,8 @@ async function git($: Api, args: string[], stdin?: string) {
   return ran.exitCode === 0 && !ran.isStdoutTruncated ? ran.stdout : undefined
 }
 
-async function checkedGit($: Api, args: string[]) {
-  const text = await git($, args)
+async function checkedGit($: Api, args: string[], stdin?: string) {
+  const text = await git($, args, stdin)
   if (text === undefined) throw new Error('Git の差分を確認できません')
   return text
 }
@@ -84,8 +84,8 @@ async function headOf($: Api): Promise<string | undefined> {
 
 const BASES = ['origin/main', 'origin/master', 'main', 'master']
 
-/** The base a branch is reviewed against: origin's default branch, else the first of BASES that exists. */
-async function baseRef($: Api) {
+/** Origin's default branch, else the first of BASES that exists. */
+async function defaultBase($: Api) {
   const remote = (await git($, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.trim()
   if (remote !== undefined && remote !== '') {
     return remote
@@ -94,6 +94,74 @@ async function baseRef($: Api) {
     if ((await git($, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) !== undefined) return ref
   }
   return undefined
+}
+
+// Branch names that are bases by convention: among branches as near to the fork, they name it first.
+const LONG_LIVED = ['main', 'master', 'develop', 'development', 'dev', 'trunk']
+
+const refLines = (text: string) => text.split('\n').filter(line => line !== '')
+const shortName = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, '')
+// A remote-tracking branch's name on its remote: origin/feat/x is feat/x.
+const branchName = (ref: string) => (ref.startsWith('refs/remotes/') ? shortName(ref).replace(/^[^/]+\//, '') : shortName(ref))
+
+/** A revision's commit; undefined when it does not exist (past the root, beyond a shallow clone's edge). */
+async function commitOf($: Api, revision: string) {
+  const ran = await $.process.run(['git', 'rev-parse', '--verify', '--quiet', `${revision}^{commit}`])
+  const found = ran.stdout.trim()
+  if (ran.exitCode === 0 && !ran.isStdoutTruncated && found !== '') return found
+  if (ran.exitCode === 1 && ran.stdout === '' && ran.stderr === '') return undefined
+  throw new Error('Git の差分を確認できません')
+}
+
+/** Of the branches given, those holding the fork, each with how many commits it has past the fork. */
+async function aheadOfFork($: Api, fork: string, candidates: ReadonlySet<string>) {
+  const ran = await $.process.run(['git', 'for-each-ref', '--contains', fork, `--format=%(refname)%09%(ahead-behind:${fork})`, 'refs/heads', 'refs/remotes'])
+  if (ran.exitCode === 0 && !ran.isStdoutTruncated) {
+    return refLines(ran.stdout)
+      .map(line => line.split('\t'))
+      .filter(([ref]) => candidates.has(ref!))
+      .map(([ref, counts]) => ({ ref: ref!, ahead: Number(counts!.split(' ')[0]) }))
+  }
+  // Git before 2.41 has no ahead-behind: count each branch holding the fork on its own.
+  if (ran.exitCode !== 128 || !/unknown field name/.test(ran.stderr)) throw new Error('Git の差分を確認できません')
+  const holding = refLines(await checkedGit($, ['for-each-ref', '--contains', fork, '--format=%(refname)', 'refs/heads', 'refs/remotes'])).filter(ref => candidates.has(ref))
+  return Promise.all(holding.map(async ref => ({ ref, ahead: Number((await checkedGit($, ['rev-list', '--count', `${fork}..${ref}`])).trim()) })))
+}
+
+/**
+ * The base a branch is reviewed against: the branch it was cut from. Walking HEAD's first parents, the first
+ * commit another branch holds is where this one left it; of the branches holding that commit, the nearest is
+ * the base, the default branch first among equals, then a conventional name, then a remote one.
+ * Other branches are all but this one, its copies on remotes, and those holding HEAD (a branch cut from this one);
+ * the default branch counts even when it holds HEAD, and its remote copy when this is the default branch, so
+ * main reviews what it has not pushed. With no other branch sharing HEAD's history, the default branch.
+ */
+async function baseRef($: Api) {
+  const fallback = await defaultBase($)
+  const defaults = fallback === undefined ? [] : [fallback, fallback.replace(/^origin\//, '')]
+  const current = (await git($, ['symbolic-ref', '--quiet', 'HEAD']))?.trim().replace(/^refs\/heads\//, '')
+  const all = refLines(await checkedGit($, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']))
+  const withoutHead = new Set(refLines(await checkedGit($, ['for-each-ref', '--no-contains', 'HEAD', '--format=%(refname)', 'refs/heads', 'refs/remotes'])))
+  const others = new Set(
+    all.filter(ref => {
+      // origin/HEAD only names the default branch, which is listed itself.
+      if (/^refs\/remotes\/[^/]+\/HEAD$/.test(ref)) return false
+      if (ref === `refs/heads/${current}`) return false
+      if (defaults.includes(shortName(ref))) return true
+      if (ref.startsWith('refs/remotes/') && branchName(ref) === current) return false
+      return withoutHead.has(ref)
+    }),
+  )
+  if (others.size === 0) return fallback
+
+  const own = await checkedGit($, ['rev-list', '--count', '--first-parent', 'HEAD', '--stdin'], [...others].map(ref => `^${ref}\n`).join(''))
+  const fork = await commitOf($, `HEAD~${own.trim()}`)
+  if (fork === undefined) return fallback
+
+  const rank = (ref: string) =>
+    defaults.includes(shortName(ref)) ? defaults.indexOf(shortName(ref)) : (LONG_LIVED.includes(branchName(ref)) ? 2 : 4) + (ref.startsWith('refs/remotes/') ? 0 : 1)
+  const nearest = (await aheadOfFork($, fork, others)).sort((a, b) => a.ahead - b.ahead || rank(a.ref) - rank(b.ref))[0]
+  return nearest === undefined ? fallback : shortName(nearest.ref)
 }
 
 /** Where HEAD left the base; undefined when they share no history (an orphan branch, a shallow clone). */

@@ -364,7 +364,7 @@ Claude in Chrome の遷移・クリック・入力・キー・フォーム入力
 
 旧 `cross-check` です。`/plugin uninstall cross-check` のあと `review-mods` を入れ直してください。`/codex-review` は `/review-diff`、`/codex` は `/review-mods` になり、`timeoutMin` は設定し直しが必要です。
 
-Claude Code CLI（`claude`）・Codex CLI（`codex`）・Antigravity CLI（`agy`）のうち少なくとも 1 つが `PATH` にあり、ログイン済みであることが前提です。レビューするものがある間、入力欄の上の帯に `🔍 未レビュー（origin/main との差分） 3ファイル +120 −8 [ claude・codex・agy でレビュー ]` が出ます。対象は、ブランチがベースから分かれた地点と作業ツリーとの差分で、ブランチのコミットと未コミットの変更（staged・unstaged・untracked）をまとめてレビューします。ベースは origin の既定ブランチ、なければ `origin/main`・`origin/master`・`main`・`master` のうち最初にあるものです。どれもないリポジトリや、ベースと共通の履歴を持たないブランチ（orphan ブランチ、祖先を含まない shallow clone）では未コミットの変更だけを対象にします（`未コミットの変更`）。
+Claude Code CLI（`claude`）・Codex CLI（`codex`）・Antigravity CLI（`agy`）のうち少なくとも 1 つが `PATH` にあり、ログイン済みであることが前提です。レビューするものがある間、入力欄の上の帯に `🔍 未レビュー（origin/main との差分） 3ファイル +120 −8 [ claude・codex・agy でレビュー ]` が出ます。対象は、ブランチがベースから分かれた地点と作業ツリーとの差分で、ブランチのコミットと未コミットの変更（staged・unstaged・untracked）をまとめてレビューします。ベースはそのブランチを切った元のブランチです。ブランチの first-parent をさかのぼって、他のブランチも持つ最初のコミットを分岐点とし、そのコミットを持つブランチのうち分岐点から先のコミットが最も少ないものをベースにします（`develop` から切ったブランチは `origin/main` ではなく `origin/develop` と比べます）。並んだときは origin の既定ブランチ、次に `main`・`master`・`develop`・`development`・`dev`・`trunk`、次にローカルよりリモートのブランチを優先します。ブランチ自身、そのリモート上のコピー、HEAD を含むブランチ（そこから切ったブランチ）はベースにしません。既定ブランチ自身ではそのリモート上のコピーがベースになり、push していない分をレビューします。履歴を共有する他のブランチがなければ、ベースは origin の既定ブランチ、なければ `origin/main`・`origin/master`・`main`・`master` のうち最初にあるものです。どれもないリポジトリや、ベースと共通の履歴を持たないブランチ（orphan ブランチ、祖先を含まない shallow clone）では未コミットの変更だけを対象にします（`未コミットの変更`）。
 
 押すと 3 つのレビュアーを並列に起動します。どれも同じレビュー用プロンプトとスキーマ（`hooks/schema.json`）で動き、ファイルは変更できません:
 
