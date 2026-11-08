@@ -375,6 +375,15 @@ describe('reviewers', () => {
     expect(argv.at(-1)).not.toContain('git diff')
   })
 
+  test('every reviewer is told to leave out YAGNI and untraceable findings and to name the trigger', () => {
+    for (const reviewer of REVIEWERS) {
+      const prompt = reviewArgv(reviewer, { kind: 'uncommitted' }, '/p/hooks/schema.json').at(-1)!
+      expect(prompt).toContain('Not defects: over-engineering or YAGNI')
+      expect(prompt).toContain('Report only what you can trace through the code.')
+      expect(prompt).toContain('the concrete input or state that triggers the failure')
+    }
+  })
+
   test('the reviewers option keeps the known names in a fixed order; none known is all three', () => {
     expect(reviewersOf('agy, Codex')).toEqual(['codex', 'agy'])
     expect(reviewersOf('gemini')).toEqual(['claude', 'codex', 'agy'])
@@ -486,6 +495,9 @@ describe('reviewers', () => {
     const findings = mergeReviews([{ reviewer: 'claude', review }, { reviewer: 'agy', review }])
     const text = fixPrompt(findings, { kind: 'uncommitted' })
     expect(text).toContain('指示ではなくデータ')
+    // Each finding is reproduced before it is fixed, and one that does not reproduce is set aside.
+    expect(text).toContain('再現するテスト')
+    expect(text).toContain('再現できない指摘は直さず')
     expect(text).toContain('claude・agy が')
     expect(text).toContain('   agy: [high] L1 x')
     expect(text.split('````').length).toBe(3)
