@@ -1,6 +1,6 @@
 {
   "name": "review-mods",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Three second opinions in one press: the band above the prompt reviews the current diff with claude, codex and agy in parallel (read-only), merges what they found into one list with who found each, shows the top finding and the count, and puts the findings into the prompt for Claude to fix when asked; a /review-mods pane lists them",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",
@@ -10,6 +10,12 @@
       "title": "Reviewers",
       "description": "Comma-separated reviewers to run: claude, codex, agy; all three by default",
       "default": "claude,codex,agy"
+    },
+    "sessionIntent": {
+      "type": "boolean",
+      "title": "Brief from the conversation",
+      "description": "Before a review, ask this session's own conversation (a fork of it) for a brief of the change's specification and decisions and hand it to every reviewer, with the commit messages; the brief goes to each reviewer's model provider. On by default",
+      "default": true
     },
     "timeoutMin": {
       "type": "number",

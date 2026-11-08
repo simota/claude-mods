@@ -18,6 +18,9 @@ export type Lane = { reviewer: Reviewer; state: 'running' | 'done' | 'failed'; p
 
 export type Run = { key: string; startedAt: number; elapsedS: number; lanes: Lane[] }
 
+/** What the reviewers were handed as the change's intent: the session's brief, how many commit messages, and why there is no brief. */
+export type IntentNote = { brief: string; briefSkipped: string | null; commits: number }
+
 /**
  * A run in which at least one reviewer answered. `failures` names the reviewers that did not:
  * the result is partial then, and its findings never stand for theirs; so is one a reviewer saw only part of.
@@ -29,6 +32,7 @@ export type Result = {
   /** `isCut`: the diff was too long to hand this reviewer whole, so what it found covers only part. */
   reviews: { reviewer: Reviewer; summary: string; count: number; isCut: boolean }[]
   failures: { reviewer: Reviewer; error: string }[]
+  intent: IntentNote
   finishedAt: number
 }
 

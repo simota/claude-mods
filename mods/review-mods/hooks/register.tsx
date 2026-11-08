@@ -1,12 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Diff, Finding, Lane, Result, Reviewer, Run, Scope } from '../types'
+import type { Diff, Finding, IntentNote, Lane, Result, Reviewer, Run, Scope } from '../types'
 import { untrackedHashes } from './fingerprint'
 
 import {
   REVIEWERS,
+  MAX_COMMITS,
   MAX_INPUT,
+  briefOf,
+  briefPrompt,
+  cutToBytes,
   diffInput,
   clockText,
   failureText,
@@ -25,7 +29,7 @@ import {
   scopeLabel,
   startFailureText,
 } from './reviewers'
-import type { Handed, Review } from './reviewers'
+import type { Handed, Intent, Review } from './reviewers'
 
 const PANE = 'review-mods'
 const PANE_TITLE = 'レビュー'
@@ -45,6 +49,7 @@ type Api = EngineInterface
 // Set by register from the options; module-local, as a reload runs register again.
 let timeoutMin = 15
 let reviewers: Reviewer[] = [...REVIEWERS]
+let isSessionIntent = true
 // The running children's stops: module-local, as the children die with the module anyway.
 let stops: (() => void)[] = []
 let isCancelled = false
@@ -226,6 +231,12 @@ const partialNote = (done: Result) => {
   return `${done.failures.length === 0 ? '' : ` · ${names(done.failures.map(f => f.reviewer))} 失敗`}${cut.length === 0 ? '' : ` · ${names(cut)} は差分の一部のみ`}`
 }
 
+/** What the reviewers were told the change is for, in a line. */
+const intentText = (note: IntentNote) => {
+  const from = [...(note.brief === '' ? [] : ['会話のブリーフ']), ...(note.commits === 0 ? [] : [`コミット${note.commits}件`])]
+  return `意図: ${from.length === 0 ? 'なし' : from.join('・')}${note.briefSkipped === null ? '' : ` · 会話: ${note.briefSkipped}`}`
+}
+
 const laneText = (lane: Lane) => (lane.state === 'done' ? `${lane.reviewer} ✓` : lane.state === 'failed' ? `${lane.reviewer} ✗` : `${lane.reviewer}: ${lane.phase}`)
 
 async function setStatus($: Api) {
@@ -265,8 +276,47 @@ async function handedOf($: Api, scope: Scope): Promise<Handed> {
   return { root, changed, patch, untracked }
 }
 
+/** The messages of the commits under review, newest first, and how many; none when only the uncommitted changes are. */
+async function commitsOf($: Api, scope: Scope) {
+  if (scope.kind === 'uncommitted') return { text: '', count: 0 }
+  const messages = (await checkedGit($, ['log', '--format=%x1e%B', `${scope.mergeBase}..HEAD`]))
+    .split('\x1e')
+    .map(message => message.trim())
+    .filter(message => message !== '')
+  return { text: cutToBytes(messages.join('\n---\n'), MAX_COMMITS), count: messages.length }
+}
+
+/**
+ * What the change is meant to do, for every reviewer: the session's conversation, asked as a fork of itself for
+ * a brief of the specification and the decisions, and the commit messages. A brief that cannot be had is said, not
+ * fatal: the review goes on without it.
+ */
+async function intentOf($: Api, scope: Scope): Promise<{ intent: Intent; note: IntentNote }> {
+  const commits = await commitsOf($, scope)
+  let brief = ''
+  let skipped: string | null = null
+  if (!isSessionIntent) {
+    skipped = '設定でオフ'
+  } else {
+    const from = scope.kind === 'base' ? scope.mergeBase : 'HEAD'
+    const changed = (await checkedGit($, ['diff', '-z', '--name-only', from])).split('\0').filter(name => name !== '')
+    const untracked = (await checkedGit($, ['ls-files', '-z', '--full-name', '--others', '--exclude-standard', '--', ':/'])).split('\0').filter(name => name !== '')
+    try {
+      const reply = await $.model.fork({ prompt: briefPrompt([...changed, ...untracked]) })
+      if (!reply.isAnswered) skipped = `会話を読めません（${reply.reason}）`
+      else {
+        brief = briefOf(reply.text)
+        if (brief === '') skipped = '会話にこの変更の記述なし'
+      }
+    } catch (err) {
+      skipped = `会話を読めません（${String(err).slice(0, 100)}）`
+    }
+  }
+  return { intent: { brief, commits: commits.text }, note: { brief, briefSkipped: skipped, commits: commits.count } }
+}
+
 /** One reviewer's child, from spawn to its answer or why there is none. */
-async function reviewWith($: Api, reviewer: Reviewer, scope: Scope, isTimedOut: () => boolean): Promise<Outcome> {
+async function reviewWith($: Api, reviewer: Reviewer, scope: Scope, intent: Intent, isTimedOut: () => boolean): Promise<Outcome> {
   const split = lineSplitter()
   let message: string | undefined
   let failure: string | undefined
@@ -303,7 +353,7 @@ async function reviewWith($: Api, reviewer: Reviewer, scope: Scope, isTimedOut: 
     if (isCancelled || isTimedOut()) throw new Error('stopped before start')
     const input = handed === undefined || reviewer === 'codex' ? undefined : diffInput(handed, MAX_INPUT[reviewer])
     isCut = input?.isCut === true
-    const argv = reviewArgv(reviewer, scope, `${$.plugin.root}/hooks/schema.json`, input && { root: handed!.root, text: input.text })
+    const argv = reviewArgv(reviewer, scope, `${$.plugin.root}/hooks/schema.json`, input && { root: handed!.root, text: input.text }, intent)
     const stream = $.process.spawn(
       reviewer === 'claude'
         ? // At the root, where the paths it is handed start, though the session may sit below it.
@@ -380,8 +430,14 @@ async function review($: Api) {
     for (const stop of stops) stop()
   })
   let outcomes: Outcome[]
+  let intentNote: IntentNote
   try {
-    outcomes = await Promise.all(chosen.map(reviewer => reviewWith($, reviewer, target.scope, () => isTimedOut)))
+    // Gathered once, before any reviewer starts, so all three review against the same intent.
+    await update($, run, r => (r === null ? r : { ...r, lanes: r.lanes.map(lane => ({ ...lane, phase: '意図を整理中' })) }))
+    const gathered = await intentOf($, target.scope)
+    intentNote = gathered.note
+    await update($, run, r => (r === null ? r : { ...r, lanes: r.lanes.map(lane => ({ ...lane, phase: '起動中' })) }))
+    outcomes = await Promise.all(chosen.map(reviewer => reviewWith($, reviewer, target.scope, gathered.intent, () => isTimedOut)))
   } finally {
     tick.cancel()
     limit.cancel()
@@ -398,7 +454,7 @@ async function review($: Api) {
       const findings = mergeReviews(answered)
       const finishedAt = await $.clock.now()
       const reviews = answered.map(({ reviewer, review, isCut }) => ({ reviewer, summary: review.summary, count: review.opinions.length, isCut }))
-      await update($, result, () => ({ key: target.key, scope: target.scope, findings, reviews, failures, finishedAt }))
+      await update($, result, () => ({ key: target.key, scope: target.scope, findings, reviews, failures, intent: intentNote, finishedAt }))
       await update($, error, () => null)
       await update($, dismissed, () => [])
       const failed = failures.length === 0 ? '' : `（${names(failures.map(f => f.reviewer))} は失敗）`
@@ -436,6 +492,7 @@ async function openPane($: Api) {
 export const register: Register = (on, options) => {
   timeoutMin = typeof options.timeoutMin === 'number' && options.timeoutMin > 0 ? options.timeoutMin : 15
   reviewers = reviewersOf(options.reviewers)
+  isSessionIntent = options.sessionIntent !== false
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -608,6 +665,19 @@ export const register: Register = (on, options) => {
           done.reviews.map(r => (
             <Text key={`r-${r.reviewer}`} dimColor wrap="truncate-end">
               {r.reviewer}（{r.count}件{r.isCut ? '・差分の一部のみ' : ''}）{r.summary === '' ? '' : `: ${r.summary}`}
+            </Text>
+          ))}
+        {done !== null && (
+          <Text key="intent" dimColor wrap="truncate-end">
+            {intentText(done.intent)}
+          </Text>
+        )}
+        {done !== null &&
+          done.intent.brief !== '' &&
+          done.intent.brief.split('\n').map((line, i) => (
+            <Text key={`b-${i}`} dimColor wrap="truncate-end">
+              {'  '}
+              {line}
             </Text>
           ))}
         {done !== null &&
