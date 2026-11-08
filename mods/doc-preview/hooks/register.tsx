@@ -37,8 +37,8 @@ const opened = atom({ plugin: 'doc-preview', key: 'opened' } as const, [] as str
 const pending = atom({ plugin: 'doc-preview', key: 'pending' } as const, [] as string[])
 
 // Set by register from the options; module-local, as a reload runs register again.
-let command = 'docview'
-let allowNpx = false
+// '' runs docview through npx, as it needs no install; a set command is tried first.
+let command = ''
 let basePort = 4100
 let autoOpen = false
 // The session's cwd, and the root as git spelled it before symlinks were resolved.
@@ -113,7 +113,7 @@ function spawnChild($: Api, argv: string[], dir: string, port: number): Life {
 /** Starts docview on a free port and waits until it serves our root. */
 async function launch($: Api, dir: string, port: number): Promise<string | undefined> {
   await setServer($, { kind: 'starting', port })
-  const tries = [commandArgv(command), ...(allowNpx ? [NPX] : [])]
+  const tries = command === '' ? [NPX] : [commandArgv(command), NPX]
   for (const [index, base] of tries.entries()) {
     const isNpx = base === NPX
     const life = spawnChild($, [...base, ...serveArgs(dir, port)], dir, port)
@@ -142,7 +142,7 @@ async function launch($: Api, dir: string, port: number): Promise<string | undef
     const isMissing = life.error !== undefined && isNotFound(life.error)
     if (isMissing && index < tries.length - 1) continue
     const error = isMissing
-      ? `${base[0]} が見つかりません（npm install -g github:simota/docview、または allowNpx を on）`
+      ? `${base[0]} が見つかりません（Node.js の npx が PATH にあるか、command に docview のパスを設定）`
       : (tailOf(life.error ?? life.out, 1)[0] ?? `docview が終了しました（code ${String(life.code ?? '?')}）`)
     await setServer($, failed(error.slice(0, 200), tailOf(life.out, 12)))
     return undefined
@@ -258,8 +258,7 @@ async function docNamed($: Api, arg: string): Promise<Doc | string> {
 const age = (ms: number) => (ms < 60_000 ? `${Math.max(0, Math.round(ms / 1000))}秒` : ms < 3_600_000 ? `${Math.round(ms / 60_000)}分` : `${Math.round(ms / 3_600_000)}時間`)
 
 export const register: Register = (on, options) => {
-  command = typeof options.command === 'string' && options.command.trim() !== '' ? options.command : 'docview'
-  allowNpx = options.allowNpx === true
+  command = typeof options.command === 'string' ? options.command.trim() : ''
   basePort = typeof options.basePort === 'number' ? options.basePort : 4100
   autoOpen = options.autoOpen === 'first'
 

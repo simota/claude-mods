@@ -455,16 +455,15 @@ Claude reads the stack with devrouter's own commands in Bash (`devrouter ls` for
 
 ### doc-preview
 
-Needs [docview](https://github.com/simota/docview) (`npm install -g github:simota/docview`). After a Write or Edit of a file docview renders (Markdown, Mermaid, JSON/YAML/CSV, config, HTML, images, PDF) under the repository root (git's top level, else the cwd), the band above the prompt shows `📝 docs/design.md を更新 [ プレビュー ]` (ほか N件 and 一覧 when several wait). プレビュー starts docview when needed and opens the file in the browser at the line the last edit wrote (`#file=…&line=N`). A file once opened leaves the band: docview reloads its tab on each later edit. Files outside the root are listed in the pane but cannot be opened, as docview serves only its root.
+Runs [docview](https://github.com/simota/docview) through `npx -y github:simota/docview` (docview's main branch, unpinned), so it needs Node.js's `npx` on `PATH` and no install; the first start clones and installs it, and may take a few minutes. Set `command` to run an installed docview instead; when that command is not found, npx is used. After a Write or Edit of a file docview renders (Markdown, Mermaid, JSON/YAML/CSV, config, HTML, images, PDF) under the repository root (git's top level, else the cwd), the band above the prompt shows `📝 docs/design.md を更新 [ プレビュー ]` (ほか N件 and 一覧 when several wait). プレビュー starts docview when needed and opens the file in the browser at the line the last edit wrote (`#file=…&line=N`). A file once opened leaves the band: docview reloads its tab on each later edit. Files outside the root are listed in the pane but cannot be opened, as docview serves only its root.
 
-docview runs as `docview <root> --no-open --no-remote --host 127.0.0.1 -p <port>`, started only on a press (or `autoOpen`), never at session start. The port is the first of `basePort` and the 19 after it where nothing answers; port 4000 is never used, because a docview started on a port shuts down the docview already there. A docview that already serves the same root is used as it is and never stopped; a port held by anything else is skipped. The status line shows `📄 docview :4100` while it serves, `📄 docview ✗` when it failed to start or exited. The server is the session's: it ends with the session or a reload, and `/docview stop` ends it sooner.
+docview runs as `npx -y github:simota/docview <root> --no-open --no-remote --host 127.0.0.1 -p <port>`, started only on a press (or `autoOpen`), never at session start. The port is the first of `basePort` and the 19 after it where nothing answers; port 4000 is never used, because a docview started on a port shuts down the docview already there. A docview that already serves the same root is used as it is and never stopped; a port held by anything else is skipped. The status line shows `📄 docview :4100` while it serves, `📄 docview ✗` when it failed to start or exited. The server is the session's: it ends with the session or a reload, and `/docview stop` ends it sooner.
 
 `/docview` opens the pane: the server's URL (press to copy), ルートを開く, 停止 (切り離す for a docview this mod did not start), and the documents written this session, newest first, with edit count, last edited line and 開く. `/docview <path>` opens a file, `/docview root` the root.
 
 | Option | Default | |
 | --- | --- | --- |
-| `command` | `docview` | the command that starts docview, split on spaces |
-| `allowNpx` | `false` | when the command is not found, run `npx -y github:simota/docview` (docview's main branch, unpinned) |
+| `command` | (empty) | the command that starts docview, split on spaces, tried before npx; empty runs npx alone |
 | `basePort` | `4100` | the first port tried |
 | `autoOpen` | `off` | `first`: when a turn ends, open the latest document written that was never opened |
 

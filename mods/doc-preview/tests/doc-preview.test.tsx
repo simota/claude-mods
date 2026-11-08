@@ -73,7 +73,8 @@ type World = {
   opened: string[]
   toasts: string[]
   status: (string | undefined)[]
-  isInstalled: boolean
+  // The commands not on PATH.
+  missing: string[]
   /** docview starts but never answers. */
   isSlow: boolean
   /** The browser opener exits non-zero. */
@@ -82,7 +83,7 @@ type World = {
 }
 
 function world(on: On): World {
-  const w: World = { info: {}, spawned: [], opened: [], toasts: [], status: [], isInstalled: true, isSlow: false, openFails: false, clock: mock.clock(on, { now: 1_000 }) }
+  const w: World = { info: {}, spawned: [], opened: [], toasts: [], status: [], missing: [], isSlow: false, openFails: false, clock: mock.clock(on, { now: 1_000 }) }
   mock.store(on, {})
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -122,7 +123,7 @@ function world(on: On): World {
   on('process.spawn', async function* ($, e, next) {
     w.spawned.push([...e.argv])
     // What the host answers for a command it cannot start.
-    if (!w.isInstalled) return { deny: `spawn ${e.argv[0]} ENOENT` }
+    if (w.missing.includes(e.argv[0]!)) return { deny: `spawn ${e.argv[0]} ENOENT` }
     const port = Number(e.argv[e.argv.indexOf('-p') + 1])
     yield { stream: 'stdout' as const, text: `  Server:    http://localhost:${port}/\n` }
     if (!w.isSlow) w.info[port] = ROOT
@@ -166,7 +167,7 @@ describe('doc-preview in a session', () => {
     await settle(w, ui.press({ key: 'preview' }))
     await ui.unmount()
 
-    expect(w.spawned).toEqual([['docview', ROOT, '--no-open', '--no-remote', '--host', '127.0.0.1', '-p', '4100']])
+    expect(w.spawned).toEqual([['npx', '-y', 'github:simota/docview', ROOT, '--no-open', '--no-remote', '--host', '127.0.0.1', '-p', '4100']])
     expect(w.opened).toEqual(['http://127.0.0.1:4100/#file=docs%2Fdesign.md&line=3'])
     expect(w.status.at(-1)).toBe('📄 docview :4100')
 
@@ -211,22 +212,29 @@ describe('doc-preview in a session', () => {
     expect(w.spawned).toEqual([])
   })
 
-  test('says how to install docview when it is missing, and does not reach for npx unasked', async ($, on) => {
+  test('says what is missing when npx is not on PATH', async ($, on) => {
     const w = world(on)
-    w.isInstalled = false
+    w.missing = ['npx']
     await $.session.start(START)
     const ran = await settle(w, docview($, 'root'))
-    expect(ran.text).toContain('npm install -g github:simota/docview')
-    expect(w.spawned.map(argv => argv[0])).toEqual(['docview'])
+    expect(ran.text).toContain('npx が見つかりません')
+    expect(w.spawned.map(argv => argv[0])).toEqual(['npx'])
     expect(w.status.at(-1)).toBe('📄 docview ✗')
   })
 
-  test('falls back to npx when allowed', { options: { allowNpx: true } }, async ($, on) => {
+  test('a set command runs first, and npx when it is not found', { options: { command: 'docview' } }, async ($, on) => {
     const w = world(on)
-    w.isInstalled = false
+    w.missing = ['docview']
     await $.session.start(START)
     await settle(w, docview($, 'root'))
     expect(w.spawned.map(argv => argv[0])).toEqual(['docview', 'npx'])
+  })
+
+  test('a set command that is found runs alone', { options: { command: '/opt/bin/docview' } }, async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    await settle(w, docview($, 'root'))
+    expect(w.spawned).toEqual([['/opt/bin/docview', ROOT, '--no-open', '--no-remote', '--host', '127.0.0.1', '-p', '4100']])
   })
 
   test('opens the latest new document by itself when autoOpen is first', { options: { autoOpen: 'first' } }, async ($, on) => {
@@ -263,7 +271,7 @@ describe('doc-preview in a session', () => {
 
   test('autoOpen does not retry a failed start every turn', { options: { autoOpen: 'first' } }, async ($, on) => {
     const w = world(on)
-    w.isInstalled = false
+    w.missing = ['npx']
     await $.session.start(START)
     await edit($)
     for (const turnId of ['t1', 't2', 't3']) {

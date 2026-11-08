@@ -455,16 +455,15 @@ Claude は devrouter のコマンドを Bash で直接使ってスタックを�
 
 ### doc-preview
 
-[docview](https://github.com/simota/docview) が必要です（`npm install -g github:simota/docview`）。リポジトリのルート（git のトップレベル、なければ cwd）配下で、docview が表示できるファイル（Markdown・Mermaid・JSON/YAML/CSV・設定ファイル・HTML・画像・PDF）を Write / Edit すると、入力欄の上の帯に `📝 docs/design.md を更新 [ プレビュー ]` が出ます（複数あれば ほか N件 と 一覧）。プレビュー を押すと必要なら docview を起動し、直近の編集で書いた行を開いた状態でブラウザに出します（`#file=…&line=N`）。一度開いたファイルは帯に出しません。以降の編集は docview がタブを自動で再読み込みします。ルートの外のファイルは、docview がルート配下しか配信しないため、ペインに載せるだけで開けません。
+[docview](https://github.com/simota/docview) は `npx -y github:simota/docview`（docview の main をバージョン固定なしで）で起動するので、インストールは不要で、Node.js の `npx` が `PATH` にあれば動きます。初回はクローンとインストールのため数分かかることがあります。インストール済みの docview を使うなら `command` を設定してください。そのコマンドが見つからなければ npx を使います。リポジトリのルート（git のトップレベル、なければ cwd）配下で、docview が表示できるファイル（Markdown・Mermaid・JSON/YAML/CSV・設定ファイル・HTML・画像・PDF）を Write / Edit すると、入力欄の上の帯に `📝 docs/design.md を更新 [ プレビュー ]` が出ます（複数あれば ほか N件 と 一覧）。プレビュー を押すと必要なら docview を起動し、直近の編集で書いた行を開いた状態でブラウザに出します（`#file=…&line=N`）。一度開いたファイルは帯に出しません。以降の編集は docview がタブを自動で再読み込みします。ルートの外のファイルは、docview がルート配下しか配信しないため、ペインに載せるだけで開けません。
 
-docview は `docview <root> --no-open --no-remote --host 127.0.0.1 -p <port>` で起動します。起動するのは押したとき（または `autoOpen`）だけで、セッション開始時には起動しません。ポートは `basePort` から 20 個のうち何も応答しない最初のものを使います。4000 番は使いません。docview は起動したポートで既に動いている docview を止めてしまうためです。同じルートを配信中の docview があればそのまま使い、止めません。それ以外が応答するポートは飛ばします。ステータスラインには配信中 `📄 docview :4100`、起動失敗や終了で `📄 docview ✗` を出します。サーバはセッションのもので、セッション終了やリロードで止まり、`/docview stop` でも止められます。
+docview は `npx -y github:simota/docview <root> --no-open --no-remote --host 127.0.0.1 -p <port>` で起動します。起動するのは押したとき（または `autoOpen`）だけで、セッション開始時には起動しません。ポートは `basePort` から 20 個のうち何も応答しない最初のものを使います。4000 番は使いません。docview は起動したポートで既に動いている docview を止めてしまうためです。同じルートを配信中の docview があればそのまま使い、止めません。それ以外が応答するポートは飛ばします。ステータスラインには配信中 `📄 docview :4100`、起動失敗や終了で `📄 docview ✗` を出します。サーバはセッションのもので、セッション終了やリロードで止まり、`/docview stop` でも止められます。
 
 `/docview` でペインを開きます: サーバの URL（押すとコピー）、ルートを開く、停止（この mod が起動していない docview は 切り離す）、このセッションで書いたドキュメント（新しい順、編集回数・最後に編集した行・開く）。`/docview <path>` でファイルを、`/docview root` でルートを開きます。
 
 | オプション | 既定 | |
 | --- | --- | --- |
-| `command` | `docview` | docview を起動するコマンド（空白で分割） |
-| `allowNpx` | `false` | コマンドが見つからないとき `npx -y github:simota/docview` を使う（docview の main をバージョン固定なしで実行） |
+| `command` | （空） | docview を起動するコマンド（空白で分割）。npx より先に試す。空なら npx だけ |
 | `basePort` | `4100` | 最初に試すポート |
 | `autoOpen` | `off` | `first`: ターン終了時、まだ開いていない最新のドキュメントを自動で開く |
 
