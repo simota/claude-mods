@@ -115,12 +115,15 @@ export function statusOf(server: Server): string | undefined {
 
 const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g
 
+// npm's warnings and notices (deprecated packages, new versions) never say why a start failed.
+const NPM_NOISE = /^npm (warn|notice)\b/i
+
 export function tailOf(text: string, count: number): string[] {
   return text
     .replace(ANSI, '')
     .split('\n')
     .map(line => line.trimEnd())
-    .filter(line => line.trim() !== '')
+    .filter(line => line.trim() !== '' && !NPM_NOISE.test(line))
     .slice(-count)
 }
 

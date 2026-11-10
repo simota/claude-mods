@@ -63,6 +63,7 @@ describe('docview helpers', () => {
       ['/a.md', 2, 4],
     ])
     expect(tailOf('\u001b[32mok\u001b[0m\n\nbad\n', 5)).toEqual(['ok', 'bad'])
+    expect(tailOf('npm ERR! code 1\nnpm WARN deprecated glob@7.2.3: old\nnpm warn deprecated fstream@1.0.12: gone\nnpm notice New major version\n', 5)).toEqual(['npm ERR! code 1'])
   })
 })
 
@@ -79,11 +80,13 @@ type World = {
   isSlow: boolean
   /** The browser opener exits non-zero. */
   openFails: boolean
+  /** docview exits with code 1 after printing only npm's deprecation warnings. */
+  crashes: boolean
   clock: MockClock
 }
 
 function world(on: On): World {
-  const w: World = { info: {}, spawned: [], opened: [], toasts: [], status: [], missing: [], isSlow: false, openFails: false, clock: mock.clock(on, { now: 1_000 }) }
+  const w: World = { info: {}, spawned: [], opened: [], toasts: [], status: [], missing: [], isSlow: false, openFails: false, crashes: false, clock: mock.clock(on, { now: 1_000 }) }
   mock.store(on, {})
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -124,6 +127,10 @@ function world(on: On): World {
     w.spawned.push([...e.argv])
     // What the host answers for a command it cannot start.
     if (w.missing.includes(e.argv[0]!)) return { deny: `spawn ${e.argv[0]} ENOENT` }
+    if (w.crashes) {
+      yield { stream: 'stderr' as const, text: 'npm WARN deprecated glob@7.2.3: Old versions of glob are not supported\nnpm WARN deprecated mathjax-full@3.2.2: Version 4 replaces this package\n' }
+      return { value: { code: 1, signal: null } }
+    }
     const port = Number(e.argv[e.argv.indexOf('-p') + 1])
     yield { stream: 'stdout' as const, text: `  Server:    http://localhost:${port}/\n` }
     if (!w.isSlow) w.info[port] = ROOT
@@ -167,7 +174,7 @@ describe('doc-preview in a session', () => {
     await settle(w, ui.press({ key: 'preview' }))
     await ui.unmount()
 
-    expect(w.spawned).toEqual([['npx', '-y', 'github:simota/docview', ROOT, '--no-open', '--no-remote', '--host', '127.0.0.1', '-p', '4100']])
+    expect(w.spawned).toEqual([['npm', 'exec', '--yes', 'github:simota/docview', '--', ROOT, '--no-open', '--no-remote', '--host', '127.0.0.1', '-p', '4100']])
     expect(w.opened).toEqual(['http://127.0.0.1:4100/#file=docs%2Fdesign.md&line=3'])
     expect(w.status.at(-1)).toBe('📄 docview :4100')
 
@@ -212,22 +219,32 @@ describe('doc-preview in a session', () => {
     expect(w.spawned).toEqual([])
   })
 
-  test('says what is missing when npx is not on PATH', async ($, on) => {
+  test('says what is missing when npm is not on PATH', async ($, on) => {
     const w = world(on)
-    w.missing = ['npx']
+    w.missing = ['npm']
     await $.session.start(START)
     const ran = await settle(w, docview($, 'root'))
-    expect(ran.text).toContain('npx が見つかりません')
-    expect(w.spawned.map(argv => argv[0])).toEqual(['npx'])
+    expect(ran.text).toContain('npm が見つかりません')
+    expect(w.spawned.map(argv => argv[0])).toEqual(['npm'])
     expect(w.status.at(-1)).toBe('📄 docview ✗')
   })
 
-  test('a set command runs first, and npx when it is not found', { options: { command: 'docview' } }, async ($, on) => {
+  test('a start that exits says so, not npm\'s last warning', async ($, on) => {
+    const w = world(on)
+    w.crashes = true
+    await $.session.start(START)
+    const ran = await settle(w, docview($, 'root'))
+    expect(ran.text).toContain('docview が終了しました（code 1）')
+    expect(ran.text).not.toContain('WARN')
+    expect(w.status.at(-1)).toBe('📄 docview ✗')
+  })
+
+  test('a set command runs first, and npm exec when it is not found', { options: { command: 'docview' } }, async ($, on) => {
     const w = world(on)
     w.missing = ['docview']
     await $.session.start(START)
     await settle(w, docview($, 'root'))
-    expect(w.spawned.map(argv => argv[0])).toEqual(['docview', 'npx'])
+    expect(w.spawned.map(argv => argv[0])).toEqual(['docview', 'npm'])
   })
 
   test('a set command that is found runs alone', { options: { command: '/opt/bin/docview' } }, async ($, on) => {
@@ -271,7 +288,7 @@ describe('doc-preview in a session', () => {
 
   test('autoOpen does not retry a failed start every turn', { options: { autoOpen: 'first' } }, async ($, on) => {
     const w = world(on)
-    w.missing = ['npx']
+    w.missing = ['npm']
     await $.session.start(START)
     await edit($)
     for (const turnId of ['t1', 't2', 't3']) {

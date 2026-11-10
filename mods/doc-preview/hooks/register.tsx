@@ -23,12 +23,13 @@ type Api = EngineInterface
 
 const PANE = 'doc-preview'
 const PANE_TITLE = 'docview'
-const NPX = ['npx', '-y', 'github:simota/docview']
+// npm exec, not npx: npm 9's npx builds a git package's prepare script with `npm exec -- install`, which fails.
+const NPM_EXEC = ['npm', 'exec', '--yes', 'github:simota/docview', '--']
 const PROBE_TIMEOUT_MS = 1_500
 const READY_POLL_MS = 250
 const READY_TIMEOUT_MS = 20_000
-// npx clones and installs docview on its first run.
-const NPX_READY_TIMEOUT_MS = 180_000
+// npm exec clones and installs docview on its first run.
+const NPM_EXEC_READY_TIMEOUT_MS = 180_000
 
 const root = atom({ plugin: 'doc-preview', key: 'root' } as const, null as string | null)
 const docs = atom({ plugin: 'doc-preview', key: 'docs' } as const, [] as Doc[])
@@ -37,7 +38,7 @@ const opened = atom({ plugin: 'doc-preview', key: 'opened' } as const, [] as str
 const pending = atom({ plugin: 'doc-preview', key: 'pending' } as const, [] as string[])
 
 // Set by register from the options; module-local, as a reload runs register again.
-// '' runs docview through npx, as it needs no install; a set command is tried first.
+// '' runs docview through npm exec, as it needs no install; a set command is tried first.
 let command = ''
 let basePort = 4100
 let autoOpen = false
@@ -113,12 +114,12 @@ function spawnChild($: Api, argv: string[], dir: string, port: number): Life {
 /** Starts docview on a free port and waits until it serves our root. */
 async function launch($: Api, dir: string, port: number): Promise<string | undefined> {
   await setServer($, { kind: 'starting', port })
-  const tries = command === '' ? [NPX] : [commandArgv(command), NPX]
+  const tries = command === '' ? [NPM_EXEC] : [commandArgv(command), NPM_EXEC]
   for (const [index, base] of tries.entries()) {
-    const isNpx = base === NPX
+    const isNpmExec = base === NPM_EXEC
     const life = spawnChild($, [...base, ...serveArgs(dir, port)], dir, port)
     const startedAt = await $.clock.now()
-    const limit = isNpx ? NPX_READY_TIMEOUT_MS : READY_TIMEOUT_MS
+    const limit = isNpmExec ? NPM_EXEC_READY_TIMEOUT_MS : READY_TIMEOUT_MS
     while (!life.isDone && !life.isStopped && (await $.clock.now()) - startedAt < limit) {
       if ((await probe($, port, dir)) === 'same' && !life.isStopped) {
         const url = `http://127.0.0.1:${port}/`
@@ -142,7 +143,7 @@ async function launch($: Api, dir: string, port: number): Promise<string | undef
     const isMissing = life.error !== undefined && isNotFound(life.error)
     if (isMissing && index < tries.length - 1) continue
     const error = isMissing
-      ? `${base[0]} が見つかりません（Node.js の npx が PATH にあるか、command に docview のパスを設定）`
+      ? `${base[0]} が見つかりません（Node.js の npm が PATH にあるか、command に docview のパスを設定）`
       : (tailOf(life.error ?? life.out, 1)[0] ?? `docview が終了しました（code ${String(life.code ?? '?')}）`)
     await setServer($, failed(error.slice(0, 200), tailOf(life.out, 12)))
     return undefined

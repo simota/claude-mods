@@ -1,6 +1,6 @@
 {
   "name": "doc-preview",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Previews the documents Claude writes in docview: the band above the prompt offers the Markdown, diagram, data or HTML file a turn changed, opens it in the browser at the edited line, and the open tab follows later edits by itself; /docview lists them",
   "author": { "name": "simota" },
   "types": "./types/index.d.ts",
@@ -8,7 +8,7 @@
     "command": {
       "type": "string",
       "title": "docview command",
-      "description": "The command that starts docview, split on spaces, tried before npx; empty by default, which runs npx -y github:simota/docview (docview's main branch, unpinned) and needs no install",
+      "description": "The command that starts docview, split on spaces, tried before npm exec; empty by default, which runs npm exec --yes github:simota/docview (docview's main branch, unpinned) and needs no install",
       "default": ""
     },
     "basePort": {
